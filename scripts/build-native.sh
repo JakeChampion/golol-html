@@ -12,18 +12,22 @@
 #   scripts/build-native.sh --all            # every supported target
 #   scripts/build-native.sh --verify         # rebuild host target, diff, restore
 #
-# Cross-building from macOS is possible but not what this script does, because
-# CI builds each target on a runner of that architecture. If you need it by
-# hand, note that `cargo build` also builds the cdylib and so wants a linker for
-# the target; restricting the crate type avoids that entirely:
+# Builds are `cargo rustc --crate-type staticlib`, not `cargo build`. The c-api
+# crate declares staticlib, cdylib and rlib; restricting it to the one we need
+# lets LTO prune far harder and removes the need for a linker for the target,
+# so cross-building works with nothing but `rustup target add`. Measured:
 #
-#   rustup target add --toolchain 1.95.0 x86_64-unknown-linux-gnu
-#   cargo +1.95.0 rustc --release --target x86_64-unknown-linux-gnu \
-#       --crate-type staticlib
+#   darwin/arm64   cargo build + strip   15.57 MB
+#                  cargo rustc + strip    2.73 MB
+#   linux/amd64    cargo build + strip   18.31 MB
+#                  cargo rustc, unstripped 8.98 MB
 #
-# Verify the result with Apple's /usr/bin/nm, not a GNU nm: binutils cannot read
-# the LTO objects and reports zero symbols rather than an error you would
-# notice.
+# The smaller archive also links a smaller binary (8.85 MB against 10.04 MB for
+# the example), because the pruning happens before the Go linker sees it.
+#
+# Verify a result with Apple's /usr/bin/nm, not a GNU nm: binutils cannot read
+# the LTO objects and reports zero symbols instead of an error you would
+# notice. Expect 96 `T lol_html_*` entry points plus the `unstable_` one.
 set -euo pipefail
 
 # Pinned upstream: lol-html v3.0.1 (c-api crate 1.4.0).
@@ -83,15 +87,17 @@ build_target() {
     rustup target add --toolchain "${RUST_TOOLCHAIN}" "${rust_target}"
 
     ( cd "${work}/lol-html/c-api" \
-      && cargo "+${RUST_TOOLCHAIN}" build --release --target "${rust_target}" )
+      && cargo "+${RUST_TOOLCHAIN}" rustc --release --target "${rust_target}" \
+             --crate-type staticlib )
 
     local built="${work}/lol-html/c-api/target/${rust_target}/release/liblolhtml.a"
     local dest="${repo_root}/internal/lib/${go_target}"
     mkdir -p "${dest}"
     cp "${built}" "${dest}/liblolhtml.a"
 
-    # Strip debug and local symbols. Measured on darwin/arm64: 21.0 MB -> 14.8
-    # MB, 7.65 MB -> 5.97 MB gzipped, with no effect on linking.
+    # Strip debug and local symbols; still worth it after the crate-type
+    # change. Measured on darwin/arm64: 6.51 MB -> 2.73 MB, no effect on
+    # linking.
     case "${go_target}" in
         darwin_*) /usr/bin/strip -S -x "${dest}/liblolhtml.a" ;;
         linux_*)  "${STRIP:-strip}" --strip-debug "${dest}/liblolhtml.a" ;;

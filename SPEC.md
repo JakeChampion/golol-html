@@ -36,16 +36,22 @@ Rejected alternatives:
 
 Measured costs (darwin/arm64, `--release`, `panic = "abort"`, `lto = true`):
 
-| Artifact                        | Size     |
-|---------------------------------|----------|
-| `liblolhtml.a` unstripped       | 21.0 MB  |
-| `liblolhtml.a` after `strip -S -x` | 14.8 MB |
-| gzipped (approximates git/proxy cost) | 5.97 MB |
-| Added to a linked Go binary     | ~2.0 MB  |
+Archives are built with `cargo rustc --crate-type staticlib`, not `cargo build`. The c-api crate
+declares staticlib, cdylib and rlib; building only the one we need lets LTO prune far harder and
+removes the need for a linker for the target, which is also what makes cross-building work with
+nothing but `rustup target add`. Measured on darwin/arm64:
 
-The archive is large but the linker discards unused Rust std objects, so consumer binaries grow
-by only ~2 MB (4.27 MB vs a 2.26 MB pure-Go baseline). Three platforms cost roughly 18 MB
-compressed in the repo. If that becomes a complaint, split each platform into its own Go module
+| Artifact                              | `cargo build` | `cargo rustc --crate-type staticlib` |
+|---------------------------------------|--------------|--------------------------------------|
+| unstripped                            | 21.0 MB      | 6.51 MB                              |
+| after `strip -S -x`                   | 15.57 MB     | 2.73 MB                              |
+| gzipped (approximates git/proxy cost)  | 5.97 MB      | 0.83 MB                              |
+| added to a linked Go binary           | ~2.0 MB      | ~1.06 MB                             |
+
+On linux/amd64 the same change is 18.31 MB against 8.98 MB unstripped. Restricting the crate type
+is strictly better on every axis measured, and the smaller archive links a smaller binary
+(3.44 MB against a 2.37 MB pure-Go baseline) because the pruning happens before the Go linker
+sees it. If that becomes a complaint, split each platform into its own Go module
 under `lib/` - build constraints prune un-imported modules from a `go build`, though not from
 `go mod download`. Git LFS is NOT an option: the module proxy would serve LFS pointer files.
 

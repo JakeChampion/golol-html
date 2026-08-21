@@ -96,9 +96,18 @@ jobs:
           cd internal/lib && find . -name 'liblolhtml.a' | sort | xargs sha256sum > SHA256SUMS
           cat SHA256SUMS
 
+      # Requires "Allow GitHub Actions to create and approve pull requests"
+      # under Settings -> Actions -> General -> Workflow permissions. Without
+      # it the branch is still pushed and this step fails; open the PR by hand
+      # from native/rebuild.
       - uses: peter-evans/create-pull-request@v7
         with:
           branch: native/rebuild
+          # Only the vendored artefacts. Without this the downloaded
+          # artifacts/ directory is committed too, duplicating every archive.
+          add-paths: |
+            internal/lib
+            internal/include
           title: 'Rebuild vendored liblolhtml.a (${{ inputs.lol_html_ref }})'
           commit-message: 'Rebuild vendored liblolhtml.a from ${{ inputs.lol_html_ref }}'
           body: |

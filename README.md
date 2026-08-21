@@ -179,14 +179,16 @@ machine with a pathological unclosed-tag input:
 `io.Copy` and normal network-sized reads are all well clear of this. It only bites
 if you deliberately write tiny chunks.
 
-Linking adds about 2 MB to a binary: 4.27 MB against a 2.26 MB pure-Go baseline
-on darwin/arm64. The vendored archive is much larger than that because the linker
-discards the Rust standard library objects nothing references.
+Linking adds about 1 MB to a binary: 3.44 MB against a 2.37 MB pure-Go baseline
+on darwin/arm64.
 
 ## The vendored archives
 
 `internal/lib/<goos>_<goarch>/liblolhtml.a` is built by CI from the pinned
-upstream commit, stripped, and committed with a `SHA256SUMS`. To rebuild and
+upstream commit, stripped, and committed with a `SHA256SUMS`. Archives are built
+with `cargo rustc --crate-type staticlib` rather than `cargo build`: restricting
+the crate type lets LTO prune much harder, which on darwin/arm64 is 2.73 MB
+against 15.57 MB and also yields a smaller linked binary. To rebuild and
 compare:
 
 ```
