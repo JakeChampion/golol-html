@@ -94,8 +94,15 @@ jobs:
         include:
           - os: macos-14
             target: darwin_arm64
-          - os: macos-13
+          # darwin/amd64 is exercised on an arm64 runner through Rosetta rather
+          # than on macos-13. macos-13 sat queued for the whole of two runs and
+          # blocked everything behind it, and GitHub is retiring Intel macOS
+          # runners anyway. Rosetta runs the amd64 test binary, and clang
+          # targets x86_64 from the universal SDK, so this is a real execution
+          # of the amd64 archive rather than a compile-only check.
+          - os: macos-14
             target: darwin_amd64
+            rosetta: true
           - os: ubuntu-24.04
             target: linux_amd64
           - os: ubuntu-24.04-arm
@@ -134,11 +141,23 @@ jobs:
           cache: false
 
       - name: Test
-        if: ${{ !matrix.musl }}
+        if: ${{ !matrix.musl && !matrix.rosetta }}
         run: |
           go build ./...
           go test -count=1 .
           go test -race -count=1 .
+
+      - name: Test darwin/amd64 under Rosetta
+        if: ${{ matrix.rosetta }}
+        env:
+          GOARCH: amd64
+          CGO_ENABLED: '1'
+          CC: clang -arch x86_64
+        run: |
+          go build ./...
+          # No -race: the detector is not worth running through an emulator,
+          # and the arm64 job already covers it.
+          go test -count=1 .
 
       # Alpine is tested through docker rather than a container job: the
       # runner's own node binary is glibc-linked, so actions/checkout cannot
