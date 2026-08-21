@@ -48,7 +48,9 @@ nothing but `rustup target add`. Measured on darwin/arm64:
 | gzipped (approximates git/proxy cost)  | 5.97 MB      | 0.83 MB                              |
 | added to a linked Go binary           | ~2.0 MB      | ~1.06 MB                             |
 
-On linux/amd64 the same change is 18.31 MB against 8.98 MB unstripped. Restricting the crate type
+Final CI-built sizes, stripped, with this recipe: darwin/arm64 2.73 MB, linux/amd64 4.22 MB,
+linux/arm64 4.24 MB - about 11.2 MB of vendored archives in total, against roughly 52 MB before
+the crate-type change. On linux/amd64 the change alone is 18.31 MB against 8.98 MB unstripped. Restricting the crate type
 is strictly better on every axis measured, and the smaller archive links a smaller binary
 (3.44 MB against a 2.37 MB pure-Go baseline) because the pruning happens before the Go linker
 sees it. If that becomes a complaint, split each platform into its own Go module
@@ -350,6 +352,16 @@ Also cleaned up: actions bumped to `checkout@v5` / `setup-go@v6` (v4/v5 are Node
 warn), `cache: false` on setup-go since a module with no dependencies has no `go.sum` to key a
 cache on, checksum verification made portable across `sha256sum` and `shasum`, and a misordered
 `setup-go` step in native.yml that was labelled as the smoke test.
+
+**5. The `native` workflow cannot open its own pull request.** The final blocker is a repository
+setting, not code: `GitHub Actions is not permitted to create or approve pull requests`. The
+branch is pushed regardless, so the archives are available on `native/rebuild`; only the PR step
+fails. Enable *Settings -> Actions -> General -> Workflow permissions -> "Allow GitHub Actions to
+create and approve pull requests"*, or open the PR by hand. Noted in the workflow.
+
+Note that pushing to `native/rebuild` does not itself run `ci.yml`, which triggers on pushes to
+`main` and on pull requests. Opening the PR is therefore what validates CI-built archives before
+they land.
 
 ## Notes
 
