@@ -37,6 +37,12 @@ go get github.com/JakeChampion/golol-html
 No Rust toolchain is required. Prebuilt static archives are vendored in the
 module, so a C compiler (which cgo needs anyway) is enough.
 
+**Requirements: Go 1.24 or later, cgo enabled, and a C compiler.** The floor is
+Go 1.24 because the library uses `runtime.AddCleanup` to release native
+resources if a `Writer` is dropped without being closed; attribute iteration
+also returns an `iter.Seq2`, which needs Go 1.23. A CI job builds and tests
+against the oldest supported version so this stays true.
+
 **Supported platforms:**
 
 | Platform | Notes |

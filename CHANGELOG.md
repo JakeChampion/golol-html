@@ -27,6 +27,13 @@ easy to get wrong in calling code:
   with U+FEFF reads back without it. The value is serialised faithfully, and a
   U+FEFF anywhere but the first position survives.
 
+### Changed
+
+- The declared minimum Go version drops from 1.25 to **1.24**, which is what the
+  code actually needs: `runtime.AddCleanup` is the binding constraint. Nothing
+  in the library required 1.25. A CI job now builds and tests against 1.24 so
+  the documented floor stays true.
+
 ### Testing
 
 The leak above was found by new machinery rather than by inspection, and none of

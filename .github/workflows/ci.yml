@@ -191,6 +191,23 @@ jobs:
         # finding new inputs. The nightly job does the depth.
         run: go test -asan -run '^$' -fuzz FuzzRewrite -fuzztime 60s .
 
+  # The README promises a minimum Go version, and a promise nothing checks
+  # rots. This builds and tests against the oldest supported toolchain, so
+  # reaching for a newer language or library feature fails here rather than in
+  # a user's build.
+  minimum-go:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          # Must match the `go` directive in go.mod.
+          go-version: '1.24'
+          cache: false
+      - run: go version
+      - run: go build ./...
+      - run: go test -count=1 .
+
   # Property tests: generated documents rather than a fixed corpus, with
   # shrinking so a counter-example arrives small enough to read. Its own module,
   # like differential/, so rapid never reaches a consumer's module graph.
