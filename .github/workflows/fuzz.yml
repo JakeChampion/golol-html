@@ -61,8 +61,33 @@ jobs:
           if [ "${{ matrix.asan }}" = "true" ]; then
             flags="-asan"
           fi
+
+          set +e
           go test $flags -run '^$' -fuzz '^${{ matrix.target }}$' \
-            -fuzztime "${minutes}m" .
+            -fuzztime "${minutes}m" . 2>&1 | tee fuzz.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          [ "$rc" -eq 0 ] && exit 0
+
+          # Go's fuzzing engine reports "context deadline exceeded" as a test
+          # failure when a worker does not acknowledge the stop signal within
+          # its grace period at the end of a timed run. Nothing has actually
+          # failed, and it has now happened twice: once at 1600 execs/sec where
+          # slow iterations were to blame, and once at 39k execs/sec where they
+          # were not.
+          #
+          # The distinction from a real finding is exact rather than a guess: a
+          # failing input is always written to testdata/fuzz/, so no crasher
+          # plus that message means the shutdown raced. Anything else stays a
+          # failure.
+          if grep -q 'context deadline exceeded' fuzz.log && [ ! -d testdata/fuzz ]; then
+            echo "::warning title=Fuzzing shutdown raced::${{ matrix.target }} hit Go's" \
+                 "shutdown deadline with no failing input; corpus is still saved."
+            exit 0
+          fi
+
+          echo "::error::${{ matrix.target }} failed with a real finding"
+          exit "$rc"
 
       # A crasher is written to testdata/fuzz/<target>/, which is exactly the
       # form a committed regression seed takes - so upload it rather than

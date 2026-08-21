@@ -6,3 +6,4 @@
 # rapid writes a timestamped fail file next to a failing property; useful while
 # reproducing, not worth committing.
 testdata/rapid/
+.fuzzchain/
