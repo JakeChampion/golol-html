@@ -315,6 +315,31 @@ known gap, not a regression: only `internal/lib/darwin_arm64/liblolhtml.a` is co
 produce them; until it runs, those jobs are expected to be red. The archive-presence check now
 emits a `::error::` naming the workflow to run instead of a bare `test -f` failure.
 
+Second run (32460780995) reduced this to one failure, and the native run (32460792086) to one:
+
+**3. `-fuzz` cannot take multiple packages.** The step ran
+`go test -fuzz FuzzRewrite ./...`, and `./...` matches both the root package and
+`examples/rewrite-url`, so Go refused with `cannot use -fuzz flag with multiple packages`. It was
+never caught locally because the local runs used `.`. Lesson applied: run CI commands verbatim,
+not a close paraphrase.
+
+**4. `upload-artifact` strips the least common ancestor of its paths.** Uploading
+`internal/lib/<target>/liblolhtml.a` together with `internal/include/lol_html.h` produces an
+artifact containing `lib/<target>/...` and `include/...`, with `internal/` removed. The collect
+job assumed the original paths and failed on `cp`. It now locates each archive with
+`find -name liblolhtml.a`, which holds regardless of how the ancestor is computed, and reports
+the directory listing if it finds nothing.
+
+What the runs did confirm:
+
+- The gofmt fix works: macOS is green.
+- **The Linux `LDFLAGS` (`-lm -ldl -lpthread`) are correct.** Both Linux jobs build, test and
+  pass `-race` against the vendored archives. This was the last unverified guess in D1.
+- The cross-built staticlibs (`cargo rustc --crate-type staticlib`) link and pass on real Linux,
+  so the cross recipe in `scripts/build-native.sh` is sound.
+- `consume` passes: a module can depend on this one and build with cargo stripped from `PATH`.
+- All three `native` build jobs pass, including `go test -race` against freshly built archives.
+
 Also cleaned up: actions bumped to `checkout@v5` / `setup-go@v6` (v4/v5 are Node 20 and now
 warn), `cache: false` on setup-go since a module with no dependencies has no `go.sum` to key a
 cache on, checksum verification made portable across `sha256sum` and `shasum`, and a misordered

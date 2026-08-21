@@ -76,13 +76,23 @@ jobs:
       - name: Place archives and regenerate checksums
         run: |
           set -euxo pipefail
+          # Locate each archive by name rather than by path: upload-artifact
+          # strips the least common ancestor of the paths it was given, so
+          # uploading internal/lib/... alongside internal/include/... yields
+          # lib/... and include/... inside the artifact, not internal/lib/... .
           for d in artifacts/liblolhtml-*; do
             target="${d#artifacts/liblolhtml-}"
+            src="$(find "$d" -name liblolhtml.a -type f | head -1)"
+            if [ -z "$src" ]; then
+              echo "::error::no liblolhtml.a inside $d"
+              find "$d" -type f
+              exit 1
+            fi
             mkdir -p "internal/lib/${target}"
-            cp "${d}/internal/lib/${target}/liblolhtml.a" "internal/lib/${target}/liblolhtml.a"
+            cp "$src" "internal/lib/${target}/liblolhtml.a"
           done
           # Every runner produces the same header; one is enough.
-          cp "$(find artifacts -name lol_html.h | head -1)" internal/include/lol_html.h
+          cp "$(find artifacts -name lol_html.h -type f | head -1)" internal/include/lol_html.h
           cd internal/lib && find . -name 'liblolhtml.a' | sort | xargs sha256sum > SHA256SUMS
           cat SHA256SUMS
 

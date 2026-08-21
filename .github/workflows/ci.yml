@@ -90,7 +90,9 @@ jobs:
           go-version: '1.25'
           cache: false
       - name: Fuzz the rewriter briefly
-        run: go test -run '^$' -fuzz FuzzRewrite -fuzztime 90s ./...
+        # A single package, not ./...: -fuzz refuses to run against more than
+        # one package, and ./... also matches examples/rewrite-url.
+        run: go test -run '^$' -fuzz FuzzRewrite -fuzztime 90s .
 
   # A consumer must be able to depend on this module and build without Rust.
   consume:
