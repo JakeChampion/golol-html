@@ -81,6 +81,23 @@ jobs:
       - name: Benchmarks compile and run
         run: go test -run '^$' -bench . -benchtime 10x ./...
 
+  # The differential tests live in their own module so the root stays
+  # dependency-free, which also means `go test ./...` at the root never sees
+  # them. They have to be run explicitly.
+  differential:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache-dependency-path: differential/go.sum
+      - name: Compare against golang.org/x/net/html
+        working-directory: differential
+        run: |
+          go test -count=1 ./...
+          go test -race -count=1 ./...
+
   fuzz:
     runs-on: ubuntu-24.04
     steps:

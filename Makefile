@@ -1,11 +1,12 @@
 GO ?= go
 
-.PHONY: all test race vet lint bench native native-all verify tidy clean
+.PHONY: all test race vet lint bench differential native native-all verify tidy clean
 
 all: test
 
 test:
 	$(GO) test ./...
+	cd differential && $(GO) test ./...
 
 race:
 	$(GO) test -race -count=1 ./...
@@ -26,6 +27,10 @@ lint: vet
 
 bench:
 	$(GO) test -run '^$$' -bench . -benchmem ./...
+
+# The differential tests are a separate module, so the root ./... misses them.
+differential:
+	cd differential && $(GO) test -count=1 ./...
 
 # Rebuild the vendored archive for the host platform.
 native:

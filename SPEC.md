@@ -237,18 +237,48 @@ Implemented:
 - `bench_test.go` - six benchmarks over a generated 16 KB page.
 - `go test -race` clean.
 
-Still worth adding:
+- `parity_test.go` - the corners of the upstream C suite that the behaviour tests missed: every
+  streaming insertion, user data on all four units that carry it, source locations checked by
+  slicing the input, doctype PUBLIC/SYSTEM identifiers, attribute-present-but-empty, end-tag
+  handler ordering and clearing, and handle-release tests (see below).
+- `differential/` - a separate module comparing against `golang.org/x/net/html` over a 20-document
+  corpus: passthrough preserves meaning, passthrough is byte-identical, script removal and
+  attribute setting match the same edit done by tree surgery, and the reported text chunks
+  reconstruct the document text.
 
-- Port the remaining upstream C tests (`c-api/c-tests/src/*.c`) that have no Go analogue.
-- Differential test against `golang.org/x/net/html` for parse-equivalence on a corpus.
+`differential/` is its own module so the root stays dependency-free: a test-only requirement on
+`golang.org/x/net` would otherwise appear in the module graph of every consumer. The cost is that
+`go test ./...` at the root does not run it, so CI and `make test` invoke it explicitly.
+
+### Handle-release tests
+
+Upstream asserts its drop-callback contract by counting calls. The Go equivalent is stronger: a
+handler payload is reachable only through the cgo handle table, so attaching `runtime.AddCleanup`
+to a captured value and watching it become collectable proves the handle was actually deleted.
+Three cases are covered - handler handles released by `Close`, streaming handles released by
+lol-html's drop callback, and streaming handles released when a rewrite *aborts* before the
+streamed content was ever emitted (verified: lol-html honours drop even then).
+
+One path is deliberately untested because it is unreachable: `withStream` deletes the handle
+itself if lol-html rejects a streaming handler, but the C API only rejects a NULL handler struct
+and the shim never passes one. Probed on v3.0.1, every `Stream*` method succeeds even on a void
+`<br>` or a self-closing `<circle/>`.
 
 ### Measured findings
 
-Two assumptions written into the first draft of this spec turned out to be wrong, and the tests
+Three assumptions written into the first draft of this spec turned out to be wrong, and the tests
 now encode the real behaviour:
 
 - **Attribute escaping.** lol-html escapes `&` and `"` in attribute values but not `>`, which is
   correct: a bare `>` cannot terminate a quoted value.
+- **Character references are never decoded.** Found by the differential test, which is exactly
+  what it was for. `TextChunk.Text`, `Comment.Text` and attribute values all return raw source:
+  the href of `<a href="?a=1&amp;b=2">` is `?a=1&amp;b=2`. The binding's documentation claimed
+  the opposite ("with character references already decoded", "the attribute value, unescaped"),
+  which would have quietly broken anyone comparing an href against a decoded Go string. The
+  behaviour is right - a rewriter must be able to re-emit what it read, and writing a value back
+  unchanged round-trips correctly because `SetAttribute` escapes - so the docs were corrected and
+  `TestCharacterReferencesAreNotDecoded` pins it down.
 - **Text chunk counts are not chunk-invariant.** lol-html splits text at input chunk boundaries,
   so writing byte-at-a-time produces more text chunks than one big write. Output is invariant;
   handler invocation counts are not. `FuzzRewrite` compares output always, and invocation counts

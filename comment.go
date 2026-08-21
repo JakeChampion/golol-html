@@ -13,7 +13,8 @@ type Comment struct {
 	unit[*C.lol_html_comment_t]
 }
 
-// Text returns the comment's text, without the <!-- --> delimiters.
+// Text returns the comment's text, without the <!-- --> delimiters, as raw
+// source text with character references left encoded. See TextChunk.Text.
 func (c *Comment) Text() string {
 	p, err := c.live()
 	if err != nil {

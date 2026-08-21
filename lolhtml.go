@@ -46,6 +46,15 @@
 //		return nil
 //	})
 //
+// # Character references are not decoded
+//
+// Text, comment text and attribute values are reported as raw source: the href
+// of <a href="?a=1&amp;b=2"> is "?a=1&amp;b=2". lol-html has to be able to
+// re-emit what it read, so it does not decode on the way in, and correspondingly
+// escapes what you write. Reading a value and writing it back unchanged is
+// therefore correct; comparing one against a decoded Go string is not. Use
+// html.UnescapeString when you need the decoded form.
+//
 // # Errors
 //
 // A handler returning a non-nil error stops the rewrite; the error surfaces

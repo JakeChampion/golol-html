@@ -96,6 +96,12 @@ func (e *Element) SourceLocation() SourceLocation {
 // Attribute returns the value of the named attribute. Names are matched
 // case-insensitively. The second result is false if the attribute is absent,
 // which distinguishes it from an attribute present with an empty value.
+//
+// The value is raw source text, with character references left encoded: the
+// href of <a href="?a=1&amp;b=2"> is "?a=1&amp;b=2", not "?a=1&b=2". Use
+// html.UnescapeString from the standard library if you need the decoded form,
+// and note that SetAttribute escapes what you give it, so a value read and
+// written back unchanged stays correct.
 func (e *Element) Attribute(name string) (string, bool) {
 	p, err := e.live()
 	if err != nil {
@@ -166,7 +172,8 @@ type Attribute struct {
 	// NamePreserveCase is the name as spelled in the source, which matters for
 	// foreign content such as SVG's viewBox.
 	NamePreserveCase string
-	// Value is the attribute value, unescaped.
+	// Value is the attribute value as it appeared in the source, with
+	// character references left encoded. See Element.Attribute.
 	Value string
 }
 

@@ -21,7 +21,14 @@ type TextChunk struct {
 	unit[*C.lol_html_text_chunk_t]
 }
 
-// Text returns the chunk's text, with character references already decoded.
+// Text returns the chunk's text exactly as it appeared in the source, with
+// character references left encoded: the text of <p>caf&eacute;</p> is
+// "caf&eacute;", not "café".
+//
+// This is deliberate on lol-html's part - a rewriter has to be able to re-emit
+// what it read - but it is easy to trip over when comparing against a plain Go
+// string. Use html.UnescapeString from the standard library when you need the
+// decoded form.
 func (t *TextChunk) Text() string {
 	p, err := t.live()
 	if err != nil {
@@ -36,7 +43,8 @@ func (t *TextChunk) Text() string {
 	return C.GoStringN(c.data, C.int(c.len))
 }
 
-// Bytes returns the chunk's text as a freshly allocated byte slice.
+// Bytes returns the chunk's text as a freshly allocated byte slice. As with
+// Text, character references are left encoded.
 func (t *TextChunk) Bytes() []byte {
 	p, err := t.live()
 	if err != nil {
