@@ -1,0 +1,333 @@
+package lolhtml
+
+/*
+#include "shim.h"
+*/
+import "C"
+
+import (
+	"iter"
+	"runtime"
+)
+
+// An Element is a start tag matched by one of your selectors.
+//
+// It is valid only for the duration of the handler that received it; see the
+// package documentation on handler lifetime.
+type Element struct {
+	unit[*C.lol_html_element_t]
+}
+
+// TagName returns the tag name, lowercased. Use TagNamePreserveCase for the
+// spelling as it appeared in the source.
+func (e *Element) TagName() string {
+	p, err := e.live()
+	if err != nil {
+		return ""
+	}
+	return takeStr(C.lol_html_element_tag_name_get(p))
+}
+
+// TagNamePreserveCase returns the tag name as spelled in the source document,
+// which matters for foreign content such as SVG's <linearGradient>.
+func (e *Element) TagNamePreserveCase() string {
+	p, err := e.live()
+	if err != nil {
+		return ""
+	}
+	return takeStr(C.lol_html_element_tag_name_get_preserve_case(p))
+}
+
+// SetTagName renames the element. The matching end tag, if any, is renamed too.
+func (e *Element) SetTagName(name string) error {
+	p, err := e.live()
+	if err != nil {
+		return err
+	}
+	return withName(p, name, "element_tag_name_set", cfElementTagNameSet)
+}
+
+// IsSelfClosing reports whether the tag was written self-closing, as in
+// <foo />. This is only meaningful in foreign content: in HTML proper a
+// trailing slash is ignored.
+func (e *Element) IsSelfClosing() bool {
+	p, err := e.live()
+	if err != nil {
+		return false
+	}
+	return bool(C.lol_html_element_is_self_closing(p))
+}
+
+// CanHaveContent reports whether the element may contain content, and so
+// whether Append, Prepend, SetInnerContent and OnEndTag can do anything. It is
+// false for void elements such as <br> and for self-closing foreign elements.
+func (e *Element) CanHaveContent() bool {
+	p, err := e.live()
+	if err != nil {
+		return false
+	}
+	return bool(C.lol_html_element_can_have_content(p))
+}
+
+// NamespaceURI returns the element's namespace URI, such as
+// "http://www.w3.org/1999/xhtml" for HTML content or
+// "http://www.w3.org/2000/svg" inside <svg>.
+func (e *Element) NamespaceURI() string {
+	p, err := e.live()
+	if err != nil {
+		return ""
+	}
+	// Unlike the lol_html_str_t getters, this returns a static
+	// NUL-terminated string that must not be freed.
+	return C.GoString(C.lol_html_element_namespace_uri_get(p))
+}
+
+// SourceLocation returns the byte range the start tag occupied in the input.
+func (e *Element) SourceLocation() SourceLocation {
+	p, err := e.live()
+	if err != nil {
+		return SourceLocation{}
+	}
+	return sourceLocation(C.lol_html_element_source_location_bytes(p))
+}
+
+// Attributes ------------------------------------------------------------------
+
+// Attribute returns the value of the named attribute. Names are matched
+// case-insensitively. The second result is false if the attribute is absent,
+// which distinguishes it from an attribute present with an empty value.
+func (e *Element) Attribute(name string) (string, bool) {
+	p, err := e.live()
+	if err != nil {
+		return "", false
+	}
+	np, nl := strPtr(name)
+	s := C.lol_html_element_get_attribute(p, np, nl)
+	runtime.KeepAlive(name)
+	return takeOptStr(s)
+}
+
+// HasAttribute reports whether the named attribute is present.
+func (e *Element) HasAttribute(name string) (bool, error) {
+	p, err := e.live()
+	if err != nil {
+		return false, err
+	}
+	np, nl := strPtr(name)
+	var cerr C.lol_html_str_t
+	rc := C.golol_element_has_attribute(p, np, nl, &cerr)
+	runtime.KeepAlive(name)
+	if rc < 0 {
+		return false, nativeErr("element_has_attribute", cerr)
+	}
+	return rc == 1, nil
+}
+
+// SetAttribute sets the named attribute, adding it if absent. The value is
+// escaped as needed, so it is safe to pass untrusted input.
+func (e *Element) SetAttribute(name, value string) error {
+	p, err := e.live()
+	if err != nil {
+		return err
+	}
+	np, nl := strPtr(name)
+	vp, vl := strPtr(value)
+	var cerr C.lol_html_str_t
+	rc := C.golol_element_set_attribute(p, np, nl, vp, vl, &cerr)
+	runtime.KeepAlive(name)
+	runtime.KeepAlive(value)
+	if rc != 0 {
+		return nativeErr("element_set_attribute", cerr)
+	}
+	return nil
+}
+
+// RemoveAttribute removes the named attribute. Removing an absent attribute is
+// not an error.
+func (e *Element) RemoveAttribute(name string) error {
+	p, err := e.live()
+	if err != nil {
+		return err
+	}
+	np, nl := strPtr(name)
+	var cerr C.lol_html_str_t
+	rc := C.golol_element_remove_attribute(p, np, nl, &cerr)
+	runtime.KeepAlive(name)
+	if rc != 0 {
+		return nativeErr("element_remove_attribute", cerr)
+	}
+	return nil
+}
+
+// An Attribute is one attribute of an element.
+type Attribute struct {
+	// Name is the attribute name, lowercased.
+	Name string
+	// NamePreserveCase is the name as spelled in the source, which matters for
+	// foreign content such as SVG's viewBox.
+	NamePreserveCase string
+	// Value is the attribute value, unescaped.
+	Value string
+}
+
+// Attributes iterates the element's attributes in source order, yielding
+// lowercased names. Use AttributeList when the original spelling matters.
+//
+// The iterator must be consumed inside the handler; once the element is
+// detached it yields nothing.
+func (e *Element) Attributes() iter.Seq2[string, string] {
+	return func(yield func(string, string) bool) {
+		for _, a := range e.AttributeList() {
+			if !yield(a.Name, a.Value) {
+				return
+			}
+		}
+	}
+}
+
+// AttributeList returns every attribute of the element, in source order.
+//
+// This collects eagerly rather than iterating lazily because the underlying
+// lol-html iterator invalidates each attribute when the next is fetched, and
+// hands out pointers valid only while the element is.
+func (e *Element) AttributeList() []Attribute {
+	p, err := e.live()
+	if err != nil {
+		return nil
+	}
+
+	it := C.lol_html_attributes_iterator_get(p)
+	if it == nil {
+		return nil
+	}
+	defer C.lol_html_attributes_iterator_free(it)
+
+	var out []Attribute
+	for {
+		a := C.lol_html_attributes_iterator_next(it)
+		if a == nil {
+			return out
+		}
+		out = append(out, Attribute{
+			Name:             takeStr(C.lol_html_attribute_name_get(a)),
+			NamePreserveCase: takeStr(C.lol_html_attribute_name_get_preserve_case(a)),
+			Value:            takeStr(C.lol_html_attribute_value_get(a)),
+		})
+	}
+}
+
+// Content --------------------------------------------------------------------
+
+// Before inserts content immediately before the element's start tag.
+func (e *Element) Before(content string, ct ContentType) error {
+	return e.content(content, ct, "element_before", cfElementBefore)
+}
+
+// After inserts content immediately after the element's end tag.
+func (e *Element) After(content string, ct ContentType) error {
+	return e.content(content, ct, "element_after", cfElementAfter)
+}
+
+// Prepend inserts content as the element's first child.
+func (e *Element) Prepend(content string, ct ContentType) error {
+	return e.content(content, ct, "element_prepend", cfElementPrepend)
+}
+
+// Append inserts content as the element's last child.
+func (e *Element) Append(content string, ct ContentType) error {
+	return e.content(content, ct, "element_append", cfElementAppend)
+}
+
+// SetInnerContent replaces everything inside the element, leaving its tags in
+// place.
+func (e *Element) SetInnerContent(content string, ct ContentType) error {
+	return e.content(content, ct, "element_set_inner_content", cfElementSetInnerContent)
+}
+
+// Replace replaces the element, including its tags, with content.
+func (e *Element) Replace(content string, ct ContentType) error {
+	return e.content(content, ct, "element_replace", cfElementReplace)
+}
+
+func (e *Element) content(content string, ct ContentType, op string, fn contentOp[*C.lol_html_element_t]) error {
+	p, err := e.live()
+	if err != nil {
+		return err
+	}
+	return withContent(p, content, ct.isHTML(), op, fn)
+}
+
+// Remove removes the element and everything inside it.
+func (e *Element) Remove() {
+	if p, err := e.live(); err == nil {
+		C.lol_html_element_remove(p)
+	}
+}
+
+// RemoveAndKeepContent removes the element's tags but keeps its children, so
+// <b>hi</b> becomes hi.
+func (e *Element) RemoveAndKeepContent() {
+	if p, err := e.live(); err == nil {
+		C.lol_html_element_remove_and_keep_content(p)
+	}
+}
+
+// IsRemoved reports whether the element has been removed by a handler.
+func (e *Element) IsRemoved() bool {
+	p, err := e.live()
+	if err != nil {
+		return false
+	}
+	return bool(C.lol_html_element_is_removed(p))
+}
+
+// End tags -------------------------------------------------------------------
+
+// OnEndTag registers fn to run when this element's end tag is reached, which is
+// the way to act on an element after seeing its content.
+//
+// It can be called more than once to register several handlers, which run in
+// registration order. It fails if the element cannot have content - a void
+// element such as <br> has no end tag to wait for - so check CanHaveContent
+// first when the tag is not known statically.
+func (e *Element) OnEndTag(fn func(*EndTag) error) error {
+	p, err := e.live()
+	if err != nil {
+		return err
+	}
+
+	// The C API offers no drop callback for end-tag handlers, so the handle
+	// lives on the rewriter and is released with it.
+	h := e.c.nt.newHandle(&endTagCB{c: e.c, fn: fn})
+
+	var cerr C.lol_html_str_t
+	if C.golol_element_add_end_tag_handler(p, C.uintptr_t(h), &cerr) != 0 {
+		return nativeErr("element_add_end_tag_handler", cerr)
+	}
+	return nil
+}
+
+// ClearEndTagHandlers removes every end-tag handler registered for this
+// element, including any added by handlers that ran before this one.
+func (e *Element) ClearEndTagHandlers() {
+	if p, err := e.live(); err == nil {
+		C.lol_html_element_clear_end_tag_handlers(p)
+	}
+}
+
+// User data ------------------------------------------------------------------
+
+var elementUserData = userDataAccessor[*C.lol_html_element_t]{
+	get: func(p *C.lol_html_element_t) C.uintptr_t { return C.golol_element_user_data_get(p) },
+	set: func(p *C.lol_html_element_t, h C.uintptr_t) { C.golol_element_user_data_set(p, h) },
+}
+
+// UserData returns the value most recently attached by SetUserData, or nil.
+func (e *Element) UserData() any { return getUserData(&e.unit, elementUserData) }
+
+// SetUserData attaches a value to this element, readable by any later handler
+// that sees the same element - most usefully an end-tag handler.
+//
+// Go handlers can usually just close over the value instead. The attached value
+// is released with the Writer.
+func (e *Element) SetUserData(v any) error { return setUserData(&e.unit, elementUserData, v) }

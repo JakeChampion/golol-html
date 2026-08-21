@@ -1,0 +1,109 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Each runner exercises a different vendored archive, which is the part of
+    # this module most likely to be wrong on a platform nobody built on.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14      # darwin/arm64
+            target: darwin_arm64
+          - os: ubuntu-24.04  # linux/amd64
+            target: linux_amd64
+          - os: ubuntu-24.04-arm  # linux/arm64
+            target: linux_arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          check-latest: true
+
+      - name: Confirm the expected archive is present
+        run: test -f internal/lib/${{ matrix.target }}/liblolhtml.a
+
+      - name: Verify archive checksums
+        working-directory: internal/lib
+        run: shasum -a 256 --check SHA256SUMS
+
+      - run: gofmt -l . | tee /dev/stderr | (! read)
+        name: gofmt
+
+      - run: go vet ./...
+
+      - run: go build ./...
+
+      - run: go test -count=1 ./...
+
+      - run: go test -race -count=1 ./...
+
+      - name: Benchmarks compile and run
+        run: go test -run '^$' -bench . -benchtime 10x ./...
+
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Fuzz the rewriter briefly
+        run: go test -run '^$' -fuzz FuzzRewrite -fuzztime 90s ./...
+
+  # A consumer must be able to `go get` this module and build without Rust.
+  consume:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: golol-html
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Build a module that depends on this one
+        run: |
+          set -euxo pipefail
+          test ! -x "$(command -v cargo || true)" || echo "note: cargo present but must not be needed"
+          mkdir consumer && cd consumer
+          cat > go.mod <<'GOMOD'
+          module consumer
+
+          go 1.25
+
+          require github.com/JakeChampion/golol-html v0.0.0
+          replace github.com/JakeChampion/golol-html => ../golol-html
+          GOMOD
+          cat > main.go <<'MAIN'
+          package main
+
+          import (
+          	"fmt"
+
+          	lolhtml "github.com/JakeChampion/golol-html"
+          )
+
+          func main() {
+          	out, err := lolhtml.RewriteString(`<a href="/x">l</a>`,
+          		lolhtml.OnElement("a", func(e *lolhtml.Element) error {
+          			return e.SetAttribute("rel", "noopener")
+          		}))
+          	if err != nil {
+          		panic(err)
+          	}
+          	fmt.Println(out)
+          }
+          MAIN
+          go mod tidy
+          go run .

@@ -1,0 +1,96 @@
+name: native
+
+# Rebuilds the vendored liblolhtml.a archives. Run manually when the pinned
+# lol-html revision in scripts/build-native.sh changes; the result is a pull
+# request, so the binaries that ship are always reviewable.
+on:
+  workflow_dispatch:
+    inputs:
+      lol_html_ref:
+        description: 'lol-html git ref to build'
+        required: false
+        default: '608cc4a66b7ab4fcbe1bbdeb25df8f265572b11c'
+      rust_toolchain:
+        description: 'Rust toolchain (c-api needs >= 1.89)'
+        required: false
+        default: '1.95.0'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: darwin_arm64
+          - os: ubuntu-24.04
+            target: linux_amd64
+          - os: ubuntu-24.04-arm
+            target: linux_arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install ${{ inputs.rust_toolchain }} --profile minimal
+          rustup default ${{ inputs.rust_toolchain }}
+
+      - name: Build the archive
+        env:
+          LOL_HTML_REF: ${{ inputs.lol_html_ref }}
+          RUST_TOOLCHAIN: ${{ inputs.rust_toolchain }}
+        run: scripts/build-native.sh ${{ matrix.target }}
+
+      - name: Smoke test against the freshly built archive
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - run: go test -count=1 ./...
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: liblolhtml-${{ matrix.target }}
+          path: |
+            internal/lib/${{ matrix.target }}/liblolhtml.a
+            internal/include/lol_html.h
+
+  collect:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Place archives and regenerate checksums
+        run: |
+          set -euxo pipefail
+          for d in artifacts/liblolhtml-*; do
+            target="${d#artifacts/liblolhtml-}"
+            mkdir -p "internal/lib/${target}"
+            cp "${d}/internal/lib/${target}/liblolhtml.a" "internal/lib/${target}/liblolhtml.a"
+          done
+          # Every runner produces the same header; one is enough.
+          cp "$(find artifacts -name lol_html.h | head -1)" internal/include/lol_html.h
+          cd internal/lib && find . -name 'liblolhtml.a' | sort | xargs shasum -a 256 > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: peter-evans/create-pull-request@v6
+        with:
+          branch: native/rebuild
+          title: 'Rebuild vendored liblolhtml.a (${{ inputs.lol_html_ref }})'
+          commit-message: 'Rebuild vendored liblolhtml.a from ${{ inputs.lol_html_ref }}'
+          body: |
+            Rebuilt by the `native` workflow.
+
+            - lol-html ref: `${{ inputs.lol_html_ref }}`
+            - Rust toolchain: `${{ inputs.rust_toolchain }}`
+
+            Checksums are in `internal/lib/SHA256SUMS`. Reproduce locally with
+            `make verify`.
