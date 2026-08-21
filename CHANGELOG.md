@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.1.1
+
+### Fixed
+
+- **A handler that panicked leaked the rewriter and its cgo handles.** `Write`
+  re-raises a handler panic, so `Rewrite`'s `Close` never ran and the native
+  resources were released only if a garbage collection eventually got round to
+  the cleanup: three handles per rewrite. `Rewrite` now defers `Close`, and
+  `Write` and `Close` release on the way out of a panic, so a caller driving a
+  `Writer` directly does not leak either.
+
+### Documentation
+
+No behaviour changed here, but two things were described wrongly, and both are
+easy to get wrong in calling code:
+
+- **`SetAttribute` takes raw source text, not a literal value.** Only the double
+  quote is escaped, because only it would break the attribute syntax; `&` and
+  `<` pass through. Writing the five characters `&amp;` therefore means the
+  single character `&` to whoever parses the result. Content insertion with
+  `lolhtml.Text` is the opposite and escapes fully, which is what makes it safe
+  for untrusted values.
+- **A leading U+FEFF is dropped when reading an attribute.** lol-html decodes on
+  the way out and its decoder removes a byte-order mark, so a value starting
+  with U+FEFF reads back without it. The value is serialised faithfully, and a
+  U+FEFF anywhere but the first position survives.
+
+### Testing
+
+The leak above was found by new machinery rather than by inspection, and none of
+it changes the public API:
+
+- every cgo handle is counted, and the count is asserted on each fuzz iteration
+- `FuzzOperations` fuzzes the handler program rather than the input document
+- an AddressSanitizer job on both Linux architectures
+- deterministic seed-driven fault injection for sink failures, memory limits,
+  handler errors and panics
+- property tests over generated documents, in a separate module
+
 ## v0.1.0
 
 First release. Go bindings for [lol-html](https://github.com/cloudflare/lol-html)
