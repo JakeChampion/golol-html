@@ -353,15 +353,22 @@ warn), `cache: false` on setup-go since a module with no dependencies has no `go
 cache on, checksum verification made portable across `sha256sum` and `shasum`, and a misordered
 `setup-go` step in native.yml that was labelled as the smoke test.
 
-**5. The `native` workflow cannot open its own pull request.** The final blocker is a repository
-setting, not code: `GitHub Actions is not permitted to create or approve pull requests`. The
-branch is pushed regardless, so the archives are available on `native/rebuild`; only the PR step
-fails. Enable *Settings -> Actions -> General -> Workflow permissions -> "Allow GitHub Actions to
-create and approve pull requests"*, or open the PR by hand. Noted in the workflow.
+**5. The `native` workflow could not open its own pull request** - resolved. This was a
+repository setting rather than code: `GitHub Actions is not permitted to create or approve pull
+requests`. The branch is pushed regardless, so the archives were available on `native/rebuild`
+and PR #1 was opened by hand and merged. The setting is now enabled, so subsequent upstream
+bumps are self-service. A fork without it gets the branch and a failed PR step.
 
 Note that pushing to `native/rebuild` does not itself run `ci.yml`, which triggers on pushes to
 `main` and on pull requests. Opening the PR is therefore what validates CI-built archives before
-they land.
+they land, and is worth doing rather than pushing archives straight to `main`.
+
+The action reuses and force-updates `native/rebuild`, so the branch is expected to linger between
+runs; it is not litter to clean up.
+
+Rust builds are not bit-reproducible here: two `native` runs of the same commit produced darwin
+archives differing by about 1 KB. So re-running the workflow to test something will generally
+produce a real diff and therefore a real PR, rather than a no-op.
 
 ## Notes
 

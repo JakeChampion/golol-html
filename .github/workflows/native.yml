@@ -96,10 +96,11 @@ jobs:
           cd internal/lib && find . -name 'liblolhtml.a' | sort | xargs sha256sum > SHA256SUMS
           cat SHA256SUMS
 
-      # Requires "Allow GitHub Actions to create and approve pull requests"
-      # under Settings -> Actions -> General -> Workflow permissions. Without
-      # it the branch is still pushed and this step fails; open the PR by hand
-      # from native/rebuild.
+      # Needs "Allow GitHub Actions to create and approve pull requests" under
+      # Settings -> Actions -> General -> Workflow permissions, which is enabled
+      # on this repository. A fork without it still gets the pushed branch and
+      # only this step fails, so the PR can be opened by hand from
+      # native/rebuild.
       - uses: peter-evans/create-pull-request@v7
         with:
           branch: native/rebuild
