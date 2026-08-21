@@ -1,32 +1,65 @@
-name: ci
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-
-permissions:
-  contents: read
-
 jobs:
+  # Host-independent checks, run once rather than repeated per platform.
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: gofmt
+        run: |
+          # Deliberately not `gofmt -l . | tee /dev/stderr | (! read)`: under
+          # macOS's bash 3.2, `set -e` (which GitHub always passes) aborts that
+          # pipeline even when it succeeds, so the step failed unconditionally
+          # on macOS and printed nothing to explain itself.
+          unformatted=$(gofmt -l . differential)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt reports unformatted files:"
+            echo "$unformatted"
+            gofmt -d . differential
+            exit 1
+          fi
+          echo "all files are gofmt-clean"
+
+      - run: go vet ./...
+      - run: cd differential && go vet ./...
+
+  # Every supported platform links its own archive and runs the suite. The
+  # matrix mirrors native.yml's smoke job, so an archive is exercised the same
+  # way before it lands and on every push afterwards.
   test:
-    # Each runner exercises a different vendored archive, which is the part of
-    # this module most likely to be wrong on a platform nobody built on.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14      # darwin/arm64
+          - os: macos-14
             target: darwin_arm64
-          - os: ubuntu-24.04  # linux/amd64
+          # darwin/amd64 runs through Rosetta on an arm64 runner: macos-13 sat
+          # queued indefinitely and GitHub is retiring Intel macOS runners.
+          - os: macos-14
+            target: darwin_amd64
+            rosetta: true
+          - os: ubuntu-24.04
             target: linux_amd64
-          - os: ubuntu-24.04-arm  # linux/arm64
+          - os: ubuntu-24.04-arm
             target: linux_arm64
+          - os: ubuntu-24.04
+            target: linux_amd64_musl
+            musl: true
+          - os: ubuntu-24.04-arm
+            target: linux_arm64_musl
+            musl: true
+          - os: windows-latest
+            target: windows_amd64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-go@v6
+        if: ${{ !matrix.musl }}
         with:
           go-version: '1.25'
           check-latest: true
@@ -35,17 +68,18 @@ jobs:
           cache: false
 
       - name: Confirm the expected archive is present
+        shell: bash
         run: |
           archive="internal/lib/${{ matrix.target }}/liblolhtml.a"
           if [ ! -f "$archive" ]; then
             echo "::error::$archive is missing. Vendored archives are built by" \
-                 "the 'native' workflow; run it for ${{ matrix.target }} and" \
-                 "merge the pull request it opens."
+                 "the 'native' workflow; run it and merge the pull request it opens."
             exit 1
           fi
           ls -l "$archive"
 
       - name: Verify archive checksums
+        shell: bash
         working-directory: internal/lib
         run: |
           # sha256sum on Linux, shasum on macOS; the file format is compatible.
@@ -55,31 +89,40 @@ jobs:
             shasum -a 256 --check --ignore-missing SHA256SUMS
           fi
 
-      - name: gofmt
+      - name: Test
+        if: ${{ !matrix.musl && !matrix.rosetta }}
         run: |
-          # Deliberately not `gofmt -l . | tee /dev/stderr | (! read)`: under
-          # macOS's bash 3.2, `set -e` (which GitHub always passes) aborts that
-          # pipeline even when it succeeds, so the step failed unconditionally
-          # on macOS and printed nothing to explain itself.
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "::error::gofmt reports unformatted files:"
-            echo "$unformatted"
-            gofmt -d .
-            exit 1
-          fi
-          echo "all files are gofmt-clean"
+          go build ./...
+          go test -count=1 .
+          go test -race -count=1 .
 
-      - run: go vet ./...
+      - name: Test darwin/amd64 under Rosetta
+        if: ${{ matrix.rosetta }}
+        env:
+          GOARCH: amd64
+          CGO_ENABLED: '1'
+          CC: clang -arch x86_64
+        run: |
+          go build ./...
+          # No -race through an emulator; the arm64 entry already covers it.
+          go test -count=1 .
 
-      - run: go build ./...
-
-      - run: go test -count=1 ./...
-
-      - run: go test -race -count=1 ./...
+      # Alpine is tested through docker rather than a container job: the
+      # runner's own node binary is glibc-linked, so actions/checkout cannot
+      # run inside an Alpine container.
+      - name: Test under musl
+        if: ${{ matrix.musl }}
+        run: |
+          docker run --rm -v "$PWD":/src -w /src golang:1.25-alpine sh -c '
+            set -eux
+            apk add --no-cache gcc musl-dev
+            go build -tags musl ./...
+            go test -tags musl -count=1 .
+          '
 
       - name: Benchmarks compile and run
-        run: go test -run '^$' -bench . -benchtime 10x ./...
+        if: ${{ !matrix.musl && !matrix.rosetta }}
+        run: go test -run '^$' -bench . -benchtime 10x .
 
   # The guard's build constraint and the set of link files are two lists that
   # must agree, and nothing else notices when they drift. They did drift once,

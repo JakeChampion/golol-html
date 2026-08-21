@@ -353,6 +353,13 @@ throughput tracks handler invocation count rather than document size.
 - Bail-out handlers (`Settings::append_bail_out_handler`) - Rust-only upstream, no C API yet.
 - `graceful_bail_out_on_content_handler_error` - Rust-only upstream.
 
+**A workflow-created pull request gets no checks.** GitHub does not start workflow runs for events
+triggered by the default `GITHUB_TOKEN`, so the pull request `native.yml` opens shows "no checks
+reported". The archives are not unvalidated - the `smoke` matrix links and tests each one on the
+platform it targets before `collect` runs, which is broader than what `ci.yml` did at the time -
+and merging triggers `ci.yml` on `main` as a normal push. Using a PAT or GitHub App token in
+`create-pull-request` would restore checks on the PR itself, at the cost of a credential to manage.
+
 ## Repository visibility
 
 The repository is public, which matters for two things beyond the obvious:
