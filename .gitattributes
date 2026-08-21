@@ -1,0 +1,17 @@
+# Default: let git decide, and normalise text to LF in the repository.
+* text=auto
+
+# Vendored static archives must never be touched by line-ending conversion.
+# Git's binary detection already spares them, but a mangled archive would be a
+# miserable failure to diagnose, so do not leave it to a heuristic.
+*.a -text
+*.h text eol=lf
+
+# The checksum manifest is parsed by sha256sum, which does not tolerate CRLF:
+# every filename gains a trailing \r, every path looks missing, and the check
+# reports "no file was verified" rather than a mismatch. Git for Windows
+# defaults core.autocrlf=true, so this bit on windows-latest and nowhere else.
+internal/lib/SHA256SUMS text eol=lf
+
+# Shell scripts run under bash on Windows runners too.
+*.sh text eol=lf

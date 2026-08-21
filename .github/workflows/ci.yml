@@ -93,11 +93,19 @@ jobs:
         working-directory: internal/lib
         run: |
           # sha256sum on Linux, shasum on macOS; the file format is compatible.
+          #
+          # --ignore-missing is deliberately absent: every archive is committed
+          # for every platform, so a missing one is a real failure and should
+          # not be quietly skipped. CR stripping is belt-and-braces against a
+          # CRLF checkout; .gitattributes should already prevent it, and
+          # without both the check silently verifies nothing on Windows.
+          tr -d '\r' < SHA256SUMS > checksums.txt
           if command -v sha256sum >/dev/null; then
-            sha256sum --check --ignore-missing SHA256SUMS
+            sha256sum --check checksums.txt
           else
-            shasum -a 256 --check --ignore-missing SHA256SUMS
+            shasum -a 256 --check checksums.txt
           fi
+          rm -f checksums.txt
 
       - name: Test
         if: ${{ !matrix.musl && !matrix.rosetta }}
