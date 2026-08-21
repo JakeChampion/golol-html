@@ -73,13 +73,21 @@ func FuzzRewrite(f *testing.F) {
 
 // maxFuzzInput bounds the harness so the fuzzer keeps making progress; see the
 // note in the Fuzz body.
-const maxFuzzInput = 8 << 10
+const maxFuzzInput = 4 << 10
 
 // fuzzChunk keeps the split fine-grained where it is cheap - one byte at a time
 // is the strictest test of chunk-invariance - while bounding the number of
 // writes for larger inputs.
+//
+// The byte-at-a-time threshold is low on purpose. Writes are quadratic while
+// the rewriter buffers an unclosed tag, so a 1 KB input meant roughly a
+// thousand increasingly expensive writes, and every iteration does that on top
+// of a whole-document rewrite. On a CI runner that dropped throughput to about
+// 1600 execs/sec and the engine then failed to shut down inside its grace
+// period at the end of a timed run, reporting "context deadline exceeded".
+// Cheap iterations find more than thorough ones that barely run.
 func fuzzChunk(n int) int {
-	if n <= 1024 {
+	if n <= 256 {
 		return 1
 	}
 	return max(1, n/64)
