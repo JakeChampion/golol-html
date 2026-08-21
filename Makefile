@@ -1,7 +1,7 @@
 GO ?= go
 REPO ?= JakeChampion/golol-html
 
-.PHONY: all test race vet lint bench differential platforms native native-all verify attest-verify tidy clean
+.PHONY: all test race vet lint bench differential platforms workflows native native-all verify attest-verify tidy clean
 
 all: test
 
@@ -17,7 +17,7 @@ vet:
 
 # Not `gofmt -l . | ... | (! read)`: that idiom aborts under macOS bash 3.2
 # with set -e even when it passes.
-lint: vet platforms
+lint: vet platforms workflows
 	@unformatted=$$(gofmt -l .); \
 	if [ -n "$$unformatted" ]; then \
 		echo "unformatted files:"; echo "$$unformatted"; \
@@ -33,6 +33,10 @@ bench:
 # through to the unsupported-platform guard.
 platforms:
 	scripts/check-platforms.sh
+
+# Catch a workflow file that git accepts and GitHub rejects.
+workflows:
+	scripts/check-workflows.sh
 
 # The differential tests are a separate module, so the root ./... misses them.
 differential:
