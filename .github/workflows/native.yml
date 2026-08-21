@@ -59,10 +59,23 @@ jobs:
           ls -l internal/lib/*/liblolhtml.a
           cat internal/lib/SHA256SUMS
 
+      # GitHub cannot persist attestations for user-owned private
+      # repositories: "Feature not available for user-owned private
+      # repositories. To enable this feature, please make this repository
+      # public." So this is conditional rather than unconditional - it starts
+      # working by itself if the repository is ever made public, and until then
+      # it does not fail a build over a policy it cannot satisfy.
       - name: Attest build provenance
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: 'internal/lib/*/liblolhtml.a'
+
+      - name: Note that provenance was skipped
+        if: ${{ github.event.repository.private }}
+        run: |
+          echo "::notice::Provenance attestation skipped: GitHub does not support it" \
+               "for user-owned private repositories. Make the repository public to enable it."
 
       - uses: actions/upload-artifact@v5
         with:
@@ -181,8 +194,11 @@ jobs:
             Checksums are in `internal/lib/SHA256SUMS`. Reproduce locally with
             `make verify`.
 
-            Each archive carries a signed provenance attestation from this run.
-            Verify with `make attest-verify`, or for one file:
+            Each archive carries a signed provenance attestation from this run,
+            unless the repository is private - GitHub does not support
+            attestations for user-owned private repositories, in which case the
+            step is skipped with a notice. Verify with `make attest-verify`, or
+            for one file:
 
             ```
             gh attestation verify internal/lib/<target>/liblolhtml.a \
