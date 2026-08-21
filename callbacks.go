@@ -175,5 +175,5 @@ func golol_streaming_drop_cb(ud C.uintptr_t) {
 	// lol-html guarantees exactly one drop after the last use of the handler,
 	// which is what makes streaming handles self-releasing rather than tied to
 	// the lifetime of the rewriter.
-	cgo.Handle(uintptr(ud)).Delete()
+	deleteHandle(cgo.Handle(uintptr(ud)))
 }

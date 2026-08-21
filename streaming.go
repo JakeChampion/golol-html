@@ -8,7 +8,6 @@ import "C"
 import (
 	"io"
 	"runtime"
-	"runtime/cgo"
 )
 
 // A StreamFunc produces inserted content on demand, writing it into the sink
@@ -114,12 +113,12 @@ func withStream[P comparable](u *unit[P], fn StreamFunc, op string, call streamO
 
 	// Released by golol_streaming_drop_cb, which lol-html calls exactly once
 	// after the last use of the handler.
-	h := cgo.NewHandle(&streamingCB{c: u.c, fn: fn})
+	h := newHandle(&streamingCB{c: u.c, fn: fn})
 
 	var cerr C.lol_html_str_t
 	if call(p, C.uintptr_t(h), &cerr) != 0 {
 		// lol-html rejected the handler, so it will never call drop.
-		h.Delete()
+		deleteHandle(h)
 		return nativeErr(op, cerr)
 	}
 	return nil

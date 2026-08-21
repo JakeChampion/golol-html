@@ -120,6 +120,12 @@ func (w *Writer) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 
+	// A handler panic is parked by the callback and re-raised below by
+	// takeDeferred, at which point the C stack has already unwound. Releasing
+	// here means a caller who recovers from that panic does not leak the
+	// rewriter and its handles, however they were driving the Writer.
+	defer w.releaseOnPanic()
+
 	var cerr C.lol_html_str_t
 	rc := C.golol_rewriter_write(w.c.nt.rw, (*C.char)(bytePtr(p)), C.size_t(len(p)), &cerr)
 	runtime.KeepAlive(p)
@@ -142,6 +148,7 @@ func (w *Writer) Close() error {
 	}
 	w.closed = true
 	defer w.c.nt.release()
+	defer w.releaseOnPanic()
 
 	if w.poisoned {
 		return ErrPoisoned
@@ -189,11 +196,11 @@ func (n *native) release() {
 			n.rw = nil
 		}
 		for _, h := range n.handles {
-			h.Delete()
+			deleteHandle(h)
 		}
 		n.handles = nil
 		for h := range n.userData {
-			h.Delete()
+			deleteHandle(h)
 		}
 		n.userData = nil
 		for _, s := range n.selectors {
@@ -205,9 +212,23 @@ func (n *native) release() {
 
 // newHandle registers a callback payload and records it for release.
 func (n *native) newHandle(v any) cgo.Handle {
-	h := cgo.NewHandle(v)
+	h := newHandle(v)
 	n.handles = append(n.handles, h)
 	return h
+}
+
+// releaseOnPanic frees the native resources when a handler panic is on its way
+// out, then lets the panic continue.
+//
+// Close stays safe afterwards: it returns ErrPoisoned before touching the
+// rewriter, and release is guarded by a sync.Once, so neither the caller's
+// deferred Close nor the cleanup can double-free.
+func (w *Writer) releaseOnPanic() {
+	if r := recover(); r != nil {
+		w.poisoned = true
+		w.c.nt.release()
+		panic(r)
+	}
 }
 
 func nativeErrIf(failed bool, op string, cerr C.lol_html_str_t) error {

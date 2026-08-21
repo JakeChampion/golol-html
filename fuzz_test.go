@@ -2,6 +2,7 @@ package lolhtml_test
 
 import (
 	"bytes"
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
@@ -94,6 +95,8 @@ func rewrite(f *testing.F, handlers func(*int) []lolhtml.Option) {
 			t.Skip("input larger than the harness budget")
 		}
 
+		handlesBefore := lolhtml.LiveHandles()
+
 		var wholeHits int
 		var whole bytes.Buffer
 
@@ -135,6 +138,13 @@ func rewrite(f *testing.F, handlers func(*int) []lolhtml.Option) {
 			t.Fatalf("chunking changed the output for %q:\n whole:    %q\n bytewise: %q",
 				in, whole.String(), pieces.String())
 		}
+		// A leaked handle is invisible in the output, so it has to be
+		// asserted separately - and every iteration is the cheapest place.
+		// No GC here: this runs on every iteration, and releases only ever
+		// lower the count, so growth alone is a reliable leak signal.
+		if after := lolhtml.LiveHandles(); after > handlesBefore {
+			t.Fatalf("leaked %d cgo handles rewriting %q", after-handlesBefore, in)
+		}
 		if wholeHits != pieceHits {
 			t.Fatalf("chunking changed structural handler invocations for %q: whole=%d bytewise=%d",
 				in, wholeHits, pieceHits)
@@ -165,5 +175,85 @@ func TestUnclosedWriterIsReclaimed(t *testing.T) {
 	// Two cycles: the first queues the cleanups, the second lets them finish.
 	for range 2 {
 		runtime.GC()
+	}
+}
+
+// settledHandles drains pending cleanups before reading the live handle count.
+//
+// The count is process-wide and runtime.AddCleanup runs asynchronously, so
+// another test abandoning Writers on purpose (see TestUnclosedWriterIsReclaimed)
+// can release its handles in the middle of this one. That only ever makes the
+// count fall, which is why every assertion here checks for growth rather than
+// equality: growth is a leak, a decrease is someone else's tidying.
+func settledHandles() int64 {
+	for range 3 {
+		runtime.GC()
+		runtime.Gosched()
+	}
+	return lolhtml.LiveHandles()
+}
+
+// TestNoHandleLeak checks the invariant directly, at a scale where a single
+// missed delete would be obvious.
+func TestNoHandleLeak(t *testing.T) {
+	before := settledHandles()
+
+	for range 100 {
+		_, err := lolhtml.RewriteString(`<div id="a"><p>hi</p><!--c--></div>`,
+			lolhtml.OnElement("div", func(e *lolhtml.Element) error {
+				if err := e.SetUserData("x"); err != nil {
+					return err
+				}
+				// Replacing user data must release the value it displaces.
+				if err := e.SetUserData("y"); err != nil {
+					return err
+				}
+				if err := e.StreamAppend(func(s *lolhtml.Sink) error {
+					return s.WriteString("s", lolhtml.Text)
+				}); err != nil {
+					return err
+				}
+				return e.OnEndTag(func(*lolhtml.EndTag) error { return nil })
+			}),
+			lolhtml.OnText("p", func(*lolhtml.TextChunk) error { return nil }),
+			lolhtml.OnDocumentComment(func(*lolhtml.Comment) error { return nil }),
+		)
+		if err != nil {
+			t.Fatalf("rewrite: %v", err)
+		}
+	}
+
+	if after := settledHandles(); after > before {
+		t.Errorf("leaked %d cgo handles across 100 rewrites (%d -> %d)",
+			after-before, before, after)
+	}
+}
+
+// TestNoHandleLeakOnFailure covers the paths that skip the ordinary teardown:
+// a handler error, a panic, and a writer that is never closed at all.
+func TestNoHandleLeakOnFailure(t *testing.T) {
+	before := settledHandles()
+	boom := errors.New("boom")
+
+	for range 50 {
+		_, _ = lolhtml.RewriteString(`<div>x</div>`,
+			lolhtml.OnElement("div", func(e *lolhtml.Element) error {
+				_ = e.StreamAppend(func(*lolhtml.Sink) error { return nil })
+				return boom
+			}))
+
+		func() {
+			defer func() { _ = recover() }()
+			_, _ = lolhtml.RewriteString(`<div>x</div>`,
+				lolhtml.OnElement("div", func(e *lolhtml.Element) error {
+					_ = e.SetUserData("x")
+					panic("handler exploded")
+				}))
+		}()
+	}
+
+	if after := settledHandles(); after > before {
+		t.Errorf("leaked %d cgo handles across failing rewrites (%d -> %d)",
+			after-before, before, after)
 	}
 }

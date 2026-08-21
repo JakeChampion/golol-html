@@ -158,6 +158,39 @@ jobs:
       - run: scripts/check-platforms.sh
       - run: scripts/check-workflows.sh
 
+  # AddressSanitizer is where a cgo binding's real bugs live: use-after-free
+  # across the boundary, double frees, overruns. The tests check what the
+  # rewriter says; ASan checks that saying it did not corrupt anything.
+  #
+  # The vendored archive is not itself instrumented, but lol-html uses the
+  # default system allocator, so ASan's malloc interposition covers the Rust
+  # heap as well as ours.
+  #
+  # Linux only: -asan is unsupported on darwin/arm64, and Windows has no
+  # equivalent here. -msan is deliberately absent - it reports uninitialised
+  # reads in uninstrumented code, which the prebuilt archive is entirely made
+  # of, so it would be all false positives.
+  sanitize:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Tests under AddressSanitizer
+        run: go test -asan -count=1 .
+
+      - name: Fuzz the seed corpus under AddressSanitizer
+        # Short: this is about running the corpus through ASan, not about
+        # finding new inputs. The nightly job does the depth.
+        run: go test -asan -run '^$' -fuzz FuzzRewrite -fuzztime 60s .
+
   # The differential tests live in their own module so the root stays
   # dependency-free, which also means `go test ./...` at the root never sees
   # them. They have to be run explicitly.

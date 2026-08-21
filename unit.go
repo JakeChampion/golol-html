@@ -88,7 +88,7 @@ func setUserData[P comparable](u *unit[P], a userDataAccessor[P], v any) error {
 // handler handles because they can be replaced during a rewrite, and a handle
 // must be deleted exactly once.
 func (n *native) newUserData(v any) cgo.Handle {
-	h := cgo.NewHandle(v)
+	h := newHandle(v)
 	if n.userData == nil {
 		n.userData = make(map[cgo.Handle]struct{})
 	}
@@ -102,5 +102,5 @@ func (n *native) dropUserData(h cgo.Handle) {
 		return
 	}
 	delete(n.userData, h)
-	h.Delete()
+	deleteHandle(h)
 }

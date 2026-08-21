@@ -64,7 +64,9 @@
 // goroutine that called Write or Close.
 //
 // lol-html cannot resume after an error, so a Writer that has failed is
-// poisoned and every later Write returns [ErrPoisoned].
+// poisoned and every later Write returns [ErrPoisoned]. A Writer that panics
+// releases its native resources on the way out, so a caller who recovers does
+// not leak them, but Close should still be deferred as a matter of course.
 package lolhtml
 
 /*
@@ -131,8 +133,13 @@ func Rewrite(html []byte, opts ...Option) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Deferred rather than only called on the error paths: a handler that
+	// panics is re-raised by Write, and without this the native resources
+	// would never be released. Close is idempotent, so the explicit call below
+	// still reports the error from the final flush.
+	defer w.Close()
+
 	if _, err := w.Write(html); err != nil {
-		w.Close()
 		return nil, err
 	}
 	if err := w.Close(); err != nil {
