@@ -1,4 +1,4 @@
-//go:build cgo && !(darwin && arm64) && !(linux && amd64) && !(linux && arm64)
+//go:build cgo && !(darwin && (arm64 || amd64)) && !(linux && (amd64 || arm64)) && !(windows && amd64)
 
 package lolhtml
 

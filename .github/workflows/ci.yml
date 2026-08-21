@@ -81,6 +81,21 @@ jobs:
       - name: Benchmarks compile and run
         run: go test -run '^$' -bench . -benchtime 10x ./...
 
+  # The guard's build constraint and the set of link files are two lists that
+  # must agree, and nothing else notices when they drift. They did drift once,
+  # and a Windows build failed with "undefined:
+  # golol_html_has_no_prebuilt_library_for_this_GOOS_GOARCH" rather than
+  # linking. This resolves constraints for every platform from one runner.
+  platforms:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: false
+      - run: scripts/check-platforms.sh
+
   # The differential tests live in their own module so the root stays
   # dependency-free, which also means `go test ./...` at the root never sees
   # them. They have to be run explicitly.
