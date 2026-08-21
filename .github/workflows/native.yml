@@ -26,6 +26,14 @@ jobs:
   # rather than from seven differently-provisioned runners.
   build:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # Provenance attestation signs the archives against this workflow run, so
+      # a consumer can check where a committed binary actually came from.
+      # SHA256SUMS only proves the file has not rotted: anyone able to push can
+      # update the archive and the sums together.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v5
 
@@ -50,6 +58,11 @@ jobs:
         run: |
           ls -l internal/lib/*/liblolhtml.a
           cat internal/lib/SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'internal/lib/*/liblolhtml.a'
 
       - uses: actions/upload-artifact@v5
         with:
@@ -167,3 +180,11 @@ jobs:
 
             Checksums are in `internal/lib/SHA256SUMS`. Reproduce locally with
             `make verify`.
+
+            Each archive carries a signed provenance attestation from this run.
+            Verify with `make attest-verify`, or for one file:
+
+            ```
+            gh attestation verify internal/lib/<target>/liblolhtml.a \
+              --repo ${{ github.repository }}
+            ```

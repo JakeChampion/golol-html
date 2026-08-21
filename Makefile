@@ -1,6 +1,7 @@
 GO ?= go
+REPO ?= JakeChampion/golol-html
 
-.PHONY: all test race vet lint bench differential native native-all verify tidy clean
+.PHONY: all test race vet lint bench differential native native-all verify attest-verify tidy clean
 
 all: test
 
@@ -43,6 +44,16 @@ native-all:
 # Rebuild the host archive and check it matches what is committed.
 verify:
 	scripts/build-native.sh --verify
+
+# Check each archive's signed provenance: which workflow run built it, from
+# which commit. Unlike SHA256SUMS this cannot be forged by whoever pushes,
+# because the signature is issued to the workflow rather than to the repo.
+# Requires the gh CLI. Archives predating the attestation step will fail.
+attest-verify:
+	@for f in internal/lib/*/liblolhtml.a; do \
+		printf '==> %s\n' "$$f"; \
+		gh attestation verify "$$f" --repo $(REPO) || exit 1; \
+	done
 
 tidy:
 	$(GO) mod tidy

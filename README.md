@@ -220,6 +220,24 @@ make native-all    # every supported platform (needs the cross toolchains)
 Rust builds are not bit-identical across toolchain patch versions, so a mismatch
 is worth investigating with the same `RUST_TOOLCHAIN` before assuming the worst.
 
+### Provenance
+
+Each archive carries a signed provenance attestation naming the workflow run and
+commit that produced it:
+
+```
+make attest-verify
+
+# or one file
+gh attestation verify internal/lib/darwin_arm64/liblolhtml.a \
+  --repo JakeChampion/golol-html
+```
+
+This is a stronger claim than `SHA256SUMS`, which only shows a file has not
+rotted - anyone who can push could update an archive and its checksum together.
+The attestation is issued to the workflow run, so it cannot be reissued by
+someone with push access alone.
+
 Adding a platform means adding a target to `scripts/build-native.sh`, a
 `link_<goos>_<goarch>.go` file, and matrix entries in both workflows. Linker
 flags come from `rustc --print native-static-libs` for the target rather than
