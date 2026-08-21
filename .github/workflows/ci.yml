@@ -191,6 +191,23 @@ jobs:
         # finding new inputs. The nightly job does the depth.
         run: go test -asan -run '^$' -fuzz FuzzRewrite -fuzztime 60s .
 
+  # Property tests: generated documents rather than a fixed corpus, with
+  # shrinking so a counter-example arrives small enough to read. Its own module,
+  # like differential/, so rapid never reaches a consumer's module graph.
+  properties:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache-dependency-path: properties/go.sum
+      - name: Property tests
+        working-directory: properties
+        # More than the default 100 checks: these are cheap, and the
+        # interesting counter-examples so far turned up in the hundreds.
+        run: go test -count=1 -rapid.checks=2000 ./...
+
   # The differential tests live in their own module so the root stays
   # dependency-free, which also means `go test ./...` at the root never sees
   # them. They have to be run explicitly.

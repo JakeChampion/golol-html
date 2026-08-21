@@ -1,13 +1,14 @@
 GO ?= go
 REPO ?= JakeChampion/golol-html
 
-.PHONY: all test race vet lint bench differential platforms workflows native native-all verify attest-verify tidy clean
+.PHONY: all test race vet lint bench differential properties platforms workflows native native-all verify attest-verify tidy clean
 
 all: test
 
 test:
 	$(GO) test ./...
 	cd differential && $(GO) test ./...
+	cd properties && $(GO) test ./...
 
 race:
 	$(GO) test -race -count=1 ./...
@@ -41,6 +42,12 @@ workflows:
 # The differential tests are a separate module, so the root ./... misses them.
 differential:
 	cd differential && $(GO) test -count=1 ./...
+
+# Property tests, likewise a separate module. Override the check count with
+# CHECKS=20000 for a longer run.
+CHECKS ?= 2000
+properties:
+	cd properties && $(GO) test -count=1 -rapid.checks=$(CHECKS) ./...
 
 # Rebuild the vendored archive for the host platform.
 native:

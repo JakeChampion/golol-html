@@ -99,9 +99,17 @@ func (e *Element) SourceLocation() SourceLocation {
 //
 // The value is raw source text, with character references left encoded: the
 // href of <a href="?a=1&amp;b=2"> is "?a=1&amp;b=2", not "?a=1&b=2". Use
-// html.UnescapeString from the standard library if you need the decoded form,
-// and note that SetAttribute escapes what you give it, so a value read and
-// written back unchanged stays correct.
+// html.UnescapeString from the standard library if you need the decoded form.
+//
+// SetAttribute is the mirror image and takes raw source text too, escaping only
+// the double quote, so a value read here and written straight back is
+// unchanged. It does mean writing the five characters "&amp;" produces the
+// single character "&" for whoever parses the result.
+//
+// One quirk to know: lol-html decodes on the way out and its decoder removes a
+// leading byte-order mark, so a value starting with U+FEFF reads back without
+// it. The value is still serialised faithfully, and a U+FEFF anywhere but the
+// first position survives.
 func (e *Element) Attribute(name string) (string, bool) {
 	p, err := e.live()
 	if err != nil {

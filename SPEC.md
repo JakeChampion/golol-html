@@ -299,6 +299,53 @@ itself if lol-html rejects a streaming handler, but the C API only rejects a NUL
 and the shim never passes one. Probed on v3.0.1, every `Stream*` method succeeds even on a void
 `<br>` or a self-closing `<circle/>`.
 
+### Confidence measures
+
+Beyond the behaviour tests, five mechanisms target the failure classes those tests cannot see:
+
+| Mechanism | Targets |
+|---|---|
+| Live cgo handle counter, asserted on every fuzz iteration | Leaks and double deletes, which never change the output |
+| `FuzzOperations` | The handler program - lifetimes and marshalling, rather than lol-html's parser |
+| AddressSanitizer job (Linux) | Use-after-free across the boundary, including the Rust heap |
+| Seeded fault injection | Sink failures, memory limits, handler errors and panics, reproducibly |
+| Property tests with `rapid` | Claims about every document, with shrinking |
+
+`-msan` is deliberately absent: it reports uninitialised reads in uninstrumented code, and the
+vendored archive is entirely uninstrumented, so every finding would be false. ASan still covers
+the Rust heap despite the archive not being instrumented, because lol-html uses the default
+system allocator and ASan interposes `malloc` globally.
+
+Full deterministic simulation testing does not apply. A deterministic scheduler and simulated
+clock need concurrency and I/O to act on, and this library has neither internally. The part that
+does transfer is seed-driven scenario generation: one seed fixes the document, the chunking, when
+the sink fails, the memory limit and whether a handler errors or panics, so a failure reproduces
+exactly. Of 400 scenarios, 212 fail the sink, 130 hit a memory limit, 72 fail a handler and 77
+panic.
+
+#### What these found
+
+- **A real leak.** `Rewrite` never released the rewriter when a handler panicked, because `Write`
+  re-raised the panic and `Close` never ran: three handles per rewrite. Found by the handle
+  counter within minutes of it existing, and invisible to 42 tests, a differential suite and a
+  fuzzer, because a leak does not change the HTML.
+- **`SetAttribute` takes raw source text, not a literal value.** Only the double quote is escaped,
+  because only it would break the attribute syntax; `&` and `<` pass through. So writing the five
+  characters `&amp;` means the single character `&` to whoever parses the result. Content
+  insertion with `Text` is the opposite and escapes fully. The docs claimed escaping without that
+  distinction.
+- **A leading U+FEFF is dropped when reading an attribute.** lol-html decodes on the way out and
+  the decoder removes a byte-order mark, so a value starting with U+FEFF reads back without it,
+  though it is serialised faithfully. Upstream behaviour rather than a marshalling bug; pinned by
+  `TestLeadingBOMIsStrippedOnRead` so a change is noticed.
+
+Three of the property tests were wrong in their first draft, which is worth recording because it
+is the usual failure mode of property testing: NUL and CR cannot survive HTML at all (a parser
+must replace U+0000 with U+FFFD and normalise CR to LF), and comparing element counts against the
+*original* document rather than against the same insertion with a benign payload measures the
+parser's error recovery instead of the payload. A property that encodes a false claim about the
+format fails for reasons that have nothing to do with the code under test.
+
 ### Measured findings
 
 Three assumptions written into the first draft of this spec turned out to be wrong, and the tests

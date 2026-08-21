@@ -1,0 +1,84 @@
+name: fuzz
+
+# The CI fuzz step runs for 90 seconds, which is a smoke test rather than a
+# search. This runs for long enough to find something, and keeps the corpus
+# between runs so each night starts where the last one finished.
+on:
+  schedule:
+    # 03:17 rather than on the hour, to avoid the scheduling stampede.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: 'Minutes to fuzz each target'
+        required: false
+        default: '15'
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: FuzzRewrite
+            asan: false
+          - target: FuzzOperations
+            asan: false
+          # FuzzOperations is the one that drives the cgo boundary, so it is
+          # also the one worth the cost of running under AddressSanitizer.
+          - target: FuzzOperations
+            asan: true
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Locate the fuzz corpus cache
+        id: cache-dir
+        run: echo "dir=$(go env GOCACHE)/fuzz" >> "$GITHUB_OUTPUT"
+
+      # Go keeps generated corpus entries in GOCACHE. Restoring them means the
+      # search continues rather than restarting from the seeds every night.
+      - name: Restore corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.cache-dir.outputs.dir }}
+          key: fuzz-${{ matrix.target }}-asan${{ matrix.asan }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-${{ matrix.target }}-asan${{ matrix.asan }}-
+
+      - name: Fuzz
+        run: |
+          minutes="${{ inputs.minutes || '15' }}"
+          flags=""
+          if [ "${{ matrix.asan }}" = "true" ]; then
+            flags="-asan"
+          fi
+          go test $flags -run '^$' -fuzz '^${{ matrix.target }}$' \
+            -fuzztime "${minutes}m" .
+
+      # A crasher is written to testdata/fuzz/<target>/, which is exactly the
+      # form a committed regression seed takes - so upload it rather than
+      # leaving it in a discarded runner.
+      - name: Upload the failing input
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: crasher-${{ matrix.target }}-asan${{ matrix.asan }}
+          path: testdata/fuzz/
+          if-no-files-found: ignore
+
+      - name: Save corpus
+        # Save even on failure: the corpus that found a bug is worth keeping.
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.cache-dir.outputs.dir }}
+          key: fuzz-${{ matrix.target }}-asan${{ matrix.asan }}-${{ github.run_id }}

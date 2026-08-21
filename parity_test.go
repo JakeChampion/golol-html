@@ -882,3 +882,50 @@ func TestWithStrictDisabled(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// TestLeadingBOMIsStrippedOnRead pins down a lol-html quirk that property
+// testing surfaced, so a change upstream is noticed rather than silently
+// altering behaviour.
+//
+// Reading an attribute decodes it, and the decoder removes a leading byte-order
+// mark. Inside an attribute value U+FEFF is not a byte-order mark, it is a
+// zero-width no-break space, so this loses a character. Only the read is
+// affected: the value is serialised faithfully, and a BOM anywhere but the
+// start survives both ways.
+func TestLeadingBOMIsStrippedOnRead(t *testing.T) {
+	bom := string(rune(0xFEFF))
+
+	tests := []struct {
+		name      string
+		write     string
+		wantRead  string
+		wantInOut string
+	}{
+		{"bom alone", bom, "", bom},
+		{"bom leading", bom + "x", "x", bom + "x"},
+		{"bom in the middle", "a" + bom + "b", "a" + bom + "b", "a" + bom + "b"},
+		{"bom trailing", "x" + bom, "x" + bom, "x" + bom},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var read string
+			out, err := lolhtml.RewriteString(`<div></div>`, lolhtml.OnElement("div", func(e *lolhtml.Element) error {
+				if err := e.SetAttribute("v", tc.write); err != nil {
+					return err
+				}
+				read, _ = e.Attribute("v")
+				return nil
+			}))
+			if err != nil {
+				t.Fatalf("rewrite: %v", err)
+			}
+			if read != tc.wantRead {
+				t.Errorf("Attribute() = %q, want %q", read, tc.wantRead)
+			}
+			if !strings.Contains(out, tc.wantInOut) {
+				t.Errorf("output %q lost the written value %q", out, tc.wantInOut)
+			}
+		})
+	}
+}
