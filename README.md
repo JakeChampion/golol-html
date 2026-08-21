@@ -238,10 +238,9 @@ rotted - anyone who can push could update an archive and its checksum together.
 The attestation is issued to the workflow run, so it cannot be reissued by
 someone with push access alone.
 
-GitHub does not support attestations for user-owned private repositories, so
-while this repository is private the workflow skips that step with a notice and
-`make attest-verify` will find nothing to verify. It starts working on its own
-if the repository is made public.
+GitHub does not support attestations for user-owned private repositories, so a
+private fork of this repository will see the workflow skip that step with a
+notice, and `make attest-verify` will find nothing to verify.
 
 Adding a platform means adding a target to `scripts/build-native.sh`, a
 `link_<goos>_<goarch>.go` file, and matrix entries in both workflows. Linker

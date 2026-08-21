@@ -353,6 +353,18 @@ throughput tracks handler invocation count rather than document size.
 - Bail-out handlers (`Settings::append_bail_out_handler`) - Rust-only upstream, no C API yet.
 - `graceful_bail_out_on_content_handler_error` - Rust-only upstream.
 
+## Repository visibility
+
+The repository is public, which matters for two things beyond the obvious:
+
+- `go get github.com/JakeChampion/golol-html` works for anyone. While it was private, consumers
+  would have needed `GOPRIVATE` and credentials, which makes a published tag close to meaningless.
+- Provenance attestation works. GitHub refuses to persist attestations for user-owned *private*
+  repositories, which is why the step in `native.yml` is conditional on
+  `github.event.repository.private` rather than unconditional. Note the condition is evaluated
+  against the event payload captured when the workflow is dispatched, so a run dispatched before
+  the repository was made public still skips attestation.
+
 ## Licensing
 
 lol-html is BSD-3-Clause. Because we distribute its compiled object code, `LICENSE-lol-html`

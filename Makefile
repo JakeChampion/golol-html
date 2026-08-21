@@ -53,9 +53,9 @@ verify:
 # Check each archive's signed provenance: which workflow run built it, from
 # which commit. Unlike SHA256SUMS this cannot be forged by whoever pushes,
 # because the signature is issued to the workflow rather than to the repo.
-# Requires the gh CLI. Finds nothing while the repository is private: GitHub
-# does not support attestations for user-owned private repos. Archives predating
-# the attestation step will also fail.
+# Requires the gh CLI. Archives built before the attestation step existed, or
+# built in a private fork (GitHub does not support attestations for user-owned
+# private repositories), have nothing to verify and will fail.
 attest-verify:
 	@for f in internal/lib/*/liblolhtml.a; do \
 		printf '==> %s\n' "$$f"; \
