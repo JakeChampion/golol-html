@@ -1,3 +1,3 @@
-ec008788446c837c497c38cd7ecea2fbd43129bd18d15d136a1d11e7fbc835b1  ./darwin_arm64/liblolhtml.a
-a429d73a354f9766351fc9ee6924b6800e170f7a8029356389bcabbb8e865db4  ./linux_amd64/liblolhtml.a
-5487e3b4058fc8c16f7de2a7143f89705b286f141a920bdc875867d96a0ec91e  ./linux_arm64/liblolhtml.a
+7dff32db0d29887a930c8310d0874c755d57f9c336444cefdc070a5e8e0e79ff  ./darwin_arm64/liblolhtml.a
+be8841e0120131f55a053ebfe7a367a0d75b302fc9561c467bdf6a5d6fad9274  ./linux_amd64/liblolhtml.a
+04704bc9064e9f20ecc99d548ae2ea742d5c99214a453431cd5ec6da7142aa9d  ./linux_arm64/liblolhtml.a
