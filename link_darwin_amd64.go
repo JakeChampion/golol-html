@@ -1,4 +1,4 @@
-//go:build darwin && arm64
+//go:build darwin && amd64
 
 package lolhtml
 
@@ -11,5 +11,5 @@ package lolhtml
 // The blank line below matters: cgo treats the comment block immediately
 // preceding import "C" as the C preamble, so prose must be separated from it.
 
-// #cgo LDFLAGS: ${SRCDIR}/internal/lib/darwin_arm64/liblolhtml.a -liconv
+// #cgo LDFLAGS: ${SRCDIR}/internal/lib/darwin_amd64/liblolhtml.a -liconv
 import "C"

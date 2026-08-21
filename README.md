@@ -37,9 +37,30 @@ go get github.com/JakeChampion/golol-html
 No Rust toolchain is required. Prebuilt static archives are vendored in the
 module, so a C compiler (which cgo needs anyway) is enough.
 
-**Supported platforms:** `darwin/arm64`, `linux/amd64`, `linux/arm64` (glibc).
+**Supported platforms:**
+
+| Platform | Notes |
+|---|---|
+| `darwin/arm64`, `darwin/amd64` | |
+| `linux/amd64`, `linux/arm64` | glibc |
+| `linux/amd64`, `linux/arm64` (musl) | build with `-tags musl`, see below |
+| `windows/amd64` | cgo needs the mingw gcc that ships with Go on Windows |
+
 Anything else fails at compile time with a message naming the gap rather than an
 opaque linker error. `CGO_ENABLED=0` is not supported.
+
+### Alpine and musl
+
+Go build constraints cannot tell musl from glibc - both are `linux/amd64` - so
+which C library you are on has to be stated:
+
+```
+go build -tags musl ./...
+```
+
+Without the tag an Alpine build picks the glibc archive and fails at link time
+with missing glibc symbols. Passing it on a glibc system fails the mirror-image
+way. Both are loud rather than subtle.
 
 Pinned to **lol-html v3.0.1** (C API crate 1.4.0).
 
@@ -199,14 +220,18 @@ make native-all    # every supported platform (needs the cross toolchains)
 Rust builds are not bit-identical across toolchain patch versions, so a mismatch
 is worth investigating with the same `RUST_TOOLCHAIN` before assuming the worst.
 
-Adding a platform means adding a target to `scripts/build-native.sh` and a
-`link_<goos>_<goarch>.go` file.
+Adding a platform means adding a target to `scripts/build-native.sh`, a
+`link_<goos>_<goarch>.go` file, and matrix entries in both workflows. Linker
+flags come from `rustc --print native-static-libs` for the target rather than
+guesswork - that is how the glibc set was found to be missing `-lgcc_s -lutil
+-lrt`, which only worked by accident because modern glibc folds `rt` into
+libc.
 
 ## Not supported yet
 
 - `CGO_ENABLED=0`. A wasm backend on wazero would allow it, at the cost of a
   host/guest crossing per handler call.
-- linux/musl (Alpine), Windows, darwin/amd64.
+- linux/arm, 32-bit platforms, windows/arm64.
 - Bail-out handlers and `graceful_bail_out_on_content_handler_error`, which
   upstream exposes only through its Rust API.
 

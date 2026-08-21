@@ -1,8 +1,8 @@
 name: native
 
-# Rebuilds the vendored liblolhtml.a archives. Run manually when the pinned
-# lol-html revision in scripts/build-native.sh changes; the result is a pull
-# request, so the binaries that ship are always reviewable.
+# Rebuilds the vendored liblolhtml.a archives. Run it when the pinned lol-html
+# revision in scripts/build-native.sh changes. The result is a pull request, so
+# the binaries that ship are always reviewable and always CI-tested first.
 on:
   workflow_dispatch:
     inputs:
@@ -20,18 +20,12 @@ permissions:
   pull-requests: write
 
 jobs:
+  # One runner builds every archive. Restricting the crate type to staticlib
+  # means no linker for the target is involved, so cross-compiling is just
+  # `rustup target add`, and every archive comes from an identical toolchain
+  # rather than from seven differently-provisioned runners.
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-14
-            target: darwin_arm64
-          - os: ubuntu-24.04
-            target: linux_amd64
-          - os: ubuntu-24.04-arm
-            target: linux_arm64
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -40,67 +34,118 @@ jobs:
           rustup toolchain install ${{ inputs.rust_toolchain }} --profile minimal
           rustup default ${{ inputs.rust_toolchain }}
 
+      - name: Install llvm-strip and llvm-nm
+        # llvm's binutils read Mach-O, ELF and COFF, which a cross build needs.
+        # GNU binutils cannot read these archives at all: LTO leaves bitcode in
+        # the members.
+        run: sudo apt-get update && sudo apt-get install -y llvm
+
+      - name: Build every archive
+        env:
+          LOL_HTML_REF: ${{ inputs.lol_html_ref }}
+          RUST_TOOLCHAIN: ${{ inputs.rust_toolchain }}
+        run: scripts/build-native.sh --all
+
+      - name: Summarise
+        run: |
+          ls -l internal/lib/*/liblolhtml.a
+          cat internal/lib/SHA256SUMS
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: archives
+          path: |
+            internal/lib
+            internal/include
+
+  # Every archive is linked and exercised on the platform it targets before it
+  # is allowed near a pull request.
+  smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: darwin_arm64
+          - os: macos-13
+            target: darwin_amd64
+          - os: ubuntu-24.04
+            target: linux_amd64
+          - os: ubuntu-24.04-arm
+            target: linux_arm64
+          - os: windows-latest
+            target: windows_amd64
+          - os: ubuntu-24.04
+            target: linux_amd64_musl
+            musl: true
+          - os: ubuntu-24.04-arm
+            target: linux_arm64_musl
+            musl: true
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: archives
+          path: artifacts
+
+      - name: Install the freshly built archives
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # upload-artifact strips the least common ancestor of its paths, so
+          # the archive tree arrives as lib/... and include/... .
+          cp -R artifacts/lib/. internal/lib/
+          cp artifacts/include/lol_html.h internal/include/lol_html.h
+          ls -l "internal/lib/${{ matrix.target }}/liblolhtml.a"
+
       - uses: actions/setup-go@v6
+        if: ${{ !matrix.musl }}
         with:
           go-version: '1.25'
           cache: false
 
-      - name: Build the archive
-        env:
-          LOL_HTML_REF: ${{ inputs.lol_html_ref }}
-          RUST_TOOLCHAIN: ${{ inputs.rust_toolchain }}
-        run: scripts/build-native.sh ${{ matrix.target }}
-
-      - name: Smoke test against the freshly built archive
+      - name: Test
+        if: ${{ !matrix.musl }}
         run: |
           go build ./...
-          go test -count=1 ./...
-          go test -race -count=1 ./...
+          go test -count=1 .
+          go test -race -count=1 .
 
-      - uses: actions/upload-artifact@v5
-        with:
-          name: liblolhtml-${{ matrix.target }}
-          path: |
-            internal/lib/${{ matrix.target }}/liblolhtml.a
-            internal/include/lol_html.h
+      # Alpine is tested through docker rather than a container job: the
+      # runner's own node binary is glibc-linked, so actions/checkout cannot
+      # run inside an Alpine container.
+      - name: Test under musl
+        if: ${{ matrix.musl }}
+        run: |
+          docker run --rm -v "$PWD":/src -w /src golang:1.25-alpine sh -c '
+            set -eux
+            apk add --no-cache gcc musl-dev
+            go build -tags musl ./...
+            go test -tags musl -count=1 .
+          '
 
   collect:
-    needs: build
+    needs: [build, smoke]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+
       - uses: actions/download-artifact@v5
         with:
+          name: archives
           path: artifacts
 
       - name: Place archives and regenerate checksums
         run: |
           set -euxo pipefail
-          # Locate each archive by name rather than by path: upload-artifact
-          # strips the least common ancestor of the paths it was given, so
-          # uploading internal/lib/... alongside internal/include/... yields
-          # lib/... and include/... inside the artifact, not internal/lib/... .
-          for d in artifacts/liblolhtml-*; do
-            target="${d#artifacts/liblolhtml-}"
-            src="$(find "$d" -name liblolhtml.a -type f | head -1)"
-            if [ -z "$src" ]; then
-              echo "::error::no liblolhtml.a inside $d"
-              find "$d" -type f
-              exit 1
-            fi
-            mkdir -p "internal/lib/${target}"
-            cp "$src" "internal/lib/${target}/liblolhtml.a"
-          done
-          # Every runner produces the same header; one is enough.
-          cp "$(find artifacts -name lol_html.h -type f | head -1)" internal/include/lol_html.h
+          cp -R artifacts/lib/. internal/lib/
+          cp artifacts/include/lol_html.h internal/include/lol_html.h
           cd internal/lib && find . -name 'liblolhtml.a' | sort | xargs sha256sum > SHA256SUMS
           cat SHA256SUMS
 
-      # Needs "Allow GitHub Actions to create and approve pull requests" under
-      # Settings -> Actions -> General -> Workflow permissions, which is enabled
-      # on this repository. A fork without it still gets the pushed branch and
-      # only this step fails, so the PR can be opened by hand from
-      # native/rebuild.
       - uses: peter-evans/create-pull-request@v7
         with:
           branch: native/rebuild
@@ -116,6 +161,9 @@ jobs:
 
             - lol-html ref: `${{ inputs.lol_html_ref }}`
             - Rust toolchain: `${{ inputs.rust_toolchain }}`
+
+            Every archive was cross-built on one runner and then linked and
+            tested on the platform it targets, including Alpine under musl.
 
             Checksums are in `internal/lib/SHA256SUMS`. Reproduce locally with
             `make verify`.

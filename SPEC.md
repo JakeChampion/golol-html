@@ -60,11 +60,46 @@ under `lib/` - build constraints prune un-imported modules from a `go build`, th
 Trust mitigation: archives are built in CI from the pinned upstream commit, `SHA256SUMS` is
 committed alongside, and `make verify-native` reproduces and diffs them locally.
 
-### D2. Platforms for v1
+### D2. Platforms
 
-`darwin/arm64`, `linux/amd64`, `linux/arm64` (glibc).
+`darwin/arm64`, `darwin/amd64`, `linux/amd64`, `linux/arm64` (glibc), `linux/amd64` and
+`linux/arm64` (musl, via `-tags musl`), `windows/amd64`.
 
-Deferred: linux/musl (Alpine needs a separate static build), windows, darwin/amd64.
+Deferred: linux/arm, 32-bit anything, windows/arm64.
+
+**Linker flags come from `rustc --print native-static-libs`**, not from guesswork. That is how the
+original glibc set was found to be incomplete: it named `-lm -ldl -lpthread` where rustc asks for
+`-lgcc_s -lutil -lrt -lpthread -lm -ldl -lc`. It linked anyway because modern glibc folds `rt`
+into libc and the missing libraries happened to be unreferenced - fragile rather than correct.
+
+| Target | `native-static-libs` | Shipped |
+|---|---|---|
+| darwin (both) | `-liconv -lSystem -lc -lm` | `-liconv` only |
+| linux gnu (both) | `-lgcc_s -lutil -lrt -lpthread -lm -ldl -lc` | as given |
+| linux musl (both) | `-lunwind -lc` | `-lc` only |
+| windows-gnu | `-lkernel32 -lntdll -luserenv -lws2_32 -ldbghelp` | as given |
+
+Two deliberate deviations, both measured rather than assumed:
+
+- **darwin** drops `-lSystem -lc -lm`. macOS links libSystem implicitly, and naming it again makes
+  `ld` warn about a duplicate library on every consumer build. Verified that `-liconv` alone links
+  cleanly, as does no flag at all.
+- **musl** drops `-lunwind`. The c-api crate builds with `panic = "abort"`, so nothing references
+  the unwinder, and Alpine does not ship libunwind - requiring it would burden every Alpine user
+  for no benefit. This is an assumption the Alpine job in CI exists to falsify; if it ever fails
+  on an undefined `_Unwind_*`, add the flag and document the extra package.
+
+**musl cannot be detected by build constraint.** `linux/amd64` is `linux/amd64` whether the C
+library is glibc or musl, so the choice is explicit via the `musl` build tag, with the glibc files
+constrained `!musl`. Verified with `go list -tags musl` that the tag selects the musl archive and
+its flags, and that its absence selects glibc.
+
+**All seven archives are cross-built on one Linux runner.** Restricting the crate type to
+staticlib means no linker for the target is involved, so cross-compiling needs nothing but
+`rustup target add` - verified locally by building all seven from macOS/arm64 and confirming the
+object formats (Mach-O x86_64, ELF musl on both arches, COFF amd64). One toolchain for every
+archive beats seven differently-provisioned runners. Each archive is then linked and tested on the
+platform it targets before it can reach a pull request.
 
 ### D3. API shape: idiomatic Go, thin over C
 
@@ -402,6 +437,12 @@ produce a real diff and therefore a real PR, rather than a no-op.
 
 ## Notes
 
+- Stripping is verified rather than trusted: `strip_archive` counts exported entry points before
+  and after and fails if the number changes. This caught Apple's `strip -S -x` dropping
+  `__.SYMDEF`, the archive symbol index - benign, since all 97 entry points survived and linkers
+  cope, but the archive is now put back in conventional shape with `ranlib`. The check tolerates a
+  zero count, because that means no available `nm` could read the archive rather than that the
+  archive is empty.
 - A one-off `ld: warning: ... malformed LC_DYSYMTAB` was observed once during development and
   traced to a stale build cache after swapping archives underneath it, not to `strip`. Three
   clean-cache race links of each variant produced zero warnings. Stripping is kept.

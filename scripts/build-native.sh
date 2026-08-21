@@ -40,18 +40,28 @@ RUST_TOOLCHAIN="${RUST_TOOLCHAIN:-1.95.0}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work="${repo_root}/.native-build"
 
-# go target -> rust target triple
+# go target -> rust target triple. The _musl suffix is not a GOOS/GOARCH pair;
+# Go cannot tell musl from glibc, so those archives are selected by the `musl`
+# build tag instead. See musl.go.
 rust_target_for() {
     case "$1" in
-        darwin_arm64) echo aarch64-apple-darwin ;;
-        darwin_amd64) echo x86_64-apple-darwin ;;
-        linux_amd64)  echo x86_64-unknown-linux-gnu ;;
-        linux_arm64)  echo aarch64-unknown-linux-gnu ;;
+        darwin_arm64)     echo aarch64-apple-darwin ;;
+        darwin_amd64)     echo x86_64-apple-darwin ;;
+        linux_amd64)      echo x86_64-unknown-linux-gnu ;;
+        linux_arm64)      echo aarch64-unknown-linux-gnu ;;
+        linux_amd64_musl) echo x86_64-unknown-linux-musl ;;
+        linux_arm64_musl) echo aarch64-unknown-linux-musl ;;
+        windows_amd64)    echo x86_64-pc-windows-gnu ;;
         *) echo "unsupported target: $1" >&2; return 1 ;;
     esac
 }
 
-ALL_TARGETS=(darwin_arm64 linux_amd64 linux_arm64)
+ALL_TARGETS=(
+    darwin_arm64 darwin_amd64
+    linux_amd64 linux_arm64
+    linux_amd64_musl linux_arm64_musl
+    windows_amd64
+)
 
 host_target() {
     local os arch
@@ -95,15 +105,79 @@ build_target() {
     mkdir -p "${dest}"
     cp "${built}" "${dest}/liblolhtml.a"
 
-    # Strip debug and local symbols; still worth it after the crate-type
-    # change. Measured on darwin/arm64: 6.51 MB -> 2.73 MB, no effect on
-    # linking.
-    case "${go_target}" in
-        darwin_*) /usr/bin/strip -S -x "${dest}/liblolhtml.a" ;;
-        linux_*)  "${STRIP:-strip}" --strip-debug "${dest}/liblolhtml.a" ;;
-    esac
+    strip_archive "${go_target}" "${dest}/liblolhtml.a"
 
     echo "    $(du -h "${dest}/liblolhtml.a" | cut -f1)  ${go_target}/liblolhtml.a"
+}
+
+# Strip debug and local symbols. Worth doing even after the crate-type change:
+# measured on darwin/arm64, 6.51 MB -> 2.73 MB with no effect on linking.
+#
+# Which tool works depends on the object format, not the host. llvm-strip reads
+# Mach-O, ELF and COFF, so it is preferred when cross-building. Note that
+# binutils cannot read these archives at all - LTO leaves LLVM bitcode in the
+# members, and GNU strip and nm report "file format not recognized" per member
+# rather than failing outright, which is easy to mistake for a broken archive.
+#
+# Stripping is best-effort: an unstripped archive is larger but perfectly
+# usable, so a missing tool is a warning rather than a build failure. What is
+# NOT tolerated is a strip that damages the archive, so the exported entry
+# points are counted before and after.
+strip_archive() {
+    local go_target="$1" file="$2"
+    local before after symbols_before symbols_after
+
+    before="$(wc -c < "${file}")"
+    symbols_before="$(count_entry_points "${file}")"
+
+    if [[ "${go_target}" == darwin_* && "$(uname -s)" == Darwin ]]; then
+        # Apple's strip, not a GNU one that happens to come first in PATH.
+        /usr/bin/strip -S -x "${file}" || { echo "    warning: strip failed, keeping unstripped" >&2; return 0; }
+        # Apple's strip drops __.SYMDEF, the archive symbol index. Linkers cope,
+        # but rebuilding it keeps the archive conventional.
+        /usr/bin/ranlib "${file}" >/dev/null 2>&1 || true
+    elif command -v llvm-strip >/dev/null; then
+        llvm-strip --strip-debug "${file}" || { echo "    warning: llvm-strip failed, keeping unstripped" >&2; return 0; }
+    elif [[ "${go_target}" == linux_* ]] && command -v strip >/dev/null; then
+        strip --strip-debug "${file}" || { echo "    warning: strip failed, keeping unstripped" >&2; return 0; }
+    else
+        echo "    warning: no usable strip for ${go_target}; keeping unstripped archive" >&2
+        return 0
+    fi
+
+    if ! ar t "${file}" >/dev/null 2>&1; then
+        echo "    error: archive unreadable after stripping" >&2
+        return 1
+    fi
+
+    after="$(wc -c < "${file}")"
+    symbols_after="$(count_entry_points "${file}")"
+
+    # Zero means "no tool could read the archive", which is not a regression.
+    if [[ "${symbols_before}" -gt 0 && "${symbols_after}" -ne "${symbols_before}" ]]; then
+        echo "    error: stripping changed the exported entry points: ${symbols_before} -> ${symbols_after}" >&2
+        return 1
+    fi
+    echo "    stripped ${before} -> ${after} bytes (${symbols_after} entry points)"
+}
+
+# count_entry_points counts exported lol_html_* functions. Expect 97: the 96
+# lol_html_* entry points plus unstable_lol_html_rewriter_build_with_esi_tags.
+#
+# Tool choice matters more than it should. GNU nm cannot read LTO objects and
+# prints nothing useful while still exiting 0, so a bare `nm` can report zero
+# symbols for a perfectly good archive. llvm-nm and Apple's nm both work.
+count_entry_points() {
+    local file="$1" nm=""
+    if command -v llvm-nm >/dev/null; then
+        nm=llvm-nm
+    elif [[ "$(uname -s)" == Darwin ]]; then
+        nm=/usr/bin/nm
+    else
+        nm=nm
+    fi
+    # Mach-O prefixes symbols with an underscore; ELF and COFF do not.
+    "${nm}" --defined-only "${file}" 2>/dev/null | grep -cE ' [TT] _?(unstable_)?lol_html_' || true
 }
 
 sync_header() {
