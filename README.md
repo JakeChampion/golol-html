@@ -175,11 +175,12 @@ sink, bypassing the now-unusable rewriter.
 page with 200 links. Run it on your own hardware before relying on these.
 
 ```
-BenchmarkPassthrough-12        21986 ns/op   752.47 MB/s     440 B/op    14 allocs/op
-BenchmarkSetAttribute-12      197037 ns/op    83.96 MB/s    7042 B/op   423 allocs/op
-BenchmarkReadAttributes-12    186676 ns/op    88.62 MB/s   17179 B/op  1023 allocs/op
-BenchmarkTextHandler-12       138216 ns/op   119.70 MB/s   11843 B/op   623 allocs/op
-BenchmarkChunkedWrite-12      245348 ns/op    67.43 MB/s    7250 B/op   435 allocs/op
+BenchmarkPassthrough-12         23437 ns/op   705.88 MB/s     440 B/op    14 allocs/op
+BenchmarkSetAttribute-12       211903 ns/op    78.07 MB/s    7042 B/op   423 allocs/op
+BenchmarkReadAttributes-12     189778 ns/op    87.18 MB/s   17179 B/op  1023 allocs/op
+BenchmarkTextHandler-12        139737 ns/op   118.39 MB/s   11842 B/op   623 allocs/op
+BenchmarkStreamingAppend-12    229763 ns/op    72.00 MB/s   28336 B/op  1426 allocs/op
+BenchmarkChunkedWrite-12       199385 ns/op    82.98 MB/s    7249 B/op   435 allocs/op
 ```
 
 Passthrough is the floor - lol-html plus cgo and sink overhead, with no handlers.
