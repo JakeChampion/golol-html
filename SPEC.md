@@ -360,6 +360,28 @@ reproduces upstream's notice. The binding code is BSD-3-Clause to match.
 
 ## CI findings
 
+**0. Build constraints and link files are two lists that must agree.** The Windows smoke test
+failed with `undefined: golol_html_has_no_prebuilt_library_for_this_GOOS_GOARCH` - not a linker
+problem at all. `unsupported.go` still excluded only the original three platforms, so Windows and
+darwin/amd64 fell through to the guard instead of selecting their link files. The edit meant to
+widen that constraint silently matched nothing (the pattern omitted the `cgo && ` prefix present
+in the file) while the edit to the comment directly below it succeeded, leaving the file claiming
+seven platforms and enforcing three.
+
+`scripts/check-platforms.sh` now resolves constraints for all seven platforms plus both guards,
+from any host - `go list` evaluates build tags without compiling, so no cross-toolchain is needed.
+It asserts each platform selects its expected link file and that none falls through to a guard.
+Runs in CI and `make lint`.
+
+One trap worth recording: link files `import "C"`, so they appear in `go list`'s `.CgoFiles`, not
+`.GoFiles`. The first version of the check queried only `.GoFiles` and reported every platform as
+broken.
+
+The wider lesson, which cost time twice in this project: an unasserted string replacement that
+matches nothing is indistinguishable from success. The same shape of mistake as suppressing a
+tool's stderr and reading its silence as a clean result.
+
+
 First CI run (32459538116) went red in five jobs. Two distinct causes:
 
 **1. The gofmt step failed on macOS regardless of formatting.** The idiom
