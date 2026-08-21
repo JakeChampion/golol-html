@@ -13,8 +13,16 @@ race:
 vet:
 	$(GO) vet ./...
 
+# Not `gofmt -l . | ... | (! read)`: that idiom aborts under macOS bash 3.2
+# with set -e even when it passes.
 lint: vet
-	gofmt -l . | tee /dev/stderr | (! read)
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "unformatted files:"; echo "$$unformatted"; \
+		gofmt -d .; \
+		exit 1; \
+	fi; \
+	echo "all files are gofmt-clean"
 
 bench:
 	$(GO) test -run '^$$' -bench . -benchmem ./...

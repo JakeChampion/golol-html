@@ -285,6 +285,41 @@ throughput tracks handler invocation count rather than document size.
 lol-html is BSD-3-Clause. Because we distribute its compiled object code, `LICENSE-lol-html`
 reproduces upstream's notice. The binding code is BSD-3-Clause to match.
 
+## CI findings
+
+First CI run (32459538116) went red in five jobs. Two distinct causes:
+
+**1. The gofmt step failed on macOS regardless of formatting.** The idiom
+`gofmt -l . | tee /dev/stderr | (! read)` is not portable. GitHub runs steps with `bash -e`, and
+macOS runners ship `/bin/bash` 3.2, where `set -e` aborts the script on a *non-final* pipeline
+element even though the pipeline's own status is 0. Verified locally:
+
+| Shell | `bash -e -c 'true \| tee /dev/stderr \| (! read)'` |
+|---|---|
+| `/bin/bash` 3.2 (macOS) | exits **1** - false failure |
+| bash 5.3 | exits 0 - correct |
+
+Worse, `tee /dev/stderr` did not reach the runner log, so the step failed while printing nothing
+at all. gofmt itself was innocent: eight toolchains from go1.25.8 through go1.26.5, including
+the runner's exact go1.25.13, all report the tree clean.
+
+Replaced everywhere (ci.yml and the Makefile) with a form that is portable and actually prints
+the diff:
+
+    unformatted=$(gofmt -l .)
+    if [ -n "$unformatted" ]; then echo "$unformatted"; gofmt -d .; exit 1; fi
+
+**2. The three Linux jobs and `consume` failed because no Linux archive exists.** This is the
+known gap, not a regression: only `internal/lib/darwin_arm64/liblolhtml.a` is committed, so
+`ld` cannot find `internal/lib/linux_amd64/liblolhtml.a`. The `native` workflow exists to
+produce them; until it runs, those jobs are expected to be red. The archive-presence check now
+emits a `::error::` naming the workflow to run instead of a bare `test -f` failure.
+
+Also cleaned up: actions bumped to `checkout@v5` / `setup-go@v6` (v4/v5 are Node 20 and now
+warn), `cache: false` on setup-go since a module with no dependencies has no `go.sum` to key a
+cache on, checksum verification made portable across `sha256sum` and `shasum`, and a misordered
+`setup-go` step in native.yml that was labelled as the smoke test.
+
 ## Notes
 
 - A one-off `ld: warning: ... malformed LC_DYSYMTAB` was observed once during development and

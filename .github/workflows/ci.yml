@@ -24,22 +24,51 @@ jobs:
             target: linux_arm64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.25'
           check-latest: true
+          # The module has no dependencies, so there is no go.sum to key a
+          # cache on and setup-go warns if asked to try.
+          cache: false
 
       - name: Confirm the expected archive is present
-        run: test -f internal/lib/${{ matrix.target }}/liblolhtml.a
+        run: |
+          archive="internal/lib/${{ matrix.target }}/liblolhtml.a"
+          if [ ! -f "$archive" ]; then
+            echo "::error::$archive is missing. Vendored archives are built by" \
+                 "the 'native' workflow; run it for ${{ matrix.target }} and" \
+                 "merge the pull request it opens."
+            exit 1
+          fi
+          ls -l "$archive"
 
       - name: Verify archive checksums
         working-directory: internal/lib
-        run: shasum -a 256 --check SHA256SUMS
+        run: |
+          # sha256sum on Linux, shasum on macOS; the file format is compatible.
+          if command -v sha256sum >/dev/null; then
+            sha256sum --check --ignore-missing SHA256SUMS
+          else
+            shasum -a 256 --check --ignore-missing SHA256SUMS
+          fi
 
-      - run: gofmt -l . | tee /dev/stderr | (! read)
-        name: gofmt
+      - name: gofmt
+        run: |
+          # Deliberately not `gofmt -l . | tee /dev/stderr | (! read)`: under
+          # macOS's bash 3.2, `set -e` (which GitHub always passes) aborts that
+          # pipeline even when it succeeds, so the step failed unconditionally
+          # on macOS and printed nothing to explain itself.
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt reports unformatted files:"
+            echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+          echo "all files are gofmt-clean"
 
       - run: go vet ./...
 
@@ -55,27 +84,28 @@ jobs:
   fuzz:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.25'
+          cache: false
       - name: Fuzz the rewriter briefly
         run: go test -run '^$' -fuzz FuzzRewrite -fuzztime 90s ./...
 
-  # A consumer must be able to `go get` this module and build without Rust.
+  # A consumer must be able to depend on this module and build without Rust.
   consume:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: golol-html
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.25'
+          cache: false
       - name: Build a module that depends on this one
         run: |
           set -euxo pipefail
-          test ! -x "$(command -v cargo || true)" || echo "note: cargo present but must not be needed"
           mkdir consumer && cd consumer
           cat > go.mod <<'GOMOD'
           module consumer
@@ -106,4 +136,5 @@ jobs:
           }
           MAIN
           go mod tidy
-          go run .
+          # Prove no Rust toolchain is consulted during a consumer build.
+          env PATH="$(echo "$PATH" | tr ':' '\n' | grep -v cargo | paste -sd: -)" go run .

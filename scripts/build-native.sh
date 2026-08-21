@@ -11,6 +11,19 @@
 #   scripts/build-native.sh linux_amd64      # one named target
 #   scripts/build-native.sh --all            # every supported target
 #   scripts/build-native.sh --verify         # rebuild host target, diff, restore
+#
+# Cross-building from macOS is possible but not what this script does, because
+# CI builds each target on a runner of that architecture. If you need it by
+# hand, note that `cargo build` also builds the cdylib and so wants a linker for
+# the target; restricting the crate type avoids that entirely:
+#
+#   rustup target add --toolchain 1.95.0 x86_64-unknown-linux-gnu
+#   cargo +1.95.0 rustc --release --target x86_64-unknown-linux-gnu \
+#       --crate-type staticlib
+#
+# Verify the result with Apple's /usr/bin/nm, not a GNU nm: binutils cannot read
+# the LTO objects and reports zero symbols rather than an error you would
+# notice.
 set -euo pipefail
 
 # Pinned upstream: lol-html v3.0.1 (c-api crate 1.4.0).
@@ -92,9 +105,17 @@ sync_header() {
     cp "${work}/lol-html/LICENSE" "${repo_root}/LICENSE-lol-html"
 }
 
+# sha256sum on Linux, shasum on macOS. The output format is identical, so
+# either tool can check a file the other produced.
+sha256() {
+    if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi
+}
+
 write_sums() {
+    local tool=(shasum -a 256)
+    command -v sha256sum >/dev/null && tool=(sha256sum)
     ( cd "${repo_root}/internal/lib" \
-      && find . -name 'liblolhtml.a' | sort | xargs shasum -a 256 > SHA256SUMS )
+      && find . -name 'liblolhtml.a' | sort | xargs "${tool[@]}" > SHA256SUMS )
     echo "==> internal/lib/SHA256SUMS updated"
 }
 
@@ -106,9 +127,9 @@ case "${1:-}" in
         ;;
     --verify)
         target="$(host_target)"
-        before="$(shasum -a 256 "${repo_root}/internal/lib/${target}/liblolhtml.a" | cut -d' ' -f1)"
+        before="$(sha256 "${repo_root}/internal/lib/${target}/liblolhtml.a" | cut -d' ' -f1)"
         fetch_source; sync_header; build_target "${target}"
-        after="$(shasum -a 256 "${repo_root}/internal/lib/${target}/liblolhtml.a" | cut -d' ' -f1)"
+        after="$(sha256 "${repo_root}/internal/lib/${target}/liblolhtml.a" | cut -d' ' -f1)"
         if [[ "${before}" == "${after}" ]]; then
             echo "==> ${target} reproduced exactly: ${after}"
         else

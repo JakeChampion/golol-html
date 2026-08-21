@@ -1,1 +1,3 @@
 3b2a1966d6a930a5d9a737c14a9dba6d9ebf824bdfbda0e39a5aeea8fe9043ec  ./darwin_arm64/liblolhtml.a
+a429d73a354f9766351fc9ee6924b6800e170f7a8029356389bcabbb8e865db4  ./linux_amd64/liblolhtml.a
+5487e3b4058fc8c16f7de2a7143f89705b286f141a920bdc875867d96a0ec91e  ./linux_arm64/liblolhtml.a

@@ -33,12 +33,17 @@ jobs:
             target: linux_arm64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         run: |
           rustup toolchain install ${{ inputs.rust_toolchain }} --profile minimal
           rustup default ${{ inputs.rust_toolchain }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: false
 
       - name: Build the archive
         env:
@@ -47,12 +52,12 @@ jobs:
         run: scripts/build-native.sh ${{ matrix.target }}
 
       - name: Smoke test against the freshly built archive
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-      - run: go test -count=1 ./...
+        run: |
+          go build ./...
+          go test -count=1 ./...
+          go test -race -count=1 ./...
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: liblolhtml-${{ matrix.target }}
           path: |
@@ -63,8 +68,8 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
 
@@ -78,10 +83,10 @@ jobs:
           done
           # Every runner produces the same header; one is enough.
           cp "$(find artifacts -name lol_html.h | head -1)" internal/include/lol_html.h
-          cd internal/lib && find . -name 'liblolhtml.a' | sort | xargs shasum -a 256 > SHA256SUMS
+          cd internal/lib && find . -name 'liblolhtml.a' | sort | xargs sha256sum > SHA256SUMS
           cat SHA256SUMS
 
-      - uses: peter-evans/create-pull-request@v6
+      - uses: peter-evans/create-pull-request@v7
         with:
           branch: native/rebuild
           title: 'Rebuild vendored liblolhtml.a (${{ inputs.lol_html_ref }})'
