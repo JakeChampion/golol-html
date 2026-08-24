@@ -234,6 +234,17 @@
 
 ### Documentation
 
+- **The package documentation is ordered how it is read.** It had grown to
+  fifteen sections in the order they were written, which is not the order anyone
+  needs them: ":not() is wrong for anything but a single simple selector" came
+  fourth, ahead of handler order, and the two sections a reader most needs before
+  inserting anything - neither content type is right inside a script, and
+  hand-built markup escapes nothing - were ninth and twelfth. It now runs
+  streaming, handler lifetime, handler order, selectors, character references,
+  then the four insertion sections under one "Inserting content" heading that
+  says what they cover, then reading an element's text, removal, comments, cost,
+  errors. No prose changed; the only addition is the grouping section.
+
 - **Selectors match the document as it arrived; handlers see each other's
   edits.** The handler-order section said the second half. The first was
   unstated, and it is what makes a rewrite predictable: matching is decided

@@ -46,6 +46,40 @@
 //		return nil
 //	})
 //
+// # Handler order
+//
+// More than one handler can see the same unit, and the order they run in
+// follows two rules.
+//
+// Within one kind of registration, handlers run in the order they were
+// registered: two [OnElement] handlers whose selectors both match, three
+// [OnDocumentEnd] handlers, several [Element.OnEndTag] handlers on one element.
+// Each sees what the previous one did, so a handler reading an attribute gets
+// the value an earlier handler wrote to it.
+//
+// Selectors do not. Matching is decided against the document as it arrived,
+// before any handler runs, so an edit never changes which handlers fire:
+//
+//	OnElement(".a", func(e *Element) error { return e.SetAttribute("class", "b") }),
+//	OnElement(".b", ...)   // does not fire
+//
+// and neither does renaming a tag, in either registration order. The reverse
+// holds too: removing the class an already-matched selector needed does not
+// un-fire it, so a handler on ".a" still runs even if an earlier handler took the
+// attribute away.
+//
+// That is worth relying on. There is no cascade, no order-dependence in which
+// handlers run, and no way for a rewrite to trigger itself. It also means a
+// rewrite cannot act on what another handler produced: that needs a second pass.
+//
+// Between kinds, every selector-associated handler runs before every
+// document-level handler for the same unit, whatever order the options were
+// written in. [OnComment] runs before [OnDocumentComment] and [OnText] before
+// [OnDocumentText] even when the document-level one was registered first,
+// because lol-html keeps the two in separate lists. A rewrite that needs to see
+// a unit before anything else does has to register a selector-associated
+// handler, not a document-level one.
+//
 // # Which selectors are supported
 //
 // One rule covers almost all of it: a selector can be used if the rewriter can
@@ -119,113 +153,42 @@
 //		...
 //	})
 //
-// # Handler order
+// # Character references are not decoded
 //
-// More than one handler can see the same unit, and the order they run in
-// follows two rules.
+// Text, comment text and attribute values are reported as raw source: the href
+// of <a href="?a=1&amp;b=2"> is "?a=1&amp;b=2". lol-html has to be able to
+// re-emit what it read, so it does not decode on the way in, and correspondingly
+// escapes what you write. Reading a value and writing it back unchanged is
+// therefore correct; comparing one against a decoded Go string is not.
 //
-// Within one kind of registration, handlers run in the order they were
-// registered: two [OnElement] handlers whose selectors both match, three
-// [OnDocumentEnd] handlers, several [Element.OnEndTag] handlers on one element.
-// Each sees what the previous one did, so a handler reading an attribute gets
-// the value an earlier handler wrote to it.
+// The rule: decide on the decoded form, rewrite the raw one. Use
+// html.UnescapeString for the first and leave the value alone for the second.
 //
-// Selectors do not. Matching is decided against the document as it arrived,
-// before any handler runs, so an edit never changes which handlers fire:
+// Getting that the wrong way round is how a filter acquires a hole, because a
+// browser decodes before it acts. These three hrefs all execute:
 //
-//	OnElement(".a", func(e *Element) error { return e.SetAttribute("class", "b") }),
-//	OnElement(".b", ...)   // does not fire
+//	javascript:x()
+//	java&#9;script:x()
+//	&#106;avascript:x()
 //
-// and neither does renaming a tag, in either registration order. The reverse
-// holds too: removing the class an already-matched selector needed does not
-// un-fire it, so a handler on ".a" still runs even if an earlier handler took the
-// attribute away.
+// A check on the raw string catches only the first: the others read as schemes
+// called "java&#9;script" and "&#106;avascript". Decode first and all three are
+// the same URL. The same applies to any decision taken on a value - an
+// allow-list of protocols, a comparison against an expected filename, a test for
+// a marker in text.
 //
-// That is worth relying on. There is no cascade, no order-dependence in which
-// handlers run, and no way for a rewrite to trigger itself. It also means a
-// rewrite cannot act on what another handler produced: that needs a second pass.
+// It cuts the other way too. Having decoded a value to decide about it, do not
+// write the decoded form back unless you mean to: SetAttribute takes raw source,
+// so writing "a&b" produces an attribute whose value is "a&b" to a parser, and
+// writing back the "a&amp;b" you were given round-trips exactly.
 //
-// Between kinds, every selector-associated handler runs before every
-// document-level handler for the same unit, whatever order the options were
-// written in. [OnComment] runs before [OnDocumentComment] and [OnText] before
-// [OnDocumentText] even when the document-level one was registered first,
-// because lol-html keeps the two in separate lists. A rewrite that needs to see
-// a unit before anything else does has to register a selector-associated
-// handler, not a document-level one.
+// # Inserting content
 //
-// # Reading an element's whole text
-//
-// [OnText] fires for every text chunk inside the matched element, including text
-// inside its descendants, and [TextChunk.IsLastInTextNode] marks the end of a
-// text node rather than the end of the element's content. Those are the same
-// thing only when the element contains no markup.
-//
-//	<a href="/x">click <b>here</b></a>
-//
-// has two text nodes, "click " and "here". A handler that accumulates to
-// IsLastInTextNode and replaces there runs twice and produces
-// "REPLACED<b>REPLACED</b>". Tested on a document without nested markup, the
-// same code looks correct.
-//
-// To act on an element's whole text, accumulate in the text handler and finish in
-// [Element.OnEndTag]:
-//
-//	lolhtml.OnElement("a", func(e *lolhtml.Element) error {
-//		acc.Reset()
-//		return e.OnEndTag(func(t *lolhtml.EndTag) error {
-//			return t.Before(rewrite(acc.String()), lolhtml.Text)
-//		})
-//	}),
-//	lolhtml.OnText("a", func(tc *lolhtml.TextChunk) error {
-//		acc.WriteString(tc.Text())
-//		tc.Remove()
-//		return nil
-//	})
-//
-// That leaves the descendant elements behind as empty shells - "<b></b>" - since
-// removing text does not remove markup. Add a handler on "a *" calling
-// [Element.RemoveAndKeepContent] if the whole content is to be replaced rather
-// than only its text.
-//
-// The alternative is to remove the element in its own handler and rebuild it at
-// the end tag with [ContentType] HTML, which also lets you change its tag and
-// attributes - at the cost of re-serialising those yourself, escaping included.
-//
-// # What counts as a comment
-//
-// A comment handler fires for what an HTML parser calls a comment, which is more
-// than the "<!-- ... -->" the name suggests. The spec turns several malformed
-// constructs into "bogus comments", and those arrive as comments here:
-//
-//	<?php echo "hi"; ?>     text: ?php echo "hi"; ?
-//	<?xml version="1.0"?>   text: ?xml version="1.0"?
-//	<!bogus>                text: bogus
-//	<! spaced>              text:  spaced
-//
-// So a rewrite that removes every comment removes PHP blocks, XML declarations
-// and processing instructions too - silently, since each of them is a
-// well-formed comment as far as the parser is concerned.
-//
-// The first two can be told apart by their text, which keeps the "?" that opened
-// them. The last two cannot: "<!x>" and "<!--x-->" both have the text "x", so
-// nothing about the comment distinguishes them. [Comment.SourceLocation] does -
-// slice the input at that range and look at whether it starts with "<!--" - and
-// that is the only way. A stripper that has the input to hand can check; one
-// working from a stream cannot, and should match the comments it wants to keep
-// rather than the ones it wants to remove.
-//
-// Conditional comments are not one comment either. The downlevel-revealed form
-//
-//	<!--[if !IE]><!--><p>modern</p><!--<![endif]-->
-//
-// is two comments with real markup between them, and only the first contains
-// "[if". A filter keyed on "[if" keeps that one, drops the closing half, and
-// leaves markup that no longer means what it did.
-//
-// Not comments: the contents of <script>, <style> and <textarea>, which are raw
-// text, so "<!--x-->" inside one of those is text and no handler sees it. Nor is
-// a stray end tag like "</bogus end tag>", nor a second <!DOCTYPE>. A nested
-// comment ends at the first "-->", leaving the remainder as text.
+// Four things about insertion are worth knowing before relying on any of it,
+// and each has its own section below: two calls of the same kind do not always
+// come out in call order; nothing inserted is dispatched back to your handlers;
+// neither content type is right inside a <script> or a <style>; and markup you
+// build yourself is the only thing here that is not escaped for you.
 //
 // # Two insertions of the same kind
 //
@@ -252,41 +215,6 @@
 //
 // [DocumentEnd.Append] is in order, like the other Append.
 //
-// # Building markup yourself makes you the serialiser
-//
-// Every path that writes a value for you escapes it. [Element.SetAttribute]
-// escapes the quote and the ampersand; [ContentType] Text escapes the three
-// characters that would be markup. The one path that escapes nothing is markup
-// you construct and pass as [HTML] - and that is the tempting route for turning
-// one element into another.
-//
-// A document-derived value dropped into an attribute you wrote yourself is an
-// injection. A single-quoted attribute may contain a bare double quote, and it
-// reads back as one:
-//
-//	<iframe title='" onload=alert(1) x="'>
-//
-//	e.Replace(`<div data-x="`+title+`">`, lolhtml.HTML)
-//	// <div data-x="" onload=alert(1) x=""></div>
-//
-// The div now has a working event handler that came from the document. The same
-// value through SetAttribute is inert:
-//
-//	e.SetAttribute("data-x", title)
-//	// data-x="&quot; onload=alert(1) x=&quot;"
-//
-// So prefer changing the element to replacing it. [Element.SetTagName],
-// SetAttribute and [Element.RemoveAttribute] between them turn an <iframe> into a
-// <div> carrying whatever attributes you want, with every value escaped on the
-// way out, and the result is less code than assembling a string.
-//
-// When you do have to build markup - a wrapper, a template, a block of
-// pre-escaped content - remember that a double-quoted attribute value needs "&"
-// and the double quote escaped, and nothing else: "<" and ">" are legal there. In
-// element content it is the other way round. If the value came from the document
-// it is already raw source, so escaping it again double-escapes; see the section
-// on character references.
-//
 // # Inserted content is not re-parsed
 //
 // Nothing a handler inserts is dispatched to any handler, including the one that
@@ -311,36 +239,6 @@
 // order. Anything you insert has to be safe before it goes in - use [Text] for
 // values you did not author, and see the section on inserting into a script for
 // where even that is not enough.
-//
-// # Removal suppresses output, not handler calls
-//
-// [Element.Remove] takes the element and its content out of the output. It does
-// not stop handlers running for that content: a text handler still sees the text
-// of a removed element, and an element handler still runs for its descendants.
-// Their edits are discarded along with everything else, but a handler that
-// accumulates - collecting a document's visible text, counting what it rewrote -
-// has to notice for itself that the content it is looking at is on its way to
-// being dropped. [Element.IsRemoved] is how an element handler checks.
-//
-// One corner does not behave the way Remove's description suggests. Removal
-// decides the fate of the element's inner content at the moment it is called, so
-// content inserted inside the element *after* that still reaches the output,
-// with the element's tags no longer around it:
-//
-//	e.Remove()
-//	e.Append("x", lolhtml.HTML)   // "x" is emitted, as a child of the parent
-//	e.Append("x", lolhtml.HTML)
-//	e.Remove()                    // "x" is discarded
-//
-// The two orders disagree, and only the second does what Remove promises. It
-// matters most when two handlers share a selector, because then the order is
-// decided by which option was written first rather than by either handler: one
-// removing a <script> and one appending inside it will, in one of the two
-// orders, emit the appended content as document markup. Insert first and remove
-// last, or check [Element.IsRemoved] before inserting inside an element.
-//
-// [Element.Before], [Element.After] and [Element.Replace] position content
-// outside the element, and surviving its removal is what they are for.
 //
 // # Inserting into a script or a style
 //
@@ -382,34 +280,144 @@
 // A textarea and a title are *escapable* raw text, where references are
 // decoded, so Text behaves normally in them.
 //
-// # Character references are not decoded
+// # Building markup yourself makes you the serialiser
 //
-// Text, comment text and attribute values are reported as raw source: the href
-// of <a href="?a=1&amp;b=2"> is "?a=1&amp;b=2". lol-html has to be able to
-// re-emit what it read, so it does not decode on the way in, and correspondingly
-// escapes what you write. Reading a value and writing it back unchanged is
-// therefore correct; comparing one against a decoded Go string is not.
+// Every path that writes a value for you escapes it. [Element.SetAttribute]
+// escapes the quote and the ampersand; [ContentType] Text escapes the three
+// characters that would be markup. The one path that escapes nothing is markup
+// you construct and pass as [HTML] - and that is the tempting route for turning
+// one element into another.
 //
-// The rule: decide on the decoded form, rewrite the raw one. Use
-// html.UnescapeString for the first and leave the value alone for the second.
+// A document-derived value dropped into an attribute you wrote yourself is an
+// injection. A single-quoted attribute may contain a bare double quote, and it
+// reads back as one:
 //
-// Getting that the wrong way round is how a filter acquires a hole, because a
-// browser decodes before it acts. These three hrefs all execute:
+//	<iframe title='" onload=alert(1) x="'>
 //
-//	javascript:x()
-//	java&#9;script:x()
-//	&#106;avascript:x()
+//	e.Replace(`<div data-x="`+title+`">`, lolhtml.HTML)
+//	// <div data-x="" onload=alert(1) x=""></div>
 //
-// A check on the raw string catches only the first: the others read as schemes
-// called "java&#9;script" and "&#106;avascript". Decode first and all three are
-// the same URL. The same applies to any decision taken on a value - an
-// allow-list of protocols, a comparison against an expected filename, a test for
-// a marker in text.
+// The div now has a working event handler that came from the document. The same
+// value through SetAttribute is inert:
 //
-// It cuts the other way too. Having decoded a value to decide about it, do not
-// write the decoded form back unless you mean to: SetAttribute takes raw source,
-// so writing "a&b" produces an attribute whose value is "a&b" to a parser, and
-// writing back the "a&amp;b" you were given round-trips exactly.
+//	e.SetAttribute("data-x", title)
+//	// data-x="&quot; onload=alert(1) x=&quot;"
+//
+// So prefer changing the element to replacing it. [Element.SetTagName],
+// SetAttribute and [Element.RemoveAttribute] between them turn an <iframe> into a
+// <div> carrying whatever attributes you want, with every value escaped on the
+// way out, and the result is less code than assembling a string.
+//
+// When you do have to build markup - a wrapper, a template, a block of
+// pre-escaped content - remember that a double-quoted attribute value needs "&"
+// and the double quote escaped, and nothing else: "<" and ">" are legal there. In
+// element content it is the other way round. If the value came from the document
+// it is already raw source, so escaping it again double-escapes; see the section
+// on character references.
+//
+// # Reading an element's whole text
+//
+// [OnText] fires for every text chunk inside the matched element, including text
+// inside its descendants, and [TextChunk.IsLastInTextNode] marks the end of a
+// text node rather than the end of the element's content. Those are the same
+// thing only when the element contains no markup.
+//
+//	<a href="/x">click <b>here</b></a>
+//
+// has two text nodes, "click " and "here". A handler that accumulates to
+// IsLastInTextNode and replaces there runs twice and produces
+// "REPLACED<b>REPLACED</b>". Tested on a document without nested markup, the
+// same code looks correct.
+//
+// To act on an element's whole text, accumulate in the text handler and finish in
+// [Element.OnEndTag]:
+//
+//	lolhtml.OnElement("a", func(e *lolhtml.Element) error {
+//		acc.Reset()
+//		return e.OnEndTag(func(t *lolhtml.EndTag) error {
+//			return t.Before(rewrite(acc.String()), lolhtml.Text)
+//		})
+//	}),
+//	lolhtml.OnText("a", func(tc *lolhtml.TextChunk) error {
+//		acc.WriteString(tc.Text())
+//		tc.Remove()
+//		return nil
+//	})
+//
+// That leaves the descendant elements behind as empty shells - "<b></b>" - since
+// removing text does not remove markup. Add a handler on "a *" calling
+// [Element.RemoveAndKeepContent] if the whole content is to be replaced rather
+// than only its text.
+//
+// The alternative is to remove the element in its own handler and rebuild it at
+// the end tag with [ContentType] HTML, which also lets you change its tag and
+// attributes - at the cost of re-serialising those yourself, escaping included.
+//
+// # Removal suppresses output, not handler calls
+//
+// [Element.Remove] takes the element and its content out of the output. It does
+// not stop handlers running for that content: a text handler still sees the text
+// of a removed element, and an element handler still runs for its descendants.
+// Their edits are discarded along with everything else, but a handler that
+// accumulates - collecting a document's visible text, counting what it rewrote -
+// has to notice for itself that the content it is looking at is on its way to
+// being dropped. [Element.IsRemoved] is how an element handler checks.
+//
+// One corner does not behave the way Remove's description suggests. Removal
+// decides the fate of the element's inner content at the moment it is called, so
+// content inserted inside the element *after* that still reaches the output,
+// with the element's tags no longer around it:
+//
+//	e.Remove()
+//	e.Append("x", lolhtml.HTML)   // "x" is emitted, as a child of the parent
+//	e.Append("x", lolhtml.HTML)
+//	e.Remove()                    // "x" is discarded
+//
+// The two orders disagree, and only the second does what Remove promises. It
+// matters most when two handlers share a selector, because then the order is
+// decided by which option was written first rather than by either handler: one
+// removing a <script> and one appending inside it will, in one of the two
+// orders, emit the appended content as document markup. Insert first and remove
+// last, or check [Element.IsRemoved] before inserting inside an element.
+//
+// [Element.Before], [Element.After] and [Element.Replace] position content
+// outside the element, and surviving its removal is what they are for.
+//
+// # What counts as a comment
+//
+// A comment handler fires for what an HTML parser calls a comment, which is more
+// than the "<!-- ... -->" the name suggests. The spec turns several malformed
+// constructs into "bogus comments", and those arrive as comments here:
+//
+//	<?php echo "hi"; ?>     text: ?php echo "hi"; ?
+//	<?xml version="1.0"?>   text: ?xml version="1.0"?
+//	<!bogus>                text: bogus
+//	<! spaced>              text:  spaced
+//
+// So a rewrite that removes every comment removes PHP blocks, XML declarations
+// and processing instructions too - silently, since each of them is a
+// well-formed comment as far as the parser is concerned.
+//
+// The first two can be told apart by their text, which keeps the "?" that opened
+// them. The last two cannot: "<!x>" and "<!--x-->" both have the text "x", so
+// nothing about the comment distinguishes them. [Comment.SourceLocation] does -
+// slice the input at that range and look at whether it starts with "<!--" - and
+// that is the only way. A stripper that has the input to hand can check; one
+// working from a stream cannot, and should match the comments it wants to keep
+// rather than the ones it wants to remove.
+//
+// Conditional comments are not one comment either. The downlevel-revealed form
+//
+//	<!--[if !IE]><!--><p>modern</p><!--<![endif]-->
+//
+// is two comments with real markup between them, and only the first contains
+// "[if". A filter keyed on "[if" keeps that one, drops the closing half, and
+// leaves markup that no longer means what it did.
+//
+// Not comments: the contents of <script>, <style> and <textarea>, which are raw
+// text, so "<!--x-->" inside one of those is text and no handler sees it. Nor is
+// a stray end tag like "</bogus end tag>", nor a second <!DOCTYPE>. A nested
+// comment ends at the first "-->", leaving the remainder as text.
 //
 // # Cost
 //
