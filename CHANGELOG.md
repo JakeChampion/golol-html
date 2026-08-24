@@ -226,6 +226,15 @@
   order they were written.
 
 ### Testing
+- **`readme_test.go` checks the README against the package.** Three tests: every
+  `lolhtml.X` it names exists, a short explicit list of names a caller cannot
+  safely do without is mentioned at all, and the sentence that went stale has not
+  returned. The middle one is a judgement call encoded as a list, and says so - a
+  name belongs on it only if a caller who does not know about it writes something
+  unsafe rather than something clumsy. All three verified to fail: by renaming a
+  README identifier, by removing a required name, and by restoring the stale
+  sentence.
+
 - **`properties/` is vetted now, and a script fails if a module is added without
   being.** `go vet ./...` stops at a module boundary, so the root's invocation
   covers neither `differential/` nor `properties/`. CI vetted the first two and
@@ -373,6 +382,17 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **The README no longer describes behaviour the library stopped having.** It
+  said that with `ContentType` `HTML` "a `</script>` in a string literal ends the
+  element", which stopped being true three changes ago when that became
+  `ErrRawTextBreakout`. It also never mentioned `EscapeText`, `EscapeAttribute` or
+  the error itself, so a reader of the README alone would hand-roll escaping the
+  library now provides and be surprised by a refusal it does not document. The
+  test suite already contradicted the README and nothing compared the two.
+  Corrected, with the limits of the refusal stated: inserting a whole `<script>`
+  element as markup is still allowed, because its payload legitimately contains
+  its own closing tag.
+
 - **The package documentation says what happens when an attribute appears
   twice.** The HTML parsing specification calls a repeat a parse error and
   requires a parser to keep the first and drop the rest; lol-html keeps them all,
