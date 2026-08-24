@@ -98,6 +98,18 @@
 
 ### Testing
 
+- **Error message quality is gated.** Nothing checked that this package's errors
+  say anything useful, and they are the surface a caller meets when something
+  goes wrong. `errquality_test.go` collects every reachable error - 23 of them,
+  covering all four typed errors and all three sentinels - and checks the
+  properties they should share: non-empty, attributable to the package, no
+  formatting fault, no dangling colon from a wrap whose inner error was lost, and
+  crucially that an error about a caller's input contains that input. A second
+  test fails if an exported error type has no case, so the list cannot rot as the
+  package grows. Verified to have teeth by removing the selector from
+  `SelectorError` and by dropping the wrapped error from `HandlerError`; both
+  fail with a message that names the problem.
+
 - **The differential oracle now covers what a rewriter reads, not only what it
   copies.** Passthrough byte-identity says the rewriter can copy a document.
   `differential/links_test.go` says something harder: that every anchor's target
@@ -129,6 +141,19 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+
+- **`CanHaveContent` governs four methods that fail differently.** It said they
+  could not "do anything" when it was false. In fact `Append`, `Prepend` and
+  `SetInnerContent` silently do nothing on a void element, while `OnEndTag`
+  returns an error that fails the rewrite - so a handler on a selector that can
+  match a `<br>` must check before calling `OnEndTag` and can call the others
+  blind. `Before`, `After` and `Replace` are unaffected.
+
+- **`Element.SourceLocation` is the start tag, not the element.** It said so, but
+  not what to do about it: the element's extent is that Start with the End taken
+  from the end tag's own location, and an element whose end tag never arrives has
+  no measurable extent because the handler never runs. Now spelled out with the
+  recipe.
 
 - **A comment handler fires for things that are not comments.** "Comment" is the
   HTML parser's word, and the spec turns several malformed constructs into bogus

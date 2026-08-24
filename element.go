@@ -58,9 +58,18 @@ func (e *Element) IsSelfClosing() bool {
 	return bool(C.lol_html_element_is_self_closing(p))
 }
 
-// CanHaveContent reports whether the element may contain content, and so
-// whether Append, Prepend, SetInnerContent and OnEndTag can do anything. It is
-// false for void elements such as <br> and for self-closing foreign elements.
+// CanHaveContent reports whether the element may contain content. It is false
+// for void elements such as <br> and for self-closing foreign elements.
+//
+// The four methods it governs do not fail alike when it is false. Append,
+// Prepend and SetInnerContent - and their streaming forms - silently do nothing.
+// OnEndTag returns an error, because there is no end tag to wait for, and that
+// error fails the rewrite. So a handler on a selector that can match a void
+// element must check this before calling OnEndTag; the others can be called
+// blind.
+//
+// Before, After and Replace are unaffected: they position content outside the
+// element and work on a void one.
 func (e *Element) CanHaveContent() bool {
 	p, err := e.live()
 	if err != nil {
@@ -82,7 +91,20 @@ func (e *Element) NamespaceURI() string {
 	return C.GoString(C.lol_html_element_namespace_uri_get(p))
 }
 
-// SourceLocation returns the byte range the start tag occupied in the input.
+// SourceLocation returns the byte range the start tag occupied in the input -
+// the start tag alone, not the element.
+//
+// For the element's whole extent, hold this Start and take the End from the end
+// tag's own location:
+//
+//	start := e.SourceLocation().Start
+//	e.OnEndTag(func(t *lolhtml.EndTag) error {
+//		extent := t.SourceLocation().End - start
+//		return nil
+//	})
+//
+// An element whose end tag never arrives has no measurable extent, because the
+// handler never runs.
 func (e *Element) SourceLocation() SourceLocation {
 	p, err := e.live()
 	if err != nil {
