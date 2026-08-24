@@ -180,14 +180,22 @@ func golol_sink_cb(chunk *C.char, n C.size_t, ud C.uintptr_t) {
 //export golol_streaming_write_cb
 func golol_streaming_write_cb(sink *C.lol_html_streaming_sink_t, ud C.uintptr_t) C.int {
 	cb := cgo.Handle(uintptr(ud)).Value().(*streamingCB)
-	s := &Sink{unit: unit[*C.lol_html_streaming_sink_t]{ptr: sink}}
+	s := &Sink{unit: unit[*C.lol_html_streaming_sink_t]{ptr: sink, c: cb.c}}
 	defer s.detach()
 
-	if err := cb.call(s); err != nil {
-		cb.c.st.handlerErr = &HandlerError{Kind: "streaming", Err: err}
-		return 1
+	// Through runHandler, like every other callback, because the two invariants
+	// it keeps both matter here. A panic must not unwind through Rust: doing so
+	// skips lol-html's own cleanup, so the drop callback that releases this
+	// handle never runs and the handle leaks - one per rewrite, for as long as
+	// the process lives. And once anything has failed there is no point running
+	// more handlers against a document already being abandoned.
+	//
+	// lol-html reports a streaming failure with a nonzero return rather than a
+	// directive, so the directive is mapped rather than passed through.
+	if runHandler(cb.c.st, "streaming", "", s, cb.call) == C.LOL_HTML_CONTINUE {
+		return 0
 	}
-	return 0
+	return 1
 }
 
 //export golol_streaming_drop_cb
