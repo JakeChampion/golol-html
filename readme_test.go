@@ -26,7 +26,12 @@ func readme(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(b)
+	// Carriage returns are stripped because the Windows runner checks out CRLF.
+	// Without this the fence "```go" never matched, every block search came back
+	// empty, and the tests below either failed for the wrong reason or - worse -
+	// passed vacuously, which is what the sentence check did: a pattern
+	// containing a newline simply never matched and nothing was wrong.
+	return strings.ReplaceAll(string(b), "\r\n", "\n")
 }
 
 // TestEveryNameTheREADMEClaimsExists. A rename or a removal leaves the README
@@ -150,8 +155,12 @@ func TestEveryREADMEGoBlockIsCompiled(t *testing.T) {
 	source := string(compiled)
 
 	blocks := readmeGoBlocks(t)
-	if len(blocks) == 0 {
-		t.Fatal("no Go blocks found in the README, which cannot be right")
+	// A count rather than "more than none": a change that stops the extraction
+	// working would otherwise leave every check below passing on an empty list.
+	if len(blocks) != 8 {
+		t.Fatalf("found %d Go blocks in the README, expected 8; if a block was "+
+			"added or removed deliberately, update this number and "+
+			"readme_snippets_test.go with it", len(blocks))
 	}
 
 	// Compared with whitespace collapsed. The snippet file holds each block

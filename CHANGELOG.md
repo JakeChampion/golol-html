@@ -242,6 +242,14 @@
   claims are checked too, which a compiler cannot do. Verified the gates can fail:
   changing a block's code, adding a block nothing compiles, and both are caught.
 
+  These tests read the README from disk, and the first version of them assumed
+  LF: the Windows runner checks out CRLF, so the fence never matched, no blocks
+  were found, and one of the three checks passed *vacuously* rather than failing -
+  its pattern contained a newline and simply never matched anything. Line endings
+  are normalised on read now, and the block count is asserted exactly rather than
+  as "more than none", so an extraction that stops working cannot leave the checks
+  below passing on an empty list.
+
 - **`readme_test.go` checks the README against the package.** Three tests: every
   `lolhtml.X` it names exists, a short explicit list of names a caller cannot
   safely do without is mentioned at all, and the sentence that went stale has not
