@@ -98,6 +98,24 @@
 
 ### Testing
 
+- **The differential oracle now covers what a rewriter reads, not only what it
+  copies.** Passthrough byte-identity says the rewriter can copy a document.
+  `differential/links_test.go` says something harder: that every anchor's target
+  and text, extracted by a rewrite, matches what `golang.org/x/net/html` reads
+  out of the same document - across 47 documents at four chunk sizes each. That
+  exercises attribute reading, text accumulation across nested markup, and chunk
+  boundaries together, which is the part a rewriter is responsible for rather
+  than the part lol-html has its own fuzzing for.
+
+  It also widens an existing claim: `TestTextHandlerSeesAllText` compared the
+  concatenated text chunks against the parser's text, but only for a document
+  written in one call. Chunk boundaries are the one thing lol-html explicitly
+  does not promise to reproduce, so the chunked version of that claim is the
+  interesting one, and it is the only way a document arrives in production.
+
+  No disagreement was found. That is the result, not a lack of one: the claim is
+  now checked rather than assumed.
+
 - **Allocation complexity is gated.** The benchmarks measure six fixed shapes and
   nothing compared them across document sizes, so nothing would have noticed a
   path going from a constant number of allocations to one proportional to the
