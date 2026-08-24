@@ -387,6 +387,27 @@ func OnDocumentEnd(fn func(*DocumentEnd) error) Option {
 // from the WHATWG Encoding Standard, such as "utf-8" or "windows-1252". The
 // default is "utf-8".
 //
+// Nothing is sniffed. The label is the caller's declaration and the rewriter
+// takes it as fact: a document's own <meta charset> is ordinary markup here, read
+// and written like any other element and never consulted. So a document declaring
+// windows-1252 in its head and rewritten with the default is decoded as UTF-8,
+// and the label has to come from wherever the caller actually learned it - a
+// Content-Type header, a database column, a filename convention.
+//
+// Getting it wrong is quiet, and how quiet depends on what is registered. The
+// strings handlers are given are wrong either way: the same bytes read as utf-8
+// and as windows-1252 give "café" and "cafÃ©" from one attribute. Whether the
+// output is wrong depends on whether a text handler exists. Text is decoded and
+// re-encoded only when one is registered, and then a byte that is not valid in
+// the declared encoding becomes U+FFFD on the way out - whether or not the
+// handler touches it. With no text handler the bytes pass through and only the
+// handlers' view is wrong. Measured on "<p>caf\xe9</p>" declared as utf-8:
+//
+//	no handlers                     bytes identical
+//	an element handler              bytes identical
+//	an element handler that writes  identical bar its own change
+//	any text handler                caf\xef\xbf\xbd
+//
 // The encoding is the document's, not your handlers'. Whatever it is, a handler
 // always sees UTF-8: the text of <p>caf\xe9</p> in windows-1252 arrives as the
 // Go string "café". Content you insert is taken as UTF-8 and encoded on the way
@@ -417,6 +438,13 @@ func OnDocumentEnd(fn func(*DocumentEnd) error) Option {
 //
 // An unusable label fails from NewWriter, not from Write, with an
 // [EncodingError] naming it.
+//
+// One thing a rewrite can get wrong on the way out: inserting a <meta charset>
+// does not change the bytes. Output is emitted in the declared encoding
+// throughout, so adding <meta charset="utf-8"> to a document being written as
+// windows-1252 produces a document that lies about itself - the bytes stay
+// windows-1252 and every reader believes the meta. A charset declaration has to
+// name the encoding the bytes are actually in.
 //
 // Building fails if the label is unknown or names a non-ASCII-compatible
 // encoding such as UTF-16, which lol-html cannot rewrite.

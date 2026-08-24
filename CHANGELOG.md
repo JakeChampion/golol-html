@@ -406,6 +406,22 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`WithEncoding` says that nothing is sniffed, and corrects what a wrong label
+  costs.** That the rewriter ignores a document's own `<meta charset>` was written
+  only in an internal comment inside `defaultConfig`, where no caller reads it.
+  It is now on `WithEncoding`, along with the fact that inserting a charset meta
+  does not change the bytes - so one naming a different encoding produces a
+  document that lies about itself, which every reader believes.
+
+  The claim about a misdeclared encoding was also too general. It said passthrough
+  bytes stay identical; measured, that depends on whether a **text handler** is
+  registered. Text is decoded and re-encoded only then, and a byte invalid in the
+  declared encoding becomes U+FFFD on the way out even if the handler does
+  nothing. On `<p>caf\xe9</p>` declared as utf-8: no handlers, an element handler,
+  and an element handler that writes all leave the byte intact; any text handler
+  replaces it. The earlier wording was right about the case it was measured on and
+  wrong in general.
+
 - **The README no longer describes behaviour the library stopped having.** It
   said that with `ContentType` `HTML` "a `</script>` in a string literal ends the
   element", which stopped being true three changes ago when that became
