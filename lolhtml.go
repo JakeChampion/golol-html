@@ -65,6 +65,36 @@
 // a unit before anything else does has to register a selector-associated
 // handler, not a document-level one.
 //
+// # Removal suppresses output, not handler calls
+//
+// [Element.Remove] takes the element and its content out of the output. It does
+// not stop handlers running for that content: a text handler still sees the text
+// of a removed element, and an element handler still runs for its descendants.
+// Their edits are discarded along with everything else, but a handler that
+// accumulates - collecting a document's visible text, counting what it rewrote -
+// has to notice for itself that the content it is looking at is on its way to
+// being dropped. [Element.IsRemoved] is how an element handler checks.
+//
+// One corner does not behave the way Remove's description suggests. Removal
+// decides the fate of the element's inner content at the moment it is called, so
+// content inserted inside the element *after* that still reaches the output,
+// with the element's tags no longer around it:
+//
+//	e.Remove()
+//	e.Append("x", lolhtml.HTML)   // "x" is emitted, as a child of the parent
+//	e.Append("x", lolhtml.HTML)
+//	e.Remove()                    // "x" is discarded
+//
+// The two orders disagree, and only the second does what Remove promises. It
+// matters most when two handlers share a selector, because then the order is
+// decided by which option was written first rather than by either handler: one
+// removing a <script> and one appending inside it will, in one of the two
+// orders, emit the appended content as document markup. Insert first and remove
+// last, or check [Element.IsRemoved] before inserting inside an element.
+//
+// [Element.Before], [Element.After] and [Element.Replace] position content
+// outside the element, and surviving its removal is what they are for.
+//
 // # Character references are not decoded
 //
 // Text, comment text and attribute values are reported as raw source: the href
