@@ -8,11 +8,16 @@ package lolhtml_test
 // parser does not decode references inside them. Text there is inert but
 // corrupted; HTML there is verbatim but can end the element.
 //
-// Both failures are quiet - valid HTML out, no error - so they are pinned here.
-// If either of these tests changes, the escaping became context-sensitive and
+// The Text failure is quiet - valid HTML out, no error - so it is pinned here.
+// The HTML one is no longer quiet: an insertion into a raw-text element's own
+// content is refused when it would close that element, which is what
+// ErrRawTextBreakout is for.
+//
+// If the Text behaviour here changes, the escaping became context-sensitive and
 // the package documentation on inserting into a script needs rewriting.
 
 import (
+	"errors"
 	stdhtml "html"
 	"strings"
 	"testing"
@@ -80,24 +85,33 @@ func TestTextIntoRawTextElementsIsCorruptedNotDecoded(t *testing.T) {
 	}
 }
 
-// TestHTMLIntoAScriptCanEndTheElement is the other half, and the reason the
-// documentation tells callers not to put untrusted data in a script body at all.
-// HTML means raw markup, so this is the contract rather than a defect - but it
-// is asserted so that nobody "fixes" the corruption above by switching to HTML
-// without noticing what it allows.
-func TestHTMLIntoAScriptCanEndTheElement(t *testing.T) {
-	out, err := lolhtml.RewriteString(`<script></script>`,
+// TestHTMLIntoAScriptIsRefusedWhenItWouldEndTheElement.
+//
+// This test used to assert the opposite. It pinned the breakout as the contract -
+// HTML means raw markup, so a "</script>" in the content closed the script and
+// everything after it became markup in the document - with a comment saying that
+// the comment path was "the model for what the script context is missing". The
+// missing half now exists, so the assertion is inverted rather than deleted:
+// what was pinned as behaviour is pinned as an error, and the reason it changed
+// is here rather than in a commit nobody will read.
+func TestHTMLIntoAScriptIsRefusedWhenItWouldEndTheElement(t *testing.T) {
+	_, err := lolhtml.RewriteString(`<script></script>`,
 		lolhtml.OnElement("script", func(e *lolhtml.Element) error {
 			return e.SetInnerContent(`var s = "</script><img src=1 onerror=alert(1)>";`, lolhtml.HTML)
 		}))
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("the insertion was accepted, so a script body can still be closed " +
+			"by its own content")
 	}
-	if !strings.Contains(out, `</script><img src=1`) {
-		t.Fatalf("expected the script to be ended by its own content: %s", out)
+	if !errors.Is(err, lolhtml.ErrRawTextBreakout) {
+		t.Errorf("error is %v, want ErrRawTextBreakout", err)
 	}
-	if strings.Count(out, "</script>") != 2 {
-		t.Errorf("expected two end tags, one from the content: %s", out)
+	// The message has to say what was found and where, or a caller cannot act
+	// on it: the content is usually assembled somewhere else.
+	for _, want := range []string{"</script>", "byte 9", "script"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
 	}
 }
 
