@@ -71,6 +71,26 @@ func FuzzRewrite(f *testing.F) {
 	rewrite(f, handlers)
 }
 
+// invarianceSettings derives an encoding and a strict-mode choice from the
+// input, so that chunk-invariance is checked under a legacy encoding and with
+// strict parsing off, not only with the defaults.
+//
+// Both are safe to vary here because neither changes whether a document can be
+// rewritten in one write but not in several. A memory limit is not safe to vary
+// for exactly that reason, and is left out.
+func invarianceSettings(in string) []lolhtml.Option {
+	if in == "" {
+		return nil
+	}
+	b := in[len(in)-1]
+	return []lolhtml.Option{
+		lolhtml.WithEncoding(invarianceEncodings[int(b)%len(invarianceEncodings)]),
+		lolhtml.WithStrict(b&0x40 == 0),
+	}
+}
+
+var invarianceEncodings = []string{"utf-8", "windows-1252", "shift_jis", "koi8-r"}
+
 // maxFuzzInput bounds the harness so the fuzzer keeps making progress; see the
 // note in the Fuzz body.
 const maxFuzzInput = 4 << 10
@@ -105,10 +125,23 @@ func rewrite(f *testing.F, handlers func(*int) []lolhtml.Option) {
 
 		handlesBefore := lolhtml.LiveHandles()
 
+		// The configuration is varied from the input, so that the invariant is
+		// tested against a legacy encoding and with strict mode off as well as
+		// with the defaults. Both writers get the same settings, or the
+		// comparison would be meaningless.
+		//
+		// A memory limit is deliberately absent, and not by oversight: the
+		// memory a rewrite needs depends on how the input is fed, by a factor of
+		// eight in one measured case, so a limit that one of these two writers
+		// stays under and the other does not would make them differ legitimately
+		// and this test would report it as a bug. See the note on sizing in
+		// MemorySettings.MaxMemory.
+		settings := invarianceSettings(in)
+
 		var wholeHits int
 		var whole bytes.Buffer
 
-		w, err := lolhtml.NewWriter(&whole, handlers(&wholeHits)...)
+		w, err := lolhtml.NewWriter(&whole, append(handlers(&wholeHits), settings...)...)
 		if err != nil {
 			t.Fatalf("NewWriter: %v", err)
 		}
@@ -117,7 +150,7 @@ func rewrite(f *testing.F, handlers func(*int) []lolhtml.Option) {
 
 		var pieceHits int
 		var pieces bytes.Buffer
-		w2, err := lolhtml.NewWriter(&pieces, handlers(&pieceHits)...)
+		w2, err := lolhtml.NewWriter(&pieces, append(handlers(&pieceHits), settings...)...)
 		if err != nil {
 			t.Fatalf("NewWriter: %v", err)
 		}
