@@ -277,6 +277,16 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **The selector section says how attribute values are matched, not just which
+  selectors exist.** It said names are matched case-insensitively, which is true
+  and reads as though it covered values. Values follow a different and non-uniform
+  rule: HTML matches them case-insensitively for a fixed list of 46 attributes and
+  exactly for everything else, and the rewriter implements that list precisely.
+  So `[rel="canonical"]` matches `rel="CANONICAL"` while `[name="foo"]` does not
+  match `name="Foo"`, and `.Foo` does not match `class="foo"`. The list is now
+  written out, along with the `i` and `s` flags as the way to stop depending on
+  it. Verified against all 46 plus a control group of 17 that are not on it.
+
 - **`OnDoctype` says that it fires for doctype tokens, not for the document's
   doctype.** An HTML parser honours a DOCTYPE only before anything else has been
   seen and discards the rest; the handler is told about all of them. Checked

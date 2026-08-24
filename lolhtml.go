@@ -118,6 +118,31 @@
 // the same selector and [CLASS=a] matches class="a". An attribute selector
 // matches a present-but-empty attribute: [style] matches style="".
 //
+// Attribute values are a different rule, and it is not uniform. HTML matches the
+// value case-insensitively for a fixed list of attributes and case-sensitively
+// for everything else, and the rewriter follows that list exactly:
+//
+//	[rel="canonical"]  matches rel="CANONICAL"
+//	[name="foo"]       does not match name="Foo"
+//
+// The list is the one in the HTML specification's section on selector
+// case-sensitivity, all 46 of them:
+//
+//	accept accept-charset align alink axis bgcolor charset checked clear
+//	codetype color compact declare defer dir direction disabled enctype face
+//	frame hreflang http-equiv lang language link media method multiple nohref
+//	noresize noshade nowrap readonly rel rev rules scope scrolling selected
+//	shape target text type valign valuetype vlink
+//
+// Everything else is matched exactly, including id, class, href, src, alt,
+// title, name, value, style, content, role, srcset, integrity and every data-*
+// attribute. So are the .cls and #id shorthands: ".Foo" does not match
+// class="foo".
+//
+// Where that matters, say which you want rather than relying on the default:
+// [a=v i] is case-insensitive and [a=v s] is exact, and both work for any
+// attribute.
+//
 // An unsupported selector is rejected by [NewWriter], not silently ignored, with
 // a [SelectorError] naming it and saying which part it could not use.
 //

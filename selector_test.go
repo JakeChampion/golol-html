@@ -275,3 +275,155 @@ func TestAnUnsupportedSelectorFailsAtNewWriter(t *testing.T) {
 		t.Errorf("Selector = %q", se.Selector)
 	}
 }
+
+// caseInsensitiveAttributes is the HTML specification's list of attributes whose
+// values a selector matches ASCII-case-insensitively. Written out rather than
+// summarised, because the whole point of the list is that it is arbitrary: there
+// is no rule connecting rel and valign that also excludes name and src.
+var caseInsensitiveAttributes = []string{
+	"accept", "accept-charset", "align", "alink", "axis", "bgcolor", "charset",
+	"checked", "clear", "codetype", "color", "compact", "declare", "defer",
+	"dir", "direction", "disabled", "enctype", "face", "frame", "hreflang",
+	"http-equiv", "lang", "language", "link", "media", "method", "multiple",
+	"nohref", "noresize", "noshade", "nowrap", "readonly", "rel", "rev",
+	"rules", "scope", "scrolling", "selected", "shape", "target", "text",
+	"type", "valign", "valuetype", "vlink",
+}
+
+// caseSensitiveAttributes is a control group: attributes a rewrite is likely to
+// select on, none of which are on the list above.
+var caseSensitiveAttributes = []string{
+	"id", "class", "href", "src", "alt", "title", "name", "value", "style",
+	"data-x", "content", "for", "width", "height", "role", "srcset", "integrity",
+}
+
+// matchesIgnoringCase reports whether [attr="abc"] matches attr="ABC".
+func matchesIgnoringCase(t *testing.T, attr string) bool {
+	t.Helper()
+	matched := 0
+	if _, err := lolhtml.RewriteString(`<p `+attr+`="ABC">x</p>`,
+		lolhtml.OnElement(`[`+attr+`="abc"]`, func(*lolhtml.Element) error {
+			matched++
+			return nil
+		})); err != nil {
+		t.Fatalf("%s: %v", attr, err)
+	}
+	return matched == 1
+}
+
+// TestAttributeValueCaseFollowsTheHTMLList. Both halves matter: a value matched
+// case-insensitively when it should not be rewrites elements the selector was not
+// meant to reach, and one matched exactly when it should not be misses them.
+//
+// The list is checked in full rather than sampled, since it has no internal
+// logic to sample from.
+func TestAttributeValueCaseFollowsTheHTMLList(t *testing.T) {
+	for _, attr := range caseInsensitiveAttributes {
+		if !matchesIgnoringCase(t, attr) {
+			t.Errorf(`[%s="abc"] did not match %s="ABC"; this attribute is on the `+
+				"HTML case-insensitive list", attr, attr)
+		}
+	}
+	for _, attr := range caseSensitiveAttributes {
+		if matchesIgnoringCase(t, attr) {
+			t.Errorf(`[%s="abc"] matched %s="ABC"; this attribute is not on the `+
+				"HTML case-insensitive list, so the match should be exact", attr, attr)
+		}
+	}
+}
+
+// TestTheCaseFlagsOverrideTheDefault, in both directions and for attributes on
+// either side of the list - which is what makes them the answer when it matters.
+func TestTheCaseFlagsOverrideTheDefault(t *testing.T) {
+	for _, tt := range []struct {
+		doc, selector string
+		want          int
+	}{
+		// rel is on the list, so exact matching needs to be asked for.
+		{`<link rel="CANONICAL">`, `[rel="canonical"]`, 1},
+		{`<link rel="CANONICAL">`, `[rel="canonical" s]`, 0},
+		{`<link rel="CANONICAL">`, `[rel="CANONICAL" s]`, 1},
+
+		// name is not, so case-insensitive matching needs to be asked for.
+		{`<p name="Foo">x</p>`, `[name="foo"]`, 0},
+		{`<p name="Foo">x</p>`, `[name="foo" i]`, 1},
+		{`<p name="Foo">x</p>`, `[name="Foo"]`, 1},
+
+		// And the flags work with the other operators too.
+		{`<p class="AbC dEf">x</p>`, `[class~="abc" i]`, 1},
+		{`<p class="AbC dEf">x</p>`, `[class~="abc"]`, 0},
+		{`<p href="/A/B">x</p>`, `[href^="/a" i]`, 1},
+		{`<p href="/A/B">x</p>`, `[href^="/a"]`, 0},
+		{`<p href="/A/B">x</p>`, `[href$="/b" i]`, 1},
+		{`<p href="/A/B">x</p>`, `[href*="/a/" i]`, 1},
+	} {
+		matched := 0
+		if _, err := lolhtml.RewriteString(tt.doc,
+			lolhtml.OnElement(tt.selector, func(*lolhtml.Element) error {
+				matched++
+				return nil
+			})); err != nil {
+			t.Fatalf("%s: %v", tt.selector, err)
+		}
+		if matched != tt.want {
+			t.Errorf("%s on %s matched %d times, want %d",
+				tt.selector, tt.doc, matched, tt.want)
+		}
+	}
+}
+
+// TestTheClassAndIDShorthandsAreExact, which is the same rule as [class=] and
+// [id=] - neither attribute is on the list - and worth pinning separately because
+// the shorthands look like they might be special.
+func TestTheClassAndIDShorthandsAreExact(t *testing.T) {
+	for _, tt := range []struct {
+		doc, selector string
+		want          int
+	}{
+		{`<p class="Foo">x</p>`, `.Foo`, 1},
+		{`<p class="Foo">x</p>`, `.foo`, 0},
+		{`<p class="Foo">x</p>`, `[class="foo"]`, 0},
+		{`<p class="Foo">x</p>`, `[class="foo" i]`, 1},
+		{`<p id="Bar">x</p>`, `#Bar`, 1},
+		{`<p id="Bar">x</p>`, `#bar`, 0},
+		{`<p id="Bar">x</p>`, `[id="bar" i]`, 1},
+	} {
+		matched := 0
+		if _, err := lolhtml.RewriteString(tt.doc,
+			lolhtml.OnElement(tt.selector, func(*lolhtml.Element) error {
+				matched++
+				return nil
+			})); err != nil {
+			t.Fatalf("%s: %v", tt.selector, err)
+		}
+		if matched != tt.want {
+			t.Errorf("%s on %s matched %d times, want %d",
+				tt.selector, tt.doc, matched, tt.want)
+		}
+	}
+}
+
+// TestNamesAreMatchedWithoutRegardToCase, in both directions, so the difference
+// from the value rule above is on the record.
+func TestNamesAreMatchedWithoutRegardToCase(t *testing.T) {
+	for _, tt := range []struct{ doc, selector string }{
+		{`<P>x</P>`, `p`},
+		{`<p>x</p>`, `P`},
+		{`<p REL="x">y</p>`, `[rel]`},
+		{`<p rel="x">y</p>`, `[REL]`},
+		{`<svg><textPath/></svg>`, `textpath`},
+		{`<svg><textPath/></svg>`, `textPath`},
+	} {
+		matched := 0
+		if _, err := lolhtml.RewriteString(tt.doc,
+			lolhtml.OnElement(tt.selector, func(*lolhtml.Element) error {
+				matched++
+				return nil
+			})); err != nil {
+			t.Fatalf("%s: %v", tt.selector, err)
+		}
+		if matched != 1 {
+			t.Errorf("%s on %s matched %d times, want 1", tt.selector, tt.doc, matched)
+		}
+	}
+}
