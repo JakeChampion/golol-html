@@ -362,9 +362,16 @@
 // Neither [ContentType] is right for the inside of a <script> or a <style>, and
 // the failures are quiet in opposite directions.
 //
-// Those two are *raw text* elements: an HTML parser does not decode character
-// references in them. So [Text], which escapes <, > and &, produces content
-// that is inert but no longer says what it said:
+// Those two are *raw text* elements: an HTML parser does not read their content
+// as markup and does not decode character references in it. Seven more elements
+// behave the same way - iframe, noembed, noframes, noscript and xmp, plus
+// textarea and title, which do decode references - and plaintext, which is raw
+// text that runs to the end of the input and cannot be closed at all. Ten
+// element names in total; the list is measured rather than quoted, in
+// rawtext_test.go.
+//
+// So [Text], which escapes <, > and &, produces content that is inert but no
+// longer says what it said:
 //
 //	e.SetInnerContent(`if (a < b && c > d) {}`, lolhtml.Text)
 //	// <script>if (a &lt; b &amp;&amp; c &gt; d) {}</script>
@@ -383,8 +390,10 @@
 // [ErrRawTextBreakout] when the content would close it. The check is the
 // tokenizer's rule, so "</scriptx" is fine and "</script foo>" is not, and it
 // covers [Element.Prepend], [Element.Append], [Element.SetInnerContent] and
-// [EndTag.Before]. Writing outside the element - Before, After, Replace - is
-// ordinary markup and is not checked.
+// [EndTag.Before] on any of the nine that can be closed. Writing outside the
+// element - Before, After, Replace - is ordinary markup and is not checked, and
+// neither are the streaming insertions or the [TextChunk] ones; [ErrRawTextBreakout]
+// says why, and a text handler editing a script has to guard itself.
 //
 // There is still no combination of the two that makes arbitrary text safe here.
 // The refusal stops the injection; it does not give you a way to say what you
@@ -400,7 +409,10 @@
 // was the only such check for a while; [ErrRawTextBreakout] is the other half.
 //
 // A textarea and a title are *escapable* raw text, where references are
-// decoded, so Text behaves normally in them.
+// decoded, so Text behaves normally in them. In the other five - iframe,
+// noembed, noframes, noscript, xmp - references are not decoded and there is no
+// inner language either, so there is no way to write the closing sequence inside
+// the element and the content itself has to change.
 //
 // One more way this goes wrong, and it does not involve escaping at all. When the
 // document's encoding cannot represent a character, [WithEncoding] emits a
