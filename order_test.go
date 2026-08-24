@@ -255,3 +255,126 @@ func TestSelectorHandlersRunBeforeDocumentHandlers(t *testing.T) {
 		}
 	})
 }
+
+// TestSelectorsMatchTheDocumentAsItArrived: handlers see each other's edits, and
+// selectors do not. Both halves matter, and only one of them is obvious.
+//
+// Deciding matches once, up front, is what makes a rewrite predictable: no
+// cascade, no order-dependence in which handlers fire, no way for a rewrite to
+// trigger itself. The cost is that a rewrite cannot act on what another handler
+// produced, which needs a second pass.
+func TestSelectorsMatchTheDocumentAsItArrived(t *testing.T) {
+	t.Run("a class rename does not trigger the new class", func(t *testing.T) {
+		for _, order := range []string{"rename first", "target first"} {
+			var fired []string
+			rename := lolhtml.OnElement(".a", func(e *lolhtml.Element) error {
+				fired = append(fired, ".a")
+				return e.SetAttribute("class", "b")
+			})
+			target := lolhtml.OnElement(".b", func(e *lolhtml.Element) error {
+				fired = append(fired, ".b")
+				return e.SetAttribute("data-b", "1")
+			})
+
+			opts := []lolhtml.Option{rename, target}
+			if order == "target first" {
+				opts = []lolhtml.Option{target, rename}
+			}
+
+			got, err := lolhtml.RewriteString(`<p class="a">x</p>`, opts...)
+			if err != nil {
+				t.Fatalf("%s: %v", order, err)
+			}
+			if strings.Join(fired, ",") != ".a" {
+				t.Errorf("%s: handlers fired %v, want only .a", order, fired)
+			}
+			if want := `<p class="b">x</p>`; got != want {
+				t.Errorf("%s:\n got: %s\nwant: %s", order, got, want)
+			}
+		}
+	})
+
+	t.Run("a tag rename does not trigger the new tag", func(t *testing.T) {
+		var fired []string
+		got, err := lolhtml.RewriteString(`<div>x</div>`,
+			lolhtml.OnElement("div", func(e *lolhtml.Element) error {
+				fired = append(fired, "div")
+				return e.SetTagName("span")
+			}),
+			lolhtml.OnElement("span", func(e *lolhtml.Element) error {
+				fired = append(fired, "span")
+				return e.SetAttribute("data-span", "1")
+			}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(fired, ",") != "div" {
+			t.Errorf("handlers fired %v, want only div", fired)
+		}
+		if want := `<span>x</span>`; got != want {
+			t.Errorf("\n got: %s\nwant: %s", got, want)
+		}
+	})
+
+	t.Run("removing the matched attribute does not un-fire a later handler", func(t *testing.T) {
+		var fired []string
+		got, err := lolhtml.RewriteString(`<p class="a" id="i">x</p>`,
+			lolhtml.OnElement("[class]", func(e *lolhtml.Element) error {
+				fired = append(fired, "[class]")
+				return e.RemoveAttribute("class")
+			}),
+			lolhtml.OnElement(".a", func(e *lolhtml.Element) error {
+				fired = append(fired, ".a")
+				return e.SetAttribute("data-a", "1")
+			}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(fired, ",") != "[class],.a" {
+			t.Errorf("handlers fired %v, want both", fired)
+		}
+		if !strings.Contains(got, `data-a="1"`) {
+			t.Errorf("the second handler's edit is missing: %s", got)
+		}
+	})
+
+	t.Run("a descendant selector uses the ancestor as it arrived", func(t *testing.T) {
+		var fired []string
+		_, err := lolhtml.RewriteString(`<div class="a"><span>x</span></div>`,
+			lolhtml.OnElement(".a", func(e *lolhtml.Element) error {
+				fired = append(fired, ".a")
+				return e.SetAttribute("class", "b")
+			}),
+			lolhtml.OnElement(".b span", func(e *lolhtml.Element) error {
+				fired = append(fired, ".b span")
+				return nil
+			}),
+			lolhtml.OnElement(".a span", func(e *lolhtml.Element) error {
+				fired = append(fired, ".a span")
+				return nil
+			}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(fired, ",") != ".a,.a span" {
+			t.Errorf("handlers fired %v, want .a and .a span", fired)
+		}
+	})
+
+	t.Run("but a handler does see an earlier handler's edit", func(t *testing.T) {
+		got, err := lolhtml.RewriteString(`<p class="a">x</p>`,
+			lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+				return e.SetAttribute("class", "b")
+			}),
+			lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+				v, _ := e.Attribute("class")
+				return e.SetAttribute("data-saw", v)
+			}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(got, `data-saw="b"`) {
+			t.Errorf("the second handler did not see the first's edit: %s", got)
+		}
+	})
+}
