@@ -78,9 +78,31 @@ func (e *Element) CanHaveContent() bool {
 	return bool(C.lol_html_element_can_have_content(p))
 }
 
-// NamespaceURI returns the element's namespace URI, such as
-// "http://www.w3.org/1999/xhtml" for HTML content or
-// "http://www.w3.org/2000/svg" inside <svg>.
+// NamespaceURI returns the namespace that this element's children are parsed in,
+// which is not always the element's own namespace.
+//
+// For almost everything the two are the same: "http://www.w3.org/1999/xhtml" in
+// HTML content, "http://www.w3.org/2000/svg" inside <svg>,
+// "http://www.w3.org/1998/Math/MathML" inside <math>. The exceptions are the
+// integration points, where foreign content switches back to HTML parsing. Those
+// elements report the HTML namespace even though they are SVG or MathML elements:
+//
+//	<svg>: foreignObject, desc, title
+//	<math>: mi, mo, mn, ms, mtext
+//	<math>: annotation-xml, but only when its encoding attribute is
+//	        "text/html" or "application/xhtml+xml"
+//
+// Measured, not derived from the spec: <svg><title> reports the HTML namespace,
+// and so does <math><mi>, while <svg><a>, <svg><script>, <svg><style> and
+// <math><mrow> report their own.
+//
+// The consequence is worth stating plainly, because it removes the obvious use
+// for this method. Selectors do not consider namespaces either - "title" matches
+// both a document title and an SVG tooltip - so a handler that needs to tell
+// them apart cannot do it with a selector alone and cannot do it with this
+// method either, since both report HTML. What works is a selector that names the
+// context ("svg title" matches only the tooltip) or tracking <svg> and <math>
+// depth in the handler. See the package documentation on selectors.
 func (e *Element) NamespaceURI() string {
 	p, err := e.live()
 	if err != nil {

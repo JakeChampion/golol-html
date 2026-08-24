@@ -277,6 +277,19 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+
+- **Selectors are namespace-blind, and `NamespaceURI` does not rescue you.** A
+  tag name in a selector matches that name in any namespace, so `title` matches
+  an SVG tooltip as well as the document title and `a[href]` matches HTML, SVG and
+  MathML anchors. `NamespaceURI`'s comment said it "returns the element's
+  namespace URI"; measured, it returns the namespace the element's *children* are
+  parsed in, so every integration point - SVG's `title`, `desc` and
+  `foreignObject`, MathML's `mi`, `mo`, `mn`, `ms`, `mtext`, and `annotation-xml`
+  with an HTML encoding - reports the HTML namespace despite being a foreign
+  element. Both titles therefore look identical to a handler. The package
+  documentation gains a section on it with the two things that do work, including
+  why `head title` is not one of them: `<head>` is optional, so it matches nothing
+  in a document that omits it.
 - **`DocumentEnd.Append` says what it appends to.** It said "adds content at the
   very end of the document", and it adds content at the end of the output - which
   is wherever the input stopped. An input cut off inside a script, a comment, a
@@ -289,7 +302,6 @@
   most, so the doc now says it and points at the end tag as the alternative -
   along with the reason that is not a complete answer either: `</body>` is
   optional in HTML, and `Element.OnEndTag` on a body without one never fires.
-
 
 - **The package documentation is ordered how it is read.** It had grown to
   fifteen sections in the order they were written, which is not the order anyone
