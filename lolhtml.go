@@ -265,8 +265,28 @@
 // of <a href="?a=1&amp;b=2"> is "?a=1&amp;b=2". lol-html has to be able to
 // re-emit what it read, so it does not decode on the way in, and correspondingly
 // escapes what you write. Reading a value and writing it back unchanged is
-// therefore correct; comparing one against a decoded Go string is not. Use
-// html.UnescapeString when you need the decoded form.
+// therefore correct; comparing one against a decoded Go string is not.
+//
+// The rule: decide on the decoded form, rewrite the raw one. Use
+// html.UnescapeString for the first and leave the value alone for the second.
+//
+// Getting that the wrong way round is how a filter acquires a hole, because a
+// browser decodes before it acts. These three hrefs all execute:
+//
+//	javascript:x()
+//	java&#9;script:x()
+//	&#106;avascript:x()
+//
+// A check on the raw string catches only the first: the others read as schemes
+// called "java&#9;script" and "&#106;avascript". Decode first and all three are
+// the same URL. The same applies to any decision taken on a value - an
+// allow-list of protocols, a comparison against an expected filename, a test for
+// a marker in text.
+//
+// It cuts the other way too. Having decoded a value to decide about it, do not
+// write the decoded form back unless you mean to: SetAttribute takes raw source,
+// so writing "a&b" produces an attribute whose value is "a&b" to a parser, and
+// writing back the "a&amp;b" you were given round-trips exactly.
 //
 // # Cost
 //
