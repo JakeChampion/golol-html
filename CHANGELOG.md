@@ -277,6 +277,19 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`DocumentEnd.Append` says what it appends to.** It said "adds content at the
+  very end of the document", and it adds content at the end of the output - which
+  is wherever the input stopped. An input cut off inside a script, a comment, a
+  raw-text element or a doctype swallows the appended markup as text, and one cut
+  off inside a start tag absorbs it into an unterminated attribute and turns the
+  remainder into attributes of that element. Measured: seven of twelve
+  mid-construct documents produce no element from the append, `Write` and `Close`
+  both succeed, and `WithStrict` changes nothing. This is what a rewriter sees
+  when an origin dies mid-stream, which is when injected instrumentation matters
+  most, so the doc now says it and points at the end tag as the alternative -
+  along with the reason that is not a complete answer either: `</body>` is
+  optional in HTML, and `Element.OnEndTag` on a body without one never fires.
+
 
 - **The package documentation is ordered how it is read.** It had grown to
   fifteen sections in the order they were written, which is not the order anyone
