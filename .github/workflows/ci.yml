@@ -111,8 +111,11 @@ jobs:
         if: ${{ !matrix.musl && !matrix.rosetta }}
         run: |
           go build ./...
-          go test -count=1 .
-          go test -race -count=1 .
+          # ./... rather than . so that examples/ is executed and not merely
+          # compiled. Anything added there runs on every row in this matrix, so
+          # it must be fast and must not touch the network.
+          go test -count=1 ./...
+          go test -race -count=1 ./...
 
       - name: Test darwin/amd64 under Rosetta
         if: ${{ matrix.rosetta }}
@@ -123,7 +126,7 @@ jobs:
         run: |
           go build ./...
           # No -race through an emulator; the arm64 entry already covers it.
-          go test -count=1 .
+          go test -count=1 ./...
 
       # Alpine is tested through docker rather than a container job: the
       # runner's own node binary is glibc-linked, so actions/checkout cannot
@@ -135,7 +138,7 @@ jobs:
             set -eux
             apk add --no-cache gcc musl-dev
             go build -tags musl ./...
-            go test -tags musl -count=1 .
+            go test -tags musl -count=1 ./...
           '
 
       - name: Benchmarks compile and run
@@ -206,7 +209,7 @@ jobs:
           cache: false
       - run: go version
       - run: go build ./...
-      - run: go test -count=1 .
+      - run: go test -count=1 ./...
 
   # Property tests: generated documents rather than a fixed corpus, with
   # shrinking so a counter-example arrives small enough to read. Its own module,

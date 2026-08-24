@@ -46,6 +46,25 @@
 //		return nil
 //	})
 //
+// # Handler order
+//
+// More than one handler can see the same unit, and the order they run in
+// follows two rules.
+//
+// Within one kind of registration, handlers run in the order they were
+// registered: two [OnElement] handlers whose selectors both match, three
+// [OnDocumentEnd] handlers, several [Element.OnEndTag] handlers on one element.
+// Each sees what the previous one did, so a handler reading an attribute gets
+// the value an earlier handler wrote to it.
+//
+// Between kinds, every selector-associated handler runs before every
+// document-level handler for the same unit, whatever order the options were
+// written in. [OnComment] runs before [OnDocumentComment] and [OnText] before
+// [OnDocumentText] even when the document-level one was registered first,
+// because lol-html keeps the two in separate lists. A rewrite that needs to see
+// a unit before anything else does has to register a selector-associated
+// handler, not a document-level one.
+//
 // # Character references are not decoded
 //
 // Text, comment text and attribute values are reported as raw source: the href

@@ -144,8 +144,17 @@ func (c *config) register(cr *core, builder *C.lol_html_rewriter_builder_t) erro
 		}
 	}
 
+	// Document-end handlers are gathered rather than registered one by one,
+	// because lol-html runs them in reverse; see docEndCB.
+	var docEnds []func(*DocumentEnd) error
+
 	for _, reg := range c.docRegs {
-		var doctypeH, commentH, textH, docEndH C.uintptr_t
+		if reg.docEnd != nil {
+			docEnds = append(docEnds, reg.docEnd)
+			continue
+		}
+
+		var doctypeH, commentH, textH C.uintptr_t
 		if reg.doctype != nil {
 			doctypeH = handleOf(cr, &doctypeCB{c: cr, fn: reg.doctype})
 		}
@@ -155,10 +164,12 @@ func (c *config) register(cr *core, builder *C.lol_html_rewriter_builder_t) erro
 		if reg.text != nil {
 			textH = handleOf(cr, &textCB{c: cr, fn: reg.text})
 		}
-		if reg.docEnd != nil {
-			docEndH = handleOf(cr, &docEndCB{c: cr, fn: reg.docEnd})
-		}
-		C.golol_builder_add_document_handlers(builder, doctypeH, commentH, textH, docEndH)
+		C.golol_builder_add_document_handlers(builder, doctypeH, commentH, textH, 0)
+	}
+
+	if len(docEnds) > 0 {
+		h := handleOf(cr, &docEndCB{c: cr, fns: docEnds})
+		C.golol_builder_add_document_handlers(builder, 0, 0, 0, h)
 	}
 
 	return nil
@@ -228,6 +239,9 @@ func OnElement(selector string, fn func(*Element) error) Option {
 
 // OnComment registers fn to run for every comment inside an element matching
 // selector. Use OnDocumentComment for every comment in the document.
+//
+// This runs before any OnDocumentComment handler on the same comment; see the
+// package documentation on handler order.
 func OnComment(selector string, fn func(*Comment) error) Option {
 	return optionFunc(func(c *config) {
 		c.selectorRegs = append(c.selectorRegs, selectorReg{selector: selector, comment: fn})
@@ -255,6 +269,9 @@ func OnDoctype(fn func(*Doctype) error) Option {
 
 // OnDocumentComment registers fn to run for every comment in the document,
 // including comments outside any element.
+//
+// Every OnComment handler runs before this one on a comment they both see, even
+// if this option came first; see the package documentation on handler order.
 func OnDocumentComment(fn func(*Comment) error) Option {
 	return optionFunc(func(c *config) {
 		c.docRegs = append(c.docRegs, docReg{comment: fn})
@@ -263,6 +280,9 @@ func OnDocumentComment(fn func(*Comment) error) Option {
 
 // OnDocumentText registers fn to run for every text chunk in the document. See
 // OnText for how chunking works.
+//
+// Every OnText handler runs before this one on a chunk they both see, even if
+// this option came first; see the package documentation on handler order.
 func OnDocumentText(fn func(*TextChunk) error) Option {
 	return optionFunc(func(c *config) {
 		c.docRegs = append(c.docRegs, docReg{text: fn})
@@ -271,6 +291,10 @@ func OnDocumentText(fn func(*TextChunk) error) Option {
 
 // OnDocumentEnd registers fn to run once, after the last content of the
 // document, so it can append trailing content.
+//
+// Several may be registered, and they run in the order they were registered, so
+// appended content appears in that order. A handler returning an error stops the
+// ones after it.
 func OnDocumentEnd(fn func(*DocumentEnd) error) Option {
 	return optionFunc(func(c *config) {
 		c.docRegs = append(c.docRegs, docReg{docEnd: fn})

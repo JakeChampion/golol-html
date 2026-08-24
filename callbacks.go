@@ -47,8 +47,28 @@ type doctypeCB struct {
 }
 
 type docEndCB struct {
-	c  *core
-	fn func(*DocumentEnd) error
+	c *core
+	// fns holds every OnDocumentEnd handler, in the order they were
+	// registered, because they share a single native registration.
+	//
+	// lol-html dispatches its document-end handlers in reverse order of
+	// registration, which is deliberate upstream but surprising here: the
+	// sibling API, Element.OnEndTag, runs forwards. Left alone, two handlers
+	// appending content emit it backwards, and if the second one fails the
+	// first never runs at all. Coalescing them into one native handler makes
+	// the order the caller wrote the order they run in.
+	fns []func(*DocumentEnd) error
+}
+
+// run calls each handler in registration order, stopping at the first error so
+// that a failure behaves the same as it does for any single handler.
+func (cb *docEndCB) run(d *DocumentEnd) error {
+	for _, fn := range cb.fns {
+		if err := fn(d); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type endTagCB struct {
@@ -124,7 +144,7 @@ func golol_doc_end_cb(ptr *C.lol_html_doc_end_t, ud C.uintptr_t) C.lol_html_rewr
 	cb := cgo.Handle(uintptr(ud)).Value().(*docEndCB)
 	d := &DocumentEnd{unit: unit[*C.lol_html_doc_end_t]{ptr: ptr, c: cb.c}}
 	defer d.detach()
-	return runHandler(cb.c.st, "document-end", "", d, cb.fn)
+	return runHandler(cb.c.st, "document-end", "", d, cb.run)
 }
 
 //export golol_end_tag_cb

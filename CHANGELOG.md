@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Several `OnDocumentEnd` handlers ran in reverse.** lol-html dispatches its
+  document-end handlers in the opposite order to the one they were registered
+  in, which is deliberate upstream but the opposite of `Element.OnEndTag`, the
+  sibling API. Two handlers appending content emitted it backwards, and because
+  a failing handler stops the ones after it, an error in a handler written
+  second could stop one written first from running at all. Every
+  `OnDocumentEnd` now shares a single native registration and they run in the
+  order they were written.
+
+### Documentation
+
+- **Handler order is now stated.** Handlers of one kind run in registration
+  order and each sees the previous one's edits. Between kinds, a
+  selector-associated handler always runs before a document-level one on the
+  same unit - `OnComment` before `OnDocumentComment`, `OnText` before
+  `OnDocumentText` - whatever order the options were written in, because
+  lol-html keeps the two in separate lists. Neither rule was documented, and
+  the second cannot be changed from here.
+
 ## v0.1.1
 
 ### Fixed
