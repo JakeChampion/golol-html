@@ -144,6 +144,31 @@
 // therefore correct; comparing one against a decoded Go string is not. Use
 // html.UnescapeString when you need the decoded form.
 //
+// # Cost
+//
+// A rewrite's cost tracks how many times your handlers run, not how long the
+// document is. Passthrough with no handlers allocates a fixed amount however
+// much goes through it, because the output sink hands the destination a slice
+// over lol-html's own buffer rather than copying it, and a registered handler
+// that never matches costs nothing per byte either.
+//
+// Per invocation, measured and gated by alloc_test.go:
+//
+//	the unit wrapper                      1 allocation
+//	each string read or written           1 more
+//	[Element.SourceLocation]              free, it is two ints
+//	[Element.AttributeList], Attributes   4 per attribute
+//
+// So a handler that reads one attribute costs two allocations per match, one
+// that reads the same attribute twice costs three - nothing is cached - and one
+// that lists every attribute to find a single one costs four times the number of
+// attributes on the element. A text handler sees two chunks per text node, the
+// content and its empty boundary marker, so it starts at two.
+//
+// [Writer.Write] is quadratic at byte granularity while the rewriter is
+// buffering an unclosed tag, because each write rescans the pending buffer.
+// Network-sized reads are far from this; writing a byte at a time is not.
+//
 // # Errors
 //
 // A handler returning a non-nil error stops the rewrite; the error surfaces

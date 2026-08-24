@@ -274,6 +274,13 @@ Passthrough is the floor - lol-html plus cgo and sink overhead, with no handlers
 The rest is dominated by crossing into Go once per match, so throughput tracks
 how many handler invocations a document produces, not its size.
 
+Allocations follow a simple rule, and `alloc_test.go` gates it: a unit wrapper
+costs one allocation, every string read or written costs one more, a
+`SourceLocation` costs nothing, and `AttributeList` or `Attributes` costs four
+per attribute. Nothing is cached, so reading the same attribute twice costs
+twice. A handler that lists every attribute to find one is the usual accidental
+cost.
+
 ### Write in reasonable chunks
 
 Feeding the rewriter a byte at a time is quadratic while it is buffering an
