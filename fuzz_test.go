@@ -219,21 +219,6 @@ func TestUnclosedWriterIsReclaimed(t *testing.T) {
 	}
 }
 
-// settledHandles drains pending cleanups before reading the live handle count.
-//
-// The count is process-wide and runtime.AddCleanup runs asynchronously, so
-// another test abandoning Writers on purpose (see TestUnclosedWriterIsReclaimed)
-// can release its handles in the middle of this one. That only ever makes the
-// count fall, which is why every assertion here checks for growth rather than
-// equality: growth is a leak, a decrease is someone else's tidying.
-func settledHandles() int64 {
-	for range 3 {
-		runtime.GC()
-		runtime.Gosched()
-	}
-	return lolhtml.LiveHandles()
-}
-
 // TestNoHandleLeak checks the invariant directly, at a scale where a single
 // missed delete would be obvious.
 func TestNoHandleLeak(t *testing.T) {

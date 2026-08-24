@@ -3,6 +3,18 @@
 ## Unreleased
 
 ### Fixed
+- **The handle-leak assertions no longer measure other tests' garbage.**
+  `LiveHandles` counts the whole process, and a `Writer` dropped without being
+  closed releases its handles from a `runtime.AddCleanup` callback that runs one
+  GC cycle later. `TestUnclosedWriterIsReclaimed` abandons 200 writers on
+  purpose, so a later test sampling the count before and after its own work could
+  see it fall: five subtests reported between -1 and -4 "leaked" handles on one
+  CI run. Every equality assertion now samples through `settledHandles`, which
+  drains the queue first, and the manual-writer test keeps its writer alive
+  across the measurement so it cannot collect what it is counting. Demonstrated:
+  the same window measures -20 unsettled and 0 settled, and the assertions still
+  report 30 leaked handles when the streaming panic fix is reverted.
+
 
 - **The allocation gate no longer demands an exactness the measurement cannot
   give.** It compared the per-match slope for equality with an integer and
