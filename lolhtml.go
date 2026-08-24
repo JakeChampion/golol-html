@@ -342,26 +342,31 @@
 // syntax error in the browser. [Element.Attribute] and the HTML around it look
 // exactly as intended, which is why this is easy to ship.
 //
-// [HTML] inserts the text as written, and then the element ends wherever the
-// content says it does:
+// [HTML] would insert the text as written, and the element would end wherever
+// the content says it does:
 //
 //	e.SetInnerContent(`var s = "</script><img src=1 onerror=alert(1)>";`, lolhtml.HTML)
-//	// <script>var s = "</script><img src=1 onerror=alert(1)>";</script>
 //
-// That is a working injection out of a string literal, and it is the caller's
-// responsibility rather than a defect: HTML means raw markup.
+// That is a working injection out of a string literal, so it is refused:
+// inserting into the content of one of these elements returns
+// [ErrRawTextBreakout] when the content would close it. The check is the
+// tokenizer's rule, so "</scriptx" is fine and "</script foo>" is not, and it
+// covers [Element.Prepend], [Element.Append], [Element.SetInnerContent] and
+// [EndTag.Before]. Writing outside the element - Before, After, Replace - is
+// ordinary markup and is not checked.
 //
-// There is no combination of the two that makes arbitrary text safe here, and
-// escaping it correctly needs to know where in the JavaScript it lands - inside
-// a string literal, "</script" has to become "<\/script", which is a JavaScript
-// transformation rather than an HTML one. So: build script and style bodies from
-// values you control, and if untrusted data has to reach a script, put it in a
-// data attribute or a JSON <script type="application/json"> block and read it
-// from there.
+// There is still no combination of the two that makes arbitrary text safe here.
+// The refusal stops the injection; it does not give you a way to say what you
+// meant. Escaping correctly needs to know where in the JavaScript the content
+// lands - inside a string literal, "</script" has to become "<\/script", which
+// is a JavaScript transformation rather than an HTML one, and JSON's own escaping
+// of "/" exists for exactly this. So: build script and style bodies from values
+// you control, and if untrusted data has to reach a script, put it in a data
+// attribute or a JSON <script type="application/json"> block and read it from
+// there.
 //
-// [Comment.SetText] is the one context where this is checked for you: it refuses
-// text containing a comment-closing sequence rather than emitting markup that
-// escapes the comment.
+// [Comment.SetText] refuses a comment-closing sequence for the same reason, and
+// was the only such check for a while; [ErrRawTextBreakout] is the other half.
 //
 // A textarea and a title are *escapable* raw text, where references are
 // decoded, so Text behaves normally in them.

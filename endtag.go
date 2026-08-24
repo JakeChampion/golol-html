@@ -72,6 +72,12 @@ func (t *EndTag) content(content string, ct ContentType, op string, fn contentOp
 	if err != nil {
 		return err
 	}
+	// Before an end tag is inside the element; After is outside it.
+	if ct.isHTML() && op == "end_tag_before" {
+		if err := checkRawText(t.Name(), content); err != nil {
+			return err
+		}
+	}
 	return withContent(p, content, ct.isHTML(), op, fn)
 }
 

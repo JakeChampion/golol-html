@@ -51,6 +51,13 @@ func errorCases() []errCase {
 		name:    "nil destination",
 		produce: func() error { _, err := lolhtml.NewWriter(nil); return err },
 	}, {
+		name: "content that would close a script",
+		produce: rewriteWith(`<script></script>`,
+			lolhtml.OnElement("script", func(e *lolhtml.Element) error {
+				return e.SetInnerContent(`a</script>b`, lolhtml.HTML)
+			})),
+		mentions: []string{"script"},
+	}, {
 		name: "empty encoding",
 		produce: func() error {
 			_, err := lolhtml.NewWriter(discard, lolhtml.WithEncoding(""))

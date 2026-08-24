@@ -344,6 +344,16 @@ func (e *Element) content(content string, ct ContentType, op string, fn contentO
 	if err != nil {
 		return err
 	}
+	if ct.isHTML() {
+		// Only for insertions into the element's own content; Before, After and
+		// Replace go through the same helper but write outside it.
+		switch op {
+		case "element_prepend", "element_append", "element_set_inner_content":
+			if err := checkRawText(e.TagName(), content); err != nil {
+				return err
+			}
+		}
+	}
 	return withContent(p, content, ct.isHTML(), op, fn)
 }
 

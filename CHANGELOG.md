@@ -3,6 +3,29 @@
 ## Unreleased
 
 ### Added
+- **`ErrRawTextBreakout`: an insertion that would close the element it is going
+  inside is now refused.** `Comment.SetText` has always refused text containing a
+  comment-closing sequence; the script and style equivalent was recorded in a test
+  comment as "the model for what the script context is missing" and is now
+  implemented. `Element.Prepend`, `Element.Append`, `Element.SetInnerContent` and
+  `EndTag.Before` on a `script`, `style`, `textarea` or `title`, with
+  `ContentType` `HTML`, return it when the content would end that element. The
+  rule is the tokenizer's, measured against x/net/html rather than read off the
+  specification, so `</scriptx` is accepted and `</script foo>` is not, and the
+  end of the content counts as a terminator because what follows an insertion is
+  the rest of the document.
+
+  Not checked: `Before`, `After` and `Replace`, which write outside the element,
+  where a closing tag is ordinary markup; `ContentType` `Text`, which escapes the
+  `<` and so cannot close anything; and the insertion of a whole `<script>`
+  element as markup, whose payload legitimately contains its own closing tag.
+  That last one is the case a caller is most likely to be in, and its answer is
+  still to escape for the language inside the element.
+
+  This changes behaviour: what previously produced a working script injection now
+  returns an error. `contenttype_test.go` had a test asserting the old behaviour;
+  its assertion is inverted rather than deleted, with the reason recorded there.
+
 
 - **`EscapeText` and `EscapeAttribute`.** The package documentation has told
   callers for some time that building markup yourself makes you the serialiser,
