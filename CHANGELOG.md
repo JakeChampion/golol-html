@@ -130,6 +130,20 @@
 
 ### Documentation
 
+- **A comment handler fires for things that are not comments.** "Comment" is the
+  HTML parser's word, and the spec turns several malformed constructs into bogus
+  comments. `<?php echo $x; ?>` is a comment, with the text `?php echo $x; ?`.
+  So is `<?xml version="1.0"?>`, and so is `<!bogus>`. A rewrite that removes
+  every comment therefore removes PHP blocks, XML declarations and processing
+  instructions, silently, because each of them is well formed as far as the
+  parser is concerned. The `<?` forms can be told apart by their text, which
+  keeps the `?`; `<!x>` cannot - it has the same text as `<!--x-->`, and
+  `Comment.SourceLocation` against the input is the only discriminator.
+  Conditional comments are not one comment either: the downlevel-revealed form
+  is two, with real markup between them, and only the first contains `[if`, so a
+  filter keyed on that keeps the opening half and drops the closing one. All of
+  it documented and pinned by `comment_test.go`.
+
 - **Two insertions of the same kind do not always come out in call order.**
   Every insertion goes immediately adjacent to the unit, so the newest is always
   the closest to it. For `Before` and `Append` that reads as in order; for

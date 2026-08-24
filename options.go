@@ -308,6 +308,13 @@ func OnDoctype(fn func(*Doctype) error) Option {
 // OnDocumentComment registers fn to run for every comment in the document,
 // including comments outside any element.
 //
+// "Comment" is the HTML parser's meaning of the word, which is wider than
+// "<!-- ... -->": a bogus comment is a comment too. So this fires for
+// <?php ... ?>, for <?xml ... ?>, and for <!anything>. Removing every comment
+// therefore deletes template and processing instructions along with the prose,
+// and "<!x>" is indistinguishable from "<!--x-->" by its text alone. See the
+// package documentation on what counts as a comment.
+//
 // Every OnComment handler runs before this one on a comment they both see, even
 // if this option came first; see the package documentation on handler order.
 func OnDocumentComment(fn func(*Comment) error) Option {
