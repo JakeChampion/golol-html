@@ -86,7 +86,7 @@ func TestDocumentEndHandlerErrorStopsLaterOnes(t *testing.T) {
 // behind one cgo handle instead of one each. A leak here would be invisible in
 // the output, so it is asserted rather than assumed.
 func TestDocumentEndHandlersReleaseTheirHandles(t *testing.T) {
-	before := lolhtml.LiveHandles()
+	before := settledHandles()
 	for i := 0; i < 50; i++ {
 		if _, err := lolhtml.RewriteString(`<p>t</p>`,
 			lolhtml.OnDocumentEnd(func(d *lolhtml.DocumentEnd) error { return nil }),
@@ -97,7 +97,7 @@ func TestDocumentEndHandlersReleaseTheirHandles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if after := lolhtml.LiveHandles(); after != before {
+	if after := settledHandles(); after != before {
 		t.Errorf("live handles %d before, %d after", before, after)
 	}
 }

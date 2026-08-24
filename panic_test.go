@@ -16,6 +16,7 @@ package lolhtml_test
 import (
 	"bytes"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -92,7 +93,7 @@ func TestPanicLeaksNoHandles(t *testing.T) {
 
 	for name, opt := range panickers {
 		t.Run(name, func(t *testing.T) {
-			before := lolhtml.LiveHandles()
+			before := settledHandles()
 			for i := 0; i < rounds; i++ {
 				if v := recovered(func() {
 					lolhtml.RewriteString(panicDoc, opt)
@@ -100,7 +101,7 @@ func TestPanicLeaksNoHandles(t *testing.T) {
 					t.Fatalf("round %d did not panic", i)
 				}
 			}
-			if after := lolhtml.LiveHandles(); after != before {
+			if after := settledHandles(); after != before {
 				t.Errorf("%d handles leaked over %d rewrites (%d before, %d after)",
 					after-before, rounds, before, after)
 			}
@@ -129,12 +130,18 @@ func TestPanicReachesTheCaller(t *testing.T) {
 func TestPanicOnAManualWriterIsIdempotentToClose(t *testing.T) {
 	for name, opt := range panickers {
 		t.Run(name, func(t *testing.T) {
-			before := lolhtml.LiveHandles()
+			before := settledHandles()
 
+			// The Writer is held in a variable outside the closure, and kept
+			// alive past the count below, so that its own cleanup cannot run
+			// inside the window being measured. Otherwise this test could
+			// release handles it is trying to count.
+			var w *lolhtml.Writer
 			var second any
 			v := recovered(func() {
 				var out bytes.Buffer
-				w, err := lolhtml.NewWriter(&out, opt)
+				var err error
+				w, err = lolhtml.NewWriter(&out, opt)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -154,7 +161,9 @@ func TestPanicOnAManualWriterIsIdempotentToClose(t *testing.T) {
 			if second != nil {
 				t.Errorf("Close after a recovered panic panicked again: %#v", second)
 			}
-			if after := lolhtml.LiveHandles(); after != before {
+			after := settledHandles()
+			runtime.KeepAlive(w)
+			if after != before {
 				t.Errorf("%d handles leaked (%d before, %d after)", after-before, before, after)
 			}
 		})
@@ -184,7 +193,7 @@ func TestPanicValueIsNotWrapped(t *testing.T) {
 // per panicking stream, so a rewrite registering several insertions and
 // panicking in one of them is the shape that would show a partial cleanup.
 func TestPanicInOneOfManyStreamingInsertsReleasesThemAll(t *testing.T) {
-	before := lolhtml.LiveHandles()
+	before := settledHandles()
 
 	for i := 0; i < 30; i++ {
 		v := recovered(func() {
@@ -208,7 +217,7 @@ func TestPanicInOneOfManyStreamingInsertsReleasesThemAll(t *testing.T) {
 		}
 	}
 
-	if after := lolhtml.LiveHandles(); after != before {
+	if after := settledHandles(); after != before {
 		t.Errorf("%d handles leaked (%d before, %d after)", after-before, before, after)
 	}
 }
@@ -216,7 +225,7 @@ func TestPanicInOneOfManyStreamingInsertsReleasesThemAll(t *testing.T) {
 // TestStreamingHandlerErrorStillReleases is the neighbouring path, which was
 // always correct. Pinned so a fix to the panic path cannot break it.
 func TestStreamingHandlerErrorStillReleases(t *testing.T) {
-	before := lolhtml.LiveHandles()
+	before := settledHandles()
 
 	for i := 0; i < 30; i++ {
 		_, err := lolhtml.RewriteString(`<p>x</p>`,
@@ -233,7 +242,7 @@ func TestStreamingHandlerErrorStillReleases(t *testing.T) {
 		}
 	}
 
-	if after := lolhtml.LiveHandles(); after != before {
+	if after := settledHandles(); after != before {
 		t.Errorf("%d handles leaked (%d before, %d after)", after-before, before, after)
 	}
 }
