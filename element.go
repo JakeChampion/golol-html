@@ -239,11 +239,17 @@ func (e *Element) Before(content string, ct ContentType) error {
 }
 
 // After inserts content immediately after the element's end tag.
+//
+// Called twice, the second insertion lands before the first: see the package
+// documentation on two insertions of the same kind.
 func (e *Element) After(content string, ct ContentType) error {
 	return e.content(content, ct, "element_after", cfElementAfter)
 }
 
 // Prepend inserts content as the element's first child.
+//
+// Called twice, the second insertion lands before the first: see the package
+// documentation on two insertions of the same kind.
 //
 // Calling this after Remove still emits the content, without the element's tags
 // around it; see the package documentation on removal.

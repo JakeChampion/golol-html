@@ -276,11 +276,22 @@ func OnComment(selector string, fn func(*Comment) error) Option {
 }
 
 // OnText registers fn to run for every text chunk inside an element matching
-// selector.
+// selector, including text inside its descendants.
 //
 // Text arrives in chunks with no guaranteed boundaries: a single text node can
 // be reported as several chunks, and only the last has IsLastInTextNode set.
 // Accumulate across chunks if you need whole text nodes.
+//
+// A text node is not the same thing as an element's text, and the difference is
+// where this gets people. <a>click <b>here</b></a> has two text nodes, so this
+// handler fires for both and each gets its own final chunk. Accumulating to
+// IsLastInTextNode and replacing there replaces each node separately, giving
+// "REPLACED<b>REPLACED</b>". A document without nested markup looks perfect and
+// hides it.
+//
+// For an element's whole text, accumulate here and act in
+// [Element.OnEndTag], which is the boundary that means what you want. See the
+// package documentation on reading an element's whole text.
 func OnText(selector string, fn func(*TextChunk) error) Option {
 	return optionFunc(func(c *config) {
 		c.selectorRegs = append(c.selectorRegs, selectorReg{selector: selector, text: fn})

@@ -65,6 +65,69 @@
 // a unit before anything else does has to register a selector-associated
 // handler, not a document-level one.
 //
+// # Reading an element's whole text
+//
+// [OnText] fires for every text chunk inside the matched element, including text
+// inside its descendants, and [TextChunk.IsLastInTextNode] marks the end of a
+// text node rather than the end of the element's content. Those are the same
+// thing only when the element contains no markup.
+//
+//	<a href="/x">click <b>here</b></a>
+//
+// has two text nodes, "click " and "here". A handler that accumulates to
+// IsLastInTextNode and replaces there runs twice and produces
+// "REPLACED<b>REPLACED</b>". Tested on a document without nested markup, the
+// same code looks correct.
+//
+// To act on an element's whole text, accumulate in the text handler and finish in
+// [Element.OnEndTag]:
+//
+//	lolhtml.OnElement("a", func(e *lolhtml.Element) error {
+//		acc.Reset()
+//		return e.OnEndTag(func(t *lolhtml.EndTag) error {
+//			return t.Before(rewrite(acc.String()), lolhtml.Text)
+//		})
+//	}),
+//	lolhtml.OnText("a", func(tc *lolhtml.TextChunk) error {
+//		acc.WriteString(tc.Text())
+//		tc.Remove()
+//		return nil
+//	})
+//
+// That leaves the descendant elements behind as empty shells - "<b></b>" - since
+// removing text does not remove markup. Add a handler on "a *" calling
+// [Element.RemoveAndKeepContent] if the whole content is to be replaced rather
+// than only its text.
+//
+// The alternative is to remove the element in its own handler and rebuild it at
+// the end tag with [ContentType] HTML, which also lets you change its tag and
+// attributes - at the cost of re-serialising those yourself, escaping included.
+//
+// # Two insertions of the same kind
+//
+// Every insertion goes immediately adjacent to the unit, and the one rule has a
+// consequence that catches people: two calls to the same method do not always
+// come out in the order they were made.
+//
+// Three calls inserting "1", "2" then "3":
+//
+//	Before   123<p>t</p>      in order
+//	After    <p>t</p>321      reversed
+//	Prepend  <p>321t</p>      reversed
+//	Append   <p>t123</p>      in order
+//
+// The rule is the same in all four: the newest insertion is the one closest to
+// the unit. For Before and Append that puts it last in reading order; for After
+// and Prepend it puts it first. [EndTag.Before] and [EndTag.After] follow the
+// same pattern, as does [Comment.After].
+//
+// It matters most when several calls assemble one thing. Building a comment out
+// of three After calls - the delimiters and the text between them - emits them
+// backwards and produces "-->text<!--". Pass the whole string in one call, or
+// use Before, where the order reads as written.
+//
+// [DocumentEnd.Append] is in order, like the other Append.
+//
 // # Inserted content is not re-parsed
 //
 // Nothing a handler inserts is dispatched to any handler, including the one that

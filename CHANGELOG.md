@@ -130,6 +130,29 @@
 
 ### Documentation
 
+- **Two insertions of the same kind do not always come out in call order.**
+  Every insertion goes immediately adjacent to the unit, so the newest is always
+  the closest to it. For `Before` and `Append` that reads as in order; for
+  `After` and `Prepend` it reads as reversed. Three calls inserting "1", "2",
+  "3": `Before` gives `123<p>`, `After` gives `<p>321`, `Prepend` gives
+  `<p>321t`, `Append` gives `<p>t123`. One rule, two apparent behaviours, and no
+  way to guess which method does which. It matters when several calls assemble
+  one thing - building a comment out of a delimiter, some text and a closing
+  delimiter with three `After` calls emits `-->text<!--`, which is
+  valid-looking output containing broken markup. Now documented on the four
+  methods and in the package docs, with the whole table pinned by
+  `insertorder_test.go`.
+
+- **A text node is not an element's text.** `OnText` fires for text inside
+  descendants too, and `IsLastInTextNode` marks the end of a text node rather
+  than of the element's content - the same thing only when the element contains
+  no markup. So the documented recipe, accumulating to `IsLastInTextNode` and
+  replacing there, replaces each text node separately:
+  `<a>click <b>here</b></a>` becomes `REPLACED<b>REPLACED</b>`. A test document
+  without nested markup looks perfect and hides it. The three recipes that work
+  are now written down, with what each does to the descendant markup, and pinned
+  by `textnode_test.go`.
+
 - **Inserted content is not re-parsed, and that cuts both ways.** Nothing a
   handler inserts is dispatched to any handler, including the one that inserted
   it. Two conveniences follow - there is no loop hazard, so a handler inserting

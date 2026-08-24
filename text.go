@@ -59,6 +59,11 @@ func (t *TextChunk) Bytes() []byte {
 
 // IsLastInTextNode reports whether this is the final chunk of its text node.
 // The final chunk is frequently empty, existing only to mark the boundary.
+//
+// Its text node, not its element: an element containing nested markup has one
+// text node per run of character data, and each one ends with its own final
+// chunk. [Element.OnEndTag] is the boundary that means "this element's content
+// is complete".
 func (t *TextChunk) IsLastInTextNode() bool {
 	p, err := t.live()
 	if err != nil {
@@ -82,6 +87,9 @@ func (t *TextChunk) Before(content string, ct ContentType) error {
 }
 
 // After inserts content immediately after the chunk.
+//
+// Called twice, the second insertion lands before the first: see the package
+// documentation on two insertions of the same kind.
 func (t *TextChunk) After(content string, ct ContentType) error {
 	return t.content(content, ct, "text_chunk_after", cfTextChunkAfter)
 }
