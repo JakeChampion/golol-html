@@ -406,6 +406,22 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`PreallocatedParsingBuffer` says what it costs.** It read like a performance
+  knob - "at the cost of reallocations later" - and behaves like a charge against
+  `MaxMemory`. Measured, the smallest limit that completes one document rises by
+  about whatever is preallocated:
+
+      prealloc      0     16   1024   4096   8192
+      floor       832    848   1856   4928   9024
+
+  and no document tried was cheaper with a buffer than without one, including four
+  chosen to reallocate a lot. The Go allocation count is identical at 0, 1024 and
+  8192, so what it buys is invisible from here. Setting it equal to `MaxMemory` is
+  accepted by validation and fails as soon as a selector has to match: 1024 and
+  1024 with one `OnElement` bails out on `<p>x</p>`, while the same pair with no
+  handlers or document-level handlers only is fine, because nothing needs the
+  buffer.
+
 - **`WithEncoding` says that nothing is sniffed, and corrects what a wrong label
   costs.** That the rewriter ignores a document's own `<meta charset>` was written
   only in an internal comment inside `defaultConfig`, where no caller reads it.
