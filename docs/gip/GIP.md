@@ -473,9 +473,10 @@ really diverged.
 
 Nothing gates the following. This is the shopping list.
 
-- **Allocation complexity class.** No test fails when a path goes from a
-  constant number of allocations per match to a linear one. The benchmarks
-  measure six fixed shapes and nothing compares them across commits.
+- ~~**Allocation complexity class.**~~ Closed: `alloc_test.go` pins the shape,
+  asserting that passthrough and non-matching handlers do not allocate per byte
+  and that the per-match cost is exactly what it is, while letting the fixed
+  overhead drift with the toolchain.
 - **Documentation accuracy.** Nothing checks that a doc comment matches
   behaviour. Every one of the three claims found wrong so far was found by
   hand.

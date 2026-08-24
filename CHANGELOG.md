@@ -83,7 +83,28 @@
   `OnDocumentEnd` now shares a single native registration and they run in the
   order they were written.
 
+### Testing
+
+- **Allocation complexity is gated.** The benchmarks measure six fixed shapes and
+  nothing compared them across document sizes, so nothing would have noticed a
+  path going from a constant number of allocations to one proportional to the
+  input, or a per-match cost quietly doubling. Both leave every output identical.
+  `alloc_test.go` pins the shape instead of the numbers: passthrough and
+  non-matching handlers must not allocate per byte, and the cost of one more
+  match is asserted exactly while the fixed overhead is allowed to drift with the
+  toolchain. Verified to have teeth by injecting one escaping allocation per
+  callback (7 subtests fail) and by making the output sink copy each chunk
+  instead of borrowing it - the regression the borrow exists to prevent, worth
+  2224 allocations against 423 when it was first measured.
+
 ### Documentation
+
+- **The allocation cost model is written down.** A unit wrapper costs one
+  allocation, every string read or written costs one more, a `SourceLocation`
+  costs nothing, and `AttributeList` or `Attributes` costs four per attribute.
+  Nothing is cached, so reading the same attribute twice costs twice. Previously
+  the README gave six benchmark numbers and no way to reason about a seventh
+  case.
 
 - **The encoding surface is documented.** `WithEncoding` had one sentence. It
   now says that handlers always see UTF-8 whatever the document is, that
