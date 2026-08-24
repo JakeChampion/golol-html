@@ -162,7 +162,7 @@ func TestACleanWriterIsUnaffected(t *testing.T) {
 // Close on a poisoned Writer must still release the rewriter, which is what
 // the handle counter is for.
 func TestAPoisonedWriterStillReleases(t *testing.T) {
-	before := lolhtml.LiveHandles()
+	before := settledHandles()
 	var out strings.Builder
 	w, err := lolhtml.NewWriter(&out, lolhtml.OnElement("p", func(*lolhtml.Element) error {
 		return errHandler
@@ -174,7 +174,5 @@ func TestAPoisonedWriterStillReleases(t *testing.T) {
 	if err := w.Close(); !errors.Is(err, errHandler) {
 		t.Fatalf("Close: %v", err)
 	}
-	if after := lolhtml.LiveHandles(); after != before {
-		t.Errorf("handles: %d before, %d after", before, after)
-	}
+	requireNoHandleLeak(t, before)
 }
