@@ -104,6 +104,12 @@ out, err := lolhtml.RewriteString(`<a href="/x">link</a>`,
 `Element.OnEndTag` registers a handler that runs when the element closes, which
 is how you act on an element after seeing its content.
 
+Handlers of the same kind run in the order you registered them, and each sees
+what the previous one did. The exception is between kinds: a selector handler
+always runs before a document handler on the same unit, so `OnComment` beats
+`OnDocumentComment` and `OnText` beats `OnDocumentText` even when the document
+one was registered first.
+
 Text arrives in chunks with no guaranteed boundaries: one text node can be
 reported as several chunks, and the last one is often empty. Accumulate across
 chunks when you need whole nodes, and check `IsLastInTextNode`.
