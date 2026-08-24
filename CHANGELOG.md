@@ -99,6 +99,18 @@
 
 ### Documentation
 
+- **When a `StreamFunc` runs is now stated.** "On demand" reads as lazy, and if
+  it were, a streaming insertion could compute its content from the whole
+  document. It is not: the closure runs when its content is emitted, which is
+  while the element it belongs to is being written out. Two consequences, both
+  silent. It cannot see anything not yet parsed - building a table of contents at
+  a marker near the top of a page is impossible in one pass, and you get the
+  empty result your closure computed rather than an error. And it may never run
+  at all: if the content is discarded, because a later handler removed the
+  element or an ancestor was removed, the closure is skipped, so a side effect
+  placed in a sink is not a side effect that happens. Pinned by
+  `streamtiming_test.go`.
+
 - **The allocation cost model is written down.** A unit wrapper costs one
   allocation, every string read or written costs one more, a `SourceLocation`
   costs nothing, and `AttributeList` or `Attributes` costs four per attribute.
