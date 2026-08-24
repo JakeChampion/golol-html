@@ -121,6 +121,36 @@
 // An unsupported selector is rejected by [NewWriter], not silently ignored, with
 // a [SelectorError] naming it and saying which part it could not use.
 //
+// # Selectors do not consider namespaces
+//
+// A tag name in a selector matches that name in any namespace, so "a[href]"
+// matches an HTML anchor, an SVG <a> and a MathML <a> alike, and "title" matches
+// both a document title and an SVG tooltip:
+//
+//	<html><head><title>page</title></head>
+//	<body><svg><title>tooltip</title></svg></body></html>
+//
+//	OnText("title", ...)   // fires for "page" and for "tooltip"
+//
+// [Element.NamespaceURI] does not settle it, because it reports the namespace an
+// element's children are parsed in rather than the element's own, and SVG's
+// title, desc and foreignObject are HTML integration points - so they report the
+// HTML namespace, exactly like the document title. Same for MathML's mi, mo, mn,
+// ms and mtext.
+//
+// Two things do work. A selector that names the context is exact:
+//
+//	OnText("svg title", ...)   // only the tooltip
+//
+// and its complement is not, because a selector cannot say "not inside svg":
+// "head title" and "head > title" find the document title only when the input
+// actually contains <head>, and <head> is optional in HTML - given
+// "<title>page</title><p>x</p>" they match nothing at all.
+//
+// So a handler that must act on the document title and not on tooltips has to
+// match "title" and track whether it is inside <svg> or <math> itself, which is
+// two more handlers and a counter. examples/gip/envbadge does that.
+//
 // # :not() is wrong for anything but a single simple selector
 //
 // This one is not a limitation but a defect, and it is silent, so it is worth
