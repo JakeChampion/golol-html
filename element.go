@@ -227,6 +227,14 @@ func (e *Element) HasAttribute(name string) (bool, error) {
 // Escaping is not sanitising, either. SetAttribute will set href to
 // "javascript:alert(1)" without complaint, because that is a valid attribute
 // value; which schemes to allow is the caller's decision.
+//
+// A boolean attribute comes out with a value. There is no way to write a bare
+// one: SetAttribute("defer", "") emits defer="" and the C API takes no other
+// shape. That is the same attribute as far as any parser is concerned - presence
+// is what a boolean attribute means - but it does not match the spelling a page
+// used, so a rewrite that adds one to a document full of bare attributes produces
+// a diff in two styles. A bare attribute already in the input is passed through
+// unchanged and reads back as an empty value.
 func (e *Element) SetAttribute(name, value string) error {
 	p, err := e.live()
 	if err != nil {

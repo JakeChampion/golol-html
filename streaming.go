@@ -44,6 +44,56 @@ type Sink struct {
 	unit[*C.lol_html_streaming_sink_t]
 }
 
+// Err reports the error that has already stopped this rewrite, if any.
+//
+// It exists because the sink's own methods cannot tell you. They write into
+// lol-html's buffer, not to the destination, so a nil from WriteString,
+// WriteChunk or a writer from AsWriter means the content was accepted - not that
+// it arrived. A destination that fails is recorded and reported from the Write or
+// Close that was running, and until then the sink goes on accepting everything:
+// measured, fifty writes after a failing destination were all accepted and none
+// reported anything.
+//
+// For short content that costs nothing. For the case a StreamFunc is for - large
+// or incrementally produced content, the io.Copy of a big template the
+// documentation recommends - it means copying the whole thing after there is
+// nowhere for it to go. Err is how to stop:
+//
+//	e.StreamAppend(func(s *lolhtml.Sink) error {
+//		for _, chunk := range chunks {
+//			if err := s.Err(); err != nil {
+//				return err
+//			}
+//			if err := s.WriteString(chunk, lolhtml.HTML); err != nil {
+//				return err
+//			}
+//		}
+//		return nil
+//	})
+//
+// Returning it is optional: the rewrite is already failing and the error will
+// surface from Write or Close either way. Returning it costs nothing and makes
+// the abandoned work visible in a stack trace rather than silent.
+//
+// Nil means nothing has failed yet, not that anything has succeeded. There is no
+// point at which the destination is known to have taken the content, because the
+// rewriter may still be holding it.
+func (s *Sink) Err() error {
+	if s.c == nil {
+		return ErrDetached
+	}
+	if _, err := s.live(); err != nil {
+		return err
+	}
+	if err := s.c.st.sinkErr; err != nil {
+		return err
+	}
+	if err := s.c.st.handlerErr; err != nil {
+		return err
+	}
+	return nil
+}
+
 // WriteString writes s to the sink, escaping it when ct is Text.
 //
 // s must be complete, valid UTF-8. Use WriteChunk for content split at
@@ -89,6 +139,12 @@ func (s *Sink) WriteChunk(b []byte, ct ContentType) error {
 // AsWriter adapts the sink to io.Writer, so content can be produced with
 // io.Copy or fmt.Fprintf. Writes go through WriteChunk, so chunk boundaries may
 // fall anywhere in a UTF-8 sequence.
+//
+// A nil error from the returned writer means the content was accepted, not that
+// it was delivered: the sink writes into lol-html's buffer and a destination
+// failure surfaces from Write or Close instead. So io.Copy will happily copy a
+// whole template into a rewrite that has already failed. Check [Sink.Err]
+// between chunks if that matters, which for anything large it does.
 func (s *Sink) AsWriter(ct ContentType) io.Writer {
 	return sinkWriter{sink: s, ct: ct}
 }
