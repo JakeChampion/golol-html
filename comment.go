@@ -48,6 +48,9 @@ func (c *Comment) Before(content string, ct ContentType) error {
 }
 
 // After inserts content immediately after the comment.
+//
+// Called twice, the second insertion lands before the first: see the package
+// documentation on two insertions of the same kind.
 func (c *Comment) After(content string, ct ContentType) error {
 	return c.content(content, ct, "comment_after", cfCommentAfter)
 }

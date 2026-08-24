@@ -60,6 +60,9 @@ func (t *EndTag) Before(content string, ct ContentType) error {
 
 // After inserts content immediately after the end tag, making it the first
 // content following the element.
+//
+// Called twice, the second insertion lands before the first: see the package
+// documentation on two insertions of the same kind.
 func (t *EndTag) After(content string, ct ContentType) error {
 	return t.content(content, ct, "end_tag_after", cfEndTagAfter)
 }
