@@ -103,6 +103,42 @@
 // the end tag with [ContentType] HTML, which also lets you change its tag and
 // attributes - at the cost of re-serialising those yourself, escaping included.
 //
+// # What counts as a comment
+//
+// A comment handler fires for what an HTML parser calls a comment, which is more
+// than the "<!-- ... -->" the name suggests. The spec turns several malformed
+// constructs into "bogus comments", and those arrive as comments here:
+//
+//	<?php echo "hi"; ?>     text: ?php echo "hi"; ?
+//	<?xml version="1.0"?>   text: ?xml version="1.0"?
+//	<!bogus>                text: bogus
+//	<! spaced>              text:  spaced
+//
+// So a rewrite that removes every comment removes PHP blocks, XML declarations
+// and processing instructions too - silently, since each of them is a
+// well-formed comment as far as the parser is concerned.
+//
+// The first two can be told apart by their text, which keeps the "?" that opened
+// them. The last two cannot: "<!x>" and "<!--x-->" both have the text "x", so
+// nothing about the comment distinguishes them. [Comment.SourceLocation] does -
+// slice the input at that range and look at whether it starts with "<!--" - and
+// that is the only way. A stripper that has the input to hand can check; one
+// working from a stream cannot, and should match the comments it wants to keep
+// rather than the ones it wants to remove.
+//
+// Conditional comments are not one comment either. The downlevel-revealed form
+//
+//	<!--[if !IE]><!--><p>modern</p><!--<![endif]-->
+//
+// is two comments with real markup between them, and only the first contains
+// "[if". A filter keyed on "[if" keeps that one, drops the closing half, and
+// leaves markup that no longer means what it did.
+//
+// Not comments: the contents of <script>, <style> and <textarea>, which are raw
+// text, so "<!--x-->" inside one of those is text and no handler sees it. Nor is
+// a stray end tag like "</bogus end tag>", nor a second <!DOCTYPE>. A nested
+// comment ends at the first "-->", leaving the remainder as text.
+//
 // # Two insertions of the same kind
 //
 // Every insertion goes immediately adjacent to the unit, and the one rule has a
