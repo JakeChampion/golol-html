@@ -429,6 +429,16 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`IsSelfClosing` says it is about the source text, and that it is not a test
+  for emptiness.** Its comment said a trailing slash "is ignored" in HTML, which
+  is true of the parser and not of this method: `<div/>` reports self-closing and
+  then has content and an end tag like any other div. So a rewrite using it to
+  decide whether an element can hold content is wrong wherever an author wrote a
+  slash out of habit, and `CanHaveContent` is the method for that - right in all
+  eighteen cases measured. In foreign content the two agree, because there the
+  slash is what closes the element and `<svg><rect/>` and `<svg><rect>` are two
+  different trees.
+
 - **`TagNamePreserveCase` says what it preserves, which is the spelling and not
   the meaning.** Its comment pointed at foreign content - "which matters for
   foreign content such as SVG's `<linearGradient>`" - as though it produced the

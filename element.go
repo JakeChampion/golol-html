@@ -69,9 +69,29 @@ func (e *Element) SetTagName(name string) error {
 	return withName(p, name, "element_tag_name_set", cfElementTagNameSet)
 }
 
-// IsSelfClosing reports whether the tag was written self-closing, as in
-// <foo />. This is only meaningful in foreign content: in HTML proper a
-// trailing slash is ignored.
+// IsSelfClosing reports whether the tag was *written* self-closing, as in
+// <foo />. It is about the source text and nothing else.
+//
+// In HTML a trailing slash is ignored, and this method still returns true for it:
+// <div/> reports true, and that div goes on to have content and an end tag like
+// any other. So it is not a test for whether an element is empty, and using it as
+// one is wrong wherever an author wrote a slash out of habit:
+//
+//	source              IsSelfClosing   CanHaveContent
+//	<div/>              true            true
+//	<div></div>         false           true
+//	<br/>               true            false
+//	<br>                false           false
+//	<svg><rect/>        true            false
+//	<svg><rect>         false           true
+//
+// [Element.CanHaveContent] is the method for "may this hold content", and it is
+// right in every row above. Measured: <div/>text</div> reaches an OnEndTag
+// handler and takes an Append, while <svg><rect/> does neither.
+//
+// What this is for is foreign content, where the slash is the only thing that
+// closes an element - <svg><rect/> against <svg><rect> are two different trees -
+// and for a rewrite that wants to reproduce the source spelling.
 func (e *Element) IsSelfClosing() bool {
 	p, err := e.live()
 	if err != nil {
