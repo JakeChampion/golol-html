@@ -26,6 +26,14 @@ jobs:
           # `rate` is executions per minute, measured from nightly runs, and is
           # what converts the requested minutes into an execution count. See
           # the Fuzz step for why this is counted rather than timed.
+          #
+          # It needs re-measuring when a target's per-execution work changes.
+          # FuzzRewrite now records what each handler was told and compares the
+          # two runs, which is work proportional to the number of structural
+          # handler invocations; local timing could not resolve its cost against
+          # run-to-run variance of about 40 per cent, so the figure below is
+          # unchanged and the next night's log is what to read. timeout-minutes
+          # bounds the damage if it turns out to be slower.
           - target: FuzzRewrite
             asan: false
             rate: 1700000

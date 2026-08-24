@@ -477,7 +477,7 @@ really diverged.
 | `go test .` (`rewrite_`, `errors_`, `parity_`) | behaviour at the API surface, ported corners of upstream's own C suite | anything the output does not show: leaks, double deletes, allocations |
 | `differential/` | rewrites that change meaning, byte identity of passthrough, text reconstruction | leaks; anything x/net/html gets wrong too |
 | `properties/` | claims that must hold for every generated document, shrunk to a readable counter-example | claims nobody wrote down. A property that encodes a false claim about HTML fails for reasons unrelated to the code |
-| `FuzzRewrite` | chunk-invariance of the output; crashes on malformed markup | the handler program; anything where the output is right |
+| `FuzzRewrite` | chunk-invariance of the output *and* of what the handlers were told - tag names, source locations, attribute values, doctype parts; crashes on malformed markup | the handler program; anything where both the output and the handler's view are right |
 | `FuzzOperations` | lifetimes and marshalling: a unit used after its handler, a handle deleted twice, a string with the wrong length | parser behaviour; cost |
 | the handle counter, asserted per fuzz iteration | leaks and double deletes | everything else |
 | `faults_test.go` | sink failures, memory limits, handler errors and panics, reproducibly from one seed | happy-path correctness |

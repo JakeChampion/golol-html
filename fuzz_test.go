@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -40,15 +41,42 @@ func FuzzRewrite(f *testing.F) {
 	// input chunk boundaries, so a byte-at-a-time write legitimately produces
 	// more text chunks than a single write. Structural handlers - elements,
 	// comments, the doctype - must fire the same number of times either way.
-	handlers := func(hits *int) []lolhtml.Option {
+	handlers := func(hits *int, saw *bytes.Buffer) []lolhtml.Option {
+		// saw records what each handler was told, not just that it ran.
+		//
+		// Comparing output bytes and invocation counts leaves a whole class of
+		// regression invisible: a source location that became relative to the
+		// current Write, a tag name reported with the wrong case, an attribute
+		// read from the wrong element. All of those produce identical output and
+		// identical counts. What a handler sees is the library's other interface,
+		// and this is the only place it is compared across chunkings.
+		//
+		// Text is deliberately not recorded per chunk. Chunk boundaries do split
+		// text nodes - that is the documented behaviour, not a bug - so the
+		// digest would differ legitimately. The text handler contributes its
+		// concatenation at the end instead, via textSeen.
+		note := func(parts ...string) {
+			for i, s := range parts {
+				if i > 0 {
+					saw.WriteByte('|')
+				}
+				saw.WriteString(s)
+			}
+			saw.WriteByte('\n')
+		}
+
 		return []lolhtml.Option{
 			lolhtml.OnElement("a[href]", func(e *lolhtml.Element) error {
 				*hits++
 				href, _ := e.Attribute("href")
+				note("a", e.TagName(), e.SourceLocation().String(), href,
+					strconv.FormatBool(e.IsSelfClosing()))
 				return e.SetAttribute("href", "/"+strings.TrimPrefix(href, "/"))
 			}),
 			lolhtml.OnElement("div", func(e *lolhtml.Element) error {
 				*hits++
+				note("div", e.TagName(), e.SourceLocation().String(),
+					strconv.FormatBool(e.CanHaveContent()), e.NamespaceURI())
 				return e.Append("<!--d-->", lolhtml.HTML)
 			}),
 			lolhtml.OnText("p", func(t *lolhtml.TextChunk) error {
@@ -59,10 +87,15 @@ func FuzzRewrite(f *testing.F) {
 			}),
 			lolhtml.OnDocumentComment(func(c *lolhtml.Comment) error {
 				*hits++
+				note("comment", c.Text(), c.SourceLocation().String())
 				return c.SetText("x")
 			}),
 			lolhtml.OnDoctype(func(d *lolhtml.Doctype) error {
 				*hits++
+				name, _ := d.Name()
+				pub, _ := d.PublicID()
+				sys, _ := d.SystemID()
+				note("doctype", name, pub, sys, d.SourceLocation().String())
 				return nil
 			}),
 		}
@@ -113,7 +146,7 @@ func fuzzChunk(n int) int {
 	return max(1, n/64)
 }
 
-func rewrite(f *testing.F, handlers func(*int) []lolhtml.Option) {
+func rewrite(f *testing.F, handlers func(*int, *bytes.Buffer) []lolhtml.Option) {
 	f.Fuzz(func(t *testing.T, in string) {
 		// Writing one byte at a time is quadratic when the rewriter is
 		// buffering an unclosed tag - measured 4.4ms for 4KB against 43.7ms for
@@ -139,9 +172,9 @@ func rewrite(f *testing.F, handlers func(*int) []lolhtml.Option) {
 		settings := invarianceSettings(in)
 
 		var wholeHits int
-		var whole bytes.Buffer
+		var whole, wholeSaw bytes.Buffer
 
-		w, err := lolhtml.NewWriter(&whole, append(handlers(&wholeHits), settings...)...)
+		w, err := lolhtml.NewWriter(&whole, append(handlers(&wholeHits, &wholeSaw), settings...)...)
 		if err != nil {
 			t.Fatalf("NewWriter: %v", err)
 		}
@@ -149,8 +182,8 @@ func rewrite(f *testing.F, handlers func(*int) []lolhtml.Option) {
 		wholeCloseErr := w.Close()
 
 		var pieceHits int
-		var pieces bytes.Buffer
-		w2, err := lolhtml.NewWriter(&pieces, append(handlers(&pieceHits), settings...)...)
+		var pieces, pieceSaw bytes.Buffer
+		w2, err := lolhtml.NewWriter(&pieces, append(handlers(&pieceHits, &pieceSaw), settings...)...)
 		if err != nil {
 			t.Fatalf("NewWriter: %v", err)
 		}
@@ -189,6 +222,11 @@ func rewrite(f *testing.F, handlers func(*int) []lolhtml.Option) {
 		if wholeHits != pieceHits {
 			t.Fatalf("chunking changed structural handler invocations for %q: whole=%d bytewise=%d",
 				in, wholeHits, pieceHits)
+		}
+		// And what those handlers were told, which the output does not show.
+		if !bytes.Equal(wholeSaw.Bytes(), pieceSaw.Bytes()) {
+			t.Fatalf("chunking changed what the handlers saw for %q:\n whole:\n%s\n bytewise:\n%s",
+				in, wholeSaw.String(), pieceSaw.String())
 		}
 	})
 }
