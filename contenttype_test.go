@@ -13,6 +13,7 @@ package lolhtml_test
 // the package documentation on inserting into a script needs rewriting.
 
 import (
+	stdhtml "html"
 	"strings"
 	"testing"
 
@@ -138,5 +139,103 @@ func TestTextIntoACommentWeConstructOurselves(t *testing.T) {
 	}
 	if strings.Contains(out, "<img") {
 		t.Errorf("markup survived inside the comment: %s", out)
+	}
+}
+
+// TestADecisionOnARawValueMissesEncodedForms is the security shape of the
+// raw-source behaviour, and the reason the package documentation now states a
+// rule rather than only a fact.
+//
+// A browser decodes an attribute value before it acts on it, so all three of
+// these hrefs execute. A filter comparing the raw string catches one of them.
+func TestADecisionOnARawValueMissesEncodedForms(t *testing.T) {
+	hostile := []string{
+		`javascript:alert(1)`,
+		`java&#9;script:alert(1)`,
+		`java&Tab;script:alert(1)`,
+		`&#106;avascript:alert(1)`,
+		`&#x6a;avascript:alert(1)`,
+		` JavaScript:alert(1)`,
+	}
+
+	// naive: the check a filter reaches for first.
+	naive := func(v string) bool {
+		return strings.HasPrefix(strings.ToLower(strings.TrimSpace(v)), "javascript:")
+	}
+	// correct: decode, then strip the characters a scheme may carry, then compare.
+	correct := func(v string) bool {
+		var b strings.Builder
+		for _, r := range stdhtml.UnescapeString(v) {
+			if r > ' ' && r != 0x7f {
+				b.WriteRune(r)
+			}
+		}
+		return strings.HasPrefix(strings.ToLower(b.String()), "javascript:")
+	}
+
+	missed := 0
+	for _, href := range hostile {
+		var raw string
+		if _, err := lolhtml.RewriteString(`<a href="`+href+`">t</a>`,
+			lolhtml.OnElement("a", func(e *lolhtml.Element) error {
+				raw, _ = e.Attribute("href")
+				return nil
+			})); err != nil {
+			t.Fatalf("%s: %v", href, err)
+		}
+
+		if !correct(raw) {
+			t.Errorf("%q was not recognised even after decoding, so the documented "+
+				"rule is insufficient and needs revisiting", href)
+		}
+		if !naive(raw) {
+			missed++
+		}
+	}
+
+	// The naive check must miss some of them - that is the finding. If it stops
+	// missing them, values are being decoded on the way in and the whole
+	// "raw source" section needs rewriting.
+	if missed == 0 {
+		t.Error("the naive check caught everything, so attribute values are now decoded")
+	}
+	if missed < 3 {
+		t.Errorf("the naive check missed only %d of %d; expected most of the encoded forms",
+			missed, len(hostile))
+	}
+}
+
+// TestWritingBackTheRawValueRoundTrips is the other half of the rule: having
+// decoded a value to decide about it, write the original back rather than the
+// decoded form, or the document changes meaning.
+func TestWritingBackTheRawValueRoundTrips(t *testing.T) {
+	const in = `<a href="/x?a=1&amp;b=2">t</a>`
+
+	// Writing the raw value back is a no-op.
+	same, err := lolhtml.RewriteString(in, lolhtml.OnElement("a", func(e *lolhtml.Element) error {
+		v, _ := e.Attribute("href")
+		return e.SetAttribute("href", v)
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same != in {
+		t.Errorf("writing the raw value back changed the document:\n got: %s\nwant: %s", same, in)
+	}
+
+	// Writing the decoded value back does not: SetAttribute takes raw source, so
+	// the "&" is now a bare "&" and the query has one parameter fewer.
+	decoded, err := lolhtml.RewriteString(in, lolhtml.OnElement("a", func(e *lolhtml.Element) error {
+		v, _ := e.Attribute("href")
+		return e.SetAttribute("href", stdhtml.UnescapeString(v))
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded == in {
+		t.Error("writing the decoded value back was a no-op, so SetAttribute now escapes")
+	}
+	if !strings.Contains(decoded, "?a=1&b=2") {
+		t.Errorf("expected a bare ampersand: %s", decoded)
 	}
 }

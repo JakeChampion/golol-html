@@ -98,6 +98,15 @@
 
 ### Testing
 
+- **Two properties for attribute rewriting, and two for duplicates.**
+  `properties/attributes_test.go` states four claims over generated documents:
+  `RemoveAttribute` removes every copy of a repeated attribute, `SetAttribute`
+  replaces the first and leaves the rest, an attribute-only rewrite leaves the
+  tree an independent parser sees exactly as it was - error recovery included,
+  which the generator produces on purpose - and removing an absent attribute is
+  a no-op. The shared generator deliberately avoids duplicate attributes, so the
+  first two bring their own document builder.
+
 - **Error message quality is gated.** Nothing checked that this package's errors
   say anything useful, and they are the surface a caller meets when something
   goes wrong. `errquality_test.go` collects every reachable error - 23 of them,
@@ -141,6 +150,18 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+
+- **"Decide on the decoded form, rewrite the raw one."** The raw-source
+  behaviour was documented as a fact, with `html.UnescapeString` mentioned for
+  "when you need the decoded form". The security shape of it was not: a browser
+  decodes an attribute value before acting on it, so `javascript:x()`,
+  `java&#9;script:x()` and `&#106;avascript:x()` all execute, while a filter
+  comparing the raw string catches only the first. The rule is now stated with
+  those three examples, and its other half too - having decoded a value to decide
+  about it, write the original back, since `SetAttribute` takes raw source and
+  writing the decoded form turns `&amp;` into a bare `&`. Pinned by
+  `contenttype_test.go`, which fails if the naive check ever stops missing the
+  encoded forms.
 
 - **`CanHaveContent` governs four methods that fail differently.** It said they
   could not "do anything" when it was false. In fact `Append`, `Prepend` and

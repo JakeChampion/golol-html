@@ -43,4 +43,5 @@ change that pins it.
 | B28 | Every insertion goes immediately adjacent to the unit, so successive `After` and `Prepend` calls come out reversed while `Before` and `Append` come out in call order. | upstream | `insertorder_test.go` |
 | B29 | `OnText` fires for descendants' text, and `IsLastInTextNode` ends a text node rather than the element's content. For an element's whole text, accumulate and finish at `Element.OnEndTag`. | upstream | `textnode_test.go` |
 | B30 | A comment handler fires for bogus comments: `<?php ... ?>`, `<?xml ... ?>`, `<!anything>`. The `<?` forms keep their `?` in the text; `<!x>` has the same text as `<!--x-->`, so only `SourceLocation` against the input tells them apart. | upstream | `comment_test.go` |
+| B31 | An attribute-only rewrite never changes the tree an independent parser sees, including the parts error recovery relocated. | binding, gated | `properties/attributes_test.go` |
 | B12 | Rust builds are not bit-reproducible here: two `native` runs of the same commit produced darwin archives differing by about 1 KB. | upstream | `make verify` is a diff to read, not an equality assertion |
