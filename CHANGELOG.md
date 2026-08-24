@@ -277,6 +277,17 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`OnDoctype` says that it fires for doctype tokens, not for the document's
+  doctype.** An HTML parser honours a DOCTYPE only before anything else has been
+  seen and discards the rest; the handler is told about all of them. Checked
+  against x/net/html: a doctype after an element, after text, inside `<html>`, or
+  a second one is reported by the handler and kept by nobody. So a rewrite that
+  leaves a page alone because it already has a doctype can be wrong, and a page
+  whose source begins with a meta and then a DOCTYPE renders in quirks mode. The
+  comment also records that a doctype cannot be added or replaced - `Doctype` has
+  no insertion methods because the C API has none - and why prefixing the output
+  is not a substitute.
+
 
 - **Selectors are namespace-blind, and `NamespaceURI` does not rescue you.** A
   tag name in a selector matches that name in any namespace, so `title` matches
