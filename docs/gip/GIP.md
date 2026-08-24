@@ -480,10 +480,11 @@ Nothing gates the following. This is the shopping list.
 - **Documentation accuracy.** Nothing checks that a doc comment matches
   behaviour. Every one of the three claims found wrong so far was found by
   hand.
-- **Error message quality.** Nothing checks that a `*NativeError` message is
-  intelligible, that a rejected selector is named, or that a wrapped error can
-  be told from its cause. The concurrency test checks only that a native
-  message is non-empty.
+- ~~**Error message quality.**~~ Closed: `errquality_test.go` collects every
+  reachable error and checks that it is attributable to the package, free of
+  formatting faults and dangling colons, and - where it concerns a caller's
+  input - that it contains that input. A companion test fails if an exported
+  error type has no case.
 - **Anything under `examples/`.** `go build ./...` compiles it; the test job
   runs `go test -count=1 .` and never executes it.
 - **`-race` on darwin/amd64 and on both musl rows.** Rosetta and the container
