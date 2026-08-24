@@ -9,6 +9,7 @@ package lolhtml_test
 // reports it.
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -208,5 +209,125 @@ func TestAMisdeclaredEncodingChangesWhatHandlersSeeAndNotTheOutput(t *testing.T)
 			t.Errorf("declared %s: the bytes changed:\n in: % x\nout: % x",
 				tt.encoding, doc, out)
 		}
+	}
+}
+
+// TestNothingIsSniffed: a document's own charset declaration is ordinary markup.
+// The label passed to WithEncoding is the only encoding the rewriter knows, so a
+// document that disagrees with it is read the caller's way.
+func TestNothingIsSniffed(t *testing.T) {
+	// The document says windows-1252 and holds a windows-1252 é.
+	doc := []byte(`<html><head><meta charset="windows-1252"></head><body>caf` +
+		"\xe9" + `</body></html>`)
+
+	for _, tt := range []struct{ label, wantText string }{
+		{"windows-1252", "café"},
+		{"utf-8", "caf�"}, // the byte is not valid UTF-8
+	} {
+		var text string
+		if _, err := lolhtml.Rewrite(doc,
+			lolhtml.WithEncoding(tt.label),
+			lolhtml.OnDocumentText(func(tc *lolhtml.TextChunk) error {
+				text += tc.Text()
+				return nil
+			})); err != nil {
+			t.Fatalf("%s: %v", tt.label, err)
+		}
+		if text != tt.wantText {
+			t.Errorf("declared %s: handler saw %q, want %q - if this changed, the "+
+				"rewriter now consults the document's own declaration",
+				tt.label, text, tt.wantText)
+		}
+	}
+}
+
+// TestATextHandlerIsWhatMakesAMisdeclaredEncodingCorrupting refines the claim
+// next to it, which was too general.
+//
+// A wrong label alone does not corrupt the output. Text is decoded and re-encoded
+// only when a text handler is registered, and then an input byte that is not
+// valid in the declared encoding becomes U+FFFD on the way out - whether or not
+// the handler does anything with it. Without a text handler the bytes are passed
+// through and only the strings a handler is given are wrong.
+//
+// Measured, on "<p>caf\xe9</p>" declared as utf-8:
+//
+//	no handlers                     bytes identical
+//	an element handler              bytes identical
+//	an element handler that writes  identical bar its own change
+//	any text handler                caf\xef\xbf\xbd
+func TestATextHandlerIsWhatMakesAMisdeclaredEncodingCorrupting(t *testing.T) {
+	doc := []byte("<p>caf\xe9</p>") // valid windows-1252, invalid UTF-8
+
+	// Declared correctly, every shape leaves the bytes alone.
+	for name, opt := range map[string]lolhtml.Option{
+		"element handler": lolhtml.OnElement("p", func(*lolhtml.Element) error { return nil }),
+		"text handler": lolhtml.OnDocumentText(func(tc *lolhtml.TextChunk) error {
+			_ = tc.Text()
+			return nil
+		}),
+	} {
+		out, err := lolhtml.Rewrite(doc, lolhtml.WithEncoding("windows-1252"), opt)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if string(out) != string(doc) {
+			t.Errorf("declared correctly with an %s, the bytes changed:\n in: % x\nout: % x",
+				name, doc, out)
+		}
+	}
+
+	// Declared wrongly, only a text handler corrupts.
+	out, err := lolhtml.Rewrite(doc, lolhtml.WithEncoding("utf-8"),
+		lolhtml.OnElement("p", func(*lolhtml.Element) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != string(doc) {
+		t.Errorf("an element handler under a wrong label changed the bytes:\n in: % x\nout: % x",
+			doc, out)
+	}
+
+	for name, opt := range map[string]lolhtml.Option{
+		"reads the text": lolhtml.OnDocumentText(func(tc *lolhtml.TextChunk) error {
+			_ = tc.Text()
+			return nil
+		}),
+		"does nothing": lolhtml.OnDocumentText(func(*lolhtml.TextChunk) error { return nil }),
+	} {
+		out, err := lolhtml.Rewrite(doc, lolhtml.WithEncoding("utf-8"), opt)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !bytes.Contains(out, []byte("\ufffd")) {
+			t.Errorf("a text handler that %s left the invalid byte intact: % x; if "+
+				"that is now the behaviour, the documentation on WithEncoding can be "+
+				"simplified", name, out)
+		}
+	}
+}
+
+// TestAnInsertedCharsetDoesNotChangeTheBytes. Output is emitted in the declared
+// encoding throughout, so a charset meta naming a different one produces a
+// document that lies about itself - which is a thing a charset-fixing rewrite has
+// to get right rather than a thing the library can.
+func TestAnInsertedCharsetDoesNotChangeTheBytes(t *testing.T) {
+	doc := []byte("<html><head></head><body>caf\xe9</body></html>")
+
+	out, err := lolhtml.Rewrite(doc,
+		lolhtml.WithEncoding("windows-1252"),
+		lolhtml.OnElement("head", func(e *lolhtml.Element) error {
+			return e.OnEndTag(func(end *lolhtml.EndTag) error {
+				return end.Before(`<meta charset="utf-8">`, lolhtml.HTML)
+			})
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out, []byte{0xe9}) {
+		t.Errorf("the body was transcoded to match the inserted meta: % x", out)
+	}
+	if !bytes.Contains(out, []byte(`charset="utf-8"`)) {
+		t.Errorf("the meta was not inserted: %q", out)
 	}
 }
