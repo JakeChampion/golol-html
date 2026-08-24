@@ -90,7 +90,7 @@ func (r *run) element(e *lolhtml.Element) error {
 		if r.p.done() {
 			return nil
 		}
-		switch r.p.next() % 20 {
+		switch r.p.next() % 21 {
 		case 0:
 			_ = e.SetAttribute(r.p.str(), r.p.str())
 		case 1:
@@ -154,6 +154,15 @@ func (r *run) element(e *lolhtml.Element) error {
 			return errProgram
 		case 19:
 			panic(panicProgram)
+		case 20:
+			// Panic from inside a StreamFunc rather than from the handler.
+			// This is a different path: the streaming callback is a separate
+			// //export, and until it went through runHandler a panic here
+			// unwound through Rust, skipping the drop callback that releases
+			// the streaming handle. The handle counter asserted on every
+			// iteration is what catches that, but only if something reaches
+			// this path - nothing did.
+			_ = e.StreamAppend(func(*lolhtml.Sink) error { panic(panicProgram) })
 		}
 	}
 	return nil

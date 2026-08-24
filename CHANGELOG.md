@@ -4,6 +4,18 @@
 
 ### Fixed
 
+- **A panic inside a `StreamFunc` leaked a cgo handle per rewrite.** The
+  streaming callback was the one `//export`ed callback that did not go through
+  the shared panic-recovery path, so a panic in a streaming insertion unwound
+  through Rust instead of being converted to an error at the boundary. lol-html
+  never ran the drop callback that releases the streaming handle, so each such
+  rewrite leaked one handle for the life of the process, growing with traffic
+  and invisible in the output. Every other handler kind was already covered:
+  this was the gap left by the v0.1.1 panic-leak fix. `FuzzOperations` asserts
+  the handle count on every iteration but only ever panicked from an element
+  handler, so it could not reach the path; it now has a streaming-panic opcode,
+  and fails within a tenth of a second without the fix.
+
 - **Several `OnDocumentEnd` handlers ran in reverse.** lol-html dispatches its
   document-end handlers in the opposite order to the one they were registered
   in, which is deliberate upstream but the opposite of `Element.OnEndTag`, the
