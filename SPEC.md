@@ -372,12 +372,27 @@ each write rescans the pending buffer: 4 KB byte-at-a-time takes 4.4 ms against 
 caps input at 8 KB and bounds the write count above 1 KB - without that the fuzzer stalled to
 0 execs/sec within seconds as it grew inputs. Documented in the README as a user-facing caveat.
 
-Graceful bail-out, measured on v3.0.1 with a 64-byte cap and 4112 bytes of input:
+Graceful bail-out. The first measurement of this used a single `Write` of the
+whole document, and the "0" it produced was generalised into the table below as
+though it were the behaviour. It is not: it is the behaviour for a single write.
+Re-measured on v3.0.1 with a 5170-byte document, 41 links, one pathological tag
+in the middle, and a 1 KiB cap:
 
-| `GracefulBailOut` | Bytes reaching the sink |
-|---|---|
-| `false` | 0 - response broken |
-| `true`  | 4112 - every input byte preserved |
+| fed as | `GracefulBailOut` | reaches the sink |
+|---|---|---|
+| one `Write` | `false` | nothing |
+| one `Write` | `true` | 5170, none rewritten |
+| 256-byte `Write`s | `false` | 670 - a rewritten prefix, then it stops |
+| 256-byte `Write`s | `true` | 1068 - rewritten prefix, then verbatim |
+
+The third row is what `io.Copy` produces, and it is the dangerous one: the
+default setting truncates rather than empties, and the truncation lands on an
+element boundary, so the output is well-formed HTML that a parser accepts. The
+`MemorySettings.GracefulBailOut` doc comment always described this correctly
+("having already emitted some rewritten output and lost the rest of the input,
+which usually yields a truncated document"); the README's table contradicted it
+and the README is what people read first. Both are now the table above, and
+`memory_test.go` pins all four rows.
 
 Benchmarks, Apple M3 Pro, darwin/arm64, 16 KB page with 200 links:
 

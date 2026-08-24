@@ -4,6 +4,24 @@
 
 ### Fixed
 
+- **The README's graceful bail-out table was wrong about the default, and it is
+  the dangerous direction.** It said that exceeding `MaxMemory` with
+  `GracefulBailOut` off delivers 0 bytes and "the response is broken". That
+  holds only when the whole document arrives in one `Write`. Fed in chunks -
+  which is what `io.Copy` does - the same document and cap deliver a **rewritten
+  prefix and then stop**: 670 bytes of 5170 in the measured case, cut on an
+  element boundary, so the result is well-formed HTML that a parser accepts
+  without complaint. A client sees a plausible page missing most of its content.
+  The `MemorySettings.GracefulBailOut` doc comment always said this correctly;
+  the README contradicted it, and the README is read first. Both tables are now
+  the measured four-row matrix, and `memory_test.go` pins every row.
+
+- **How much memory a rewrite needs depends on how the input is fed.** The same
+  5170-byte document completes with `MaxMemory: 1024` in a single `Write` and
+  needs `8192` in 256-byte writes - eight times as much. A limit sized by
+  testing with one big write will bail out under `io.Copy`, and nothing said so.
+  Now documented on `MaxMemory` and in the README, and pinned by test.
+
 - **An unusable encoding label was reported without naming it.** A bad
   `WithEncoding` value failed with `rewriter_build: Unknown character encoding
   has been provided`, which leaves a caller whose encoding comes from
