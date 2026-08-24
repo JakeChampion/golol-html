@@ -165,16 +165,22 @@ func (e *Element) NamespaceURI() string {
 // the start tag alone, not the element.
 //
 // For the element's whole extent, hold this Start and take the End from the end
-// tag's own location:
+// tag's own location - but only once the end tag is known to be this element's,
+// because an omitted end tag hands the handler an enclosing element's tag and
+// this arithmetic then measures to the end of that one instead:
 //
-//	start := e.SourceLocation().Start
+//	start, tag := e.SourceLocation().Start, e.TagName()
 //	e.OnEndTag(func(t *lolhtml.EndTag) error {
+//		if t.Name() != tag {
+//			return nil // not this element's end tag; see OnEndTag
+//		}
 //		extent := t.SourceLocation().End - start
 //		return nil
 //	})
 //
-// An element whose end tag never arrives has no measurable extent, because the
-// handler never runs.
+// Without the guard, both items in <ul><li>a<li>b</ul> measure as reaching the
+// end of the list. An element whose end tag never arrives has no measurable
+// extent at all, because the handler never runs.
 func (e *Element) SourceLocation() SourceLocation {
 	p, err := e.live()
 	if err != nil {
@@ -378,6 +384,11 @@ func (e *Element) Before(content string, ct ContentType) error {
 //
 // Called twice, the second insertion lands before the first: see the package
 // documentation on two insertions of the same kind.
+//
+// Where the element's end is depends on the source having an end tag for it. An
+// element whose end tag HTML lets a document omit - a list item, a table cell, a
+// paragraph - ends here at the enclosing element's end tag instead, so this
+// writes somewhere else: see the package documentation on end tags being tokens.
 func (e *Element) After(content string, ct ContentType) error {
 	return e.content(content, ct, "element_after", cfElementAfter)
 }
@@ -395,6 +406,11 @@ func (e *Element) Prepend(content string, ct ContentType) error {
 
 // Append inserts content as the element's last child.
 //
+// Where the element's end is depends on the source having an end tag for it. An
+// element whose end tag HTML lets a document omit - a list item, a table cell, a
+// paragraph - ends here at the enclosing element's end tag instead, so this
+// writes somewhere else: see the package documentation on end tags being tokens.
+//
 // Calling this after Remove still emits the content, without the element's tags
 // around it; see the package documentation on removal.
 func (e *Element) Append(content string, ct ContentType) error {
@@ -404,6 +420,11 @@ func (e *Element) Append(content string, ct ContentType) error {
 // SetInnerContent replaces everything inside the element, leaving its tags in
 // place.
 //
+// "Everything inside it" reaches to the next end tag. For an element whose own
+// end tag the source left out, that is the enclosing element's, so this replaces
+// the enclosing element's remaining content too: see the package documentation
+// on end tags being tokens.
+//
 // Calling this after Remove still emits the content, without the element's tags
 // around it; see the package documentation on removal.
 func (e *Element) SetInnerContent(content string, ct ContentType) error {
@@ -411,6 +432,11 @@ func (e *Element) SetInnerContent(content string, ct ContentType) error {
 }
 
 // Replace replaces the element, including its tags, with content.
+//
+// Where the element's end is depends on the source having an end tag for it. An
+// element whose end tag HTML lets a document omit - a list item, a table cell, a
+// paragraph - ends here at the enclosing element's end tag instead, so this
+// writes somewhere else: see the package documentation on end tags being tokens.
 func (e *Element) Replace(content string, ct ContentType) error {
 	return e.content(content, ct, "element_replace", cfElementReplace)
 }
@@ -434,6 +460,11 @@ func (e *Element) content(content string, ct ContentType, op string, fn contentO
 }
 
 // Remove removes the element and everything inside it.
+//
+// "Everything inside it" is everything up to the next end tag, which is not the
+// same thing when the source left this element's end tag out. Removing the first
+// item of <ul><li>a<li>b<li>c</ul> removes all three, with no error: see the
+// package documentation on end tags being tokens.
 //
 // Handlers still run for the content being removed, and their edits are
 // discarded with it. Content inserted inside the element after this call is not
@@ -470,13 +501,47 @@ func (e *Element) IsRemoved() bool {
 
 // End tags -------------------------------------------------------------------
 
-// OnEndTag registers fn to run when this element's end tag is reached, which is
-// the way to act on an element after seeing its content.
+// OnEndTag registers fn to run when this element's content ends, which is the
+// way to act on an element after seeing what is inside it.
+//
+// "When its content ends" is not the same as "at its own end tag", and the
+// difference is silent. HTML lets many elements leave their end tag out - a list
+// item closed by the next item, a table cell closed by the next row, a paragraph
+// closed by anything that cannot be inside one - and for those there is no end
+// tag in the source. The handler then runs against the tag that did close them,
+// which belongs to an enclosing element:
+//
+//	<ul><li>a<li>b</ul>
+//
+// Both items' handlers run at </ul>, innermost first, and [EndTag.Name] reports
+// "ul" for both. Content inserted with [EndTag.Before] lands at the end of the
+// list rather than at the end of an item, and nothing reports a problem:
+//
+//	<ul><li>a<li>b[end][end]</ul>
+//
+// If nothing closes the element at all - it runs to the end of the document, as
+// in <p>a<p>b - the handler does not run.
+//
+// The test is the name. An end tag closes the nearest open element of that name,
+// which is the element itself, so a name that differs is not this element's end
+// tag and no position taken from it belongs to this element:
+//
+//	tag := e.TagName()
+//	e.OnEndTag(func(t *lolhtml.EndTag) error {
+//		if t.Name() != tag {
+//			return nil // closed implicitly; this position is somewhere else
+//		}
+//		return t.Before("<span class=\"marker\"></span>", lolhtml.HTML)
+//	})
+//
+// Measured across every shape in endtagposition_test.go, against what the source
+// spells at that position.
 //
 // It can be called more than once to register several handlers, which run in
 // registration order. It fails if the element cannot have content - a void
 // element such as <br> has no end tag to wait for - so check CanHaveContent
-// first when the tag is not known statically.
+// first when the tag is not known statically. It also returns nil and never runs
+// for <plaintext>, which has no end tag at all; see CanHaveContent.
 func (e *Element) OnEndTag(fn func(*EndTag) error) error {
 	p, err := e.live()
 	if err != nil {

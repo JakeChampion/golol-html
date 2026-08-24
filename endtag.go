@@ -9,6 +9,9 @@ import "C"
 // [Element.OnEndTag]. It is the hook for acting on an element once its content
 // has been seen.
 //
+// It is the tag that closed the element, which is not always the element's own:
+// see [Element.OnEndTag] on end tags HTML lets a document leave out.
+//
 // It is valid only for the duration of the handler that received it; see the
 // package documentation on handler lifetime.
 type EndTag struct {
@@ -16,6 +19,12 @@ type EndTag struct {
 }
 
 // Name returns the tag name, lowercased.
+//
+// It is not necessarily the name of the element whose handler this is. An
+// element that left its end tag out is closed by an enclosing element's, and the
+// handler is handed that one: in <ul><li>a<li>b</ul>, both items' handlers see a
+// tag named "ul". Comparing this against the element's own tag name is how a
+// handler tells the two apart; see [Element.OnEndTag].
 func (t *EndTag) Name() string {
 	p, err := t.live()
 	if err != nil {
