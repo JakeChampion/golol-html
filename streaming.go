@@ -13,10 +13,26 @@ import (
 // A StreamFunc produces inserted content on demand, writing it into the sink
 // instead of returning it.
 //
-// Use it when the content is large or generated incrementally: the rewriter
-// calls the function at the point the content is needed, so nothing has to be
+// Use it when the content is large or generated incrementally: nothing has to be
 // assembled in memory first. Returning an error aborts the rewrite, and the
 // error surfaces from Write or Close.
+//
+// "On demand" means when the content is emitted, which is neither immediately
+// nor at the end, and two things follow from that.
+//
+// It cannot see anything the rewriter has not parsed yet. A function registered
+// on an element runs while that element is being written out, so state gathered
+// from later in the document is not there yet, and the failure is silent - you
+// get the empty result your closure computed, not an error. Building a table of
+// contents at a marker near the top of a page is the usual way to meet this: one
+// streaming pass cannot do it. Read the document twice, buffer it, or put the
+// content at the document end with [OnDocumentEnd], which is the one position
+// that has seen everything.
+//
+// It may never run at all. If the content is discarded - the element was removed
+// by a later handler, or it is inside something that was removed - the function
+// is not called. So a StreamFunc is the wrong place for a side effect you need:
+// count and log in the handler, and write only content in the sink.
 type StreamFunc func(*Sink) error
 
 // A Sink receives the output of a StreamFunc.
