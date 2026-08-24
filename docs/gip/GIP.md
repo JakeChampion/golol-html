@@ -86,9 +86,19 @@ Follow this exactly, in order.
 
 ```
 git fetch origin main && git checkout -B gip/<slug> origin/main
+gh run list --workflow ci.yml --branch main --limit 1
 ```
 
 Start from a **fresh** `origin/main` every time. Never work on `main`.
+
+**Then look at what CI says about that `main`, before writing a line.** A red
+`main` is the first thing to fix, ahead of whatever this turn was going to be:
+until it is green, no later turn can tell its own breakage from the one already
+there, and every "merge when green" is a merge over a failure. This is not
+hypothetical - `main` went red at GIP 9 and thirteen turns merged on top of it,
+each one reading the same failure as pre-existing and none of them fixing it. A
+job that has been failing for thirteen merges is not a known issue, it is an
+unfixed regression with a long tail.
 
 Then check what is already known:
 
@@ -384,6 +394,15 @@ really diverged.
   `SetAttribute` benchmark from 2224 allocations per rewrite to 423. Quote the
   Go version alongside the numbers, because that is the axis they move on.
 
+- **A gate is only a gate in the build it measures.** Allocation counts are
+  deterministic for a given input and toolchain, and `-asan` is a different
+  toolchain: its allocator allocates on its own account, so a path that
+  allocates once per match allocates four times per match under the sanitizer.
+  A gate on the number must therefore skip the sanitized build - and say so
+  where it skips, because a gate that quietly stops measuring is worse than no
+  gate. `sanitizer_on_test.go` and `sanitizer_off_test.go` hold the build
+  constraint; `requireRealAllocationCounts` is the skip.
+
 - **A leak is `LiveHandles()`, never a heap profile.** Every cgo handle create
   and delete is counted, and a rewrite that finishes must leave the count where
   it started. That turns "the handles were probably released" into a checkable
@@ -463,7 +482,7 @@ really diverged.
 | the handle counter, asserted per fuzz iteration | leaks and double deletes | everything else |
 | `faults_test.go` | sink failures, memory limits, handler errors and panics, reproducibly from one seed | happy-path correctness |
 | `go test -race` | data races, and `checkptr` violations | single-goroutine memory errors |
-| `go test -asan` (Linux only) | use-after-free, double free, overrun, on our heap and Rust's | a leak that is still reachable, which is exactly what a handle leak is |
+| `go test -asan` (Linux only) | use-after-free, double free, overrun, on our heap and Rust's | a leak that is still reachable, which is exactly what a handle leak is; and how much the library allocates, because the sanitizer's allocator is not the one that ships - `alloc_test.go` skips here |
 | `scripts/check-platforms.sh` | that all seven rows select their link file and none falls through to a guard | whether the archive then links or runs |
 | `scripts/check-workflows.sh` | a workflow file git accepts and GitHub rejects | whether the workflow does the right thing |
 | the benchmarks | allocations and bytes per operation, on six shapes | any shape not among the six |
