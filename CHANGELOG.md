@@ -3,6 +3,23 @@
 ## Unreleased
 
 ### Added
+- **`Sink.Err`, so a `StreamFunc` can find out that the rewrite has already
+  failed.** A sink's methods write into lol-html's buffer rather than to the
+  destination, so a nil from `WriteString`, `WriteChunk` or a writer from
+  `AsWriter` means the content was accepted and not that it arrived. Measured:
+  after a destination that fails on its second write, fifty further sink writes
+  were all accepted and none reported anything - the error surfaced only from the
+  outer `Write`. For short content that costs nothing; for what a `StreamFunc` is
+  for, which the documentation describes as large or incrementally produced
+  content copied with `io.Copy`, it means copying the whole thing after there is
+  nowhere to put it. Checking `Err` between chunks stops it: the same document
+  stops after one write instead of fifty.
+
+  It reports a handler error too, so one `StreamFunc` can see that another has
+  already failed. Nil means nothing has failed yet, not that anything has
+  arrived - there is no point at which delivery is known, since the rewriter may
+  still be holding the content.
+
 - **`ErrRawTextBreakout`: an insertion that would close the element it is going
   inside is now refused.** `Comment.SetText` has always refused text containing a
   comment-closing sequence; the script and style equivalent was recorded in a test
