@@ -387,6 +387,13 @@ func OnDocumentEnd(fn func(*DocumentEnd) error) Option {
 // rather than dropped or replaced, so "🎉" inserted into a windows-1252 document
 // comes out as "&#127881;".
 //
+// That fallback is correct wherever a reference is decoded, and inside a <script>
+// or a <style> it is not: the reference stays in the script as the characters it
+// is written with, rather than the character it stands for. Nothing reports it,
+// and the content type makes no difference, because the substitution happens
+// after escaping. See the package documentation on inserting into a script or a
+// style.
+//
 // Two things about the labels are worth knowing, because both come from the
 // standard rather than from this package and both have surprised people:
 //

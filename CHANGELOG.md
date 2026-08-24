@@ -277,6 +277,20 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **The numeric-reference fallback is not safe inside a script or a style, and
+  both sections that describe it now say so.** `WithEncoding` documents that a
+  character the target encoding cannot represent is emitted as a numeric
+  character reference, and the script section documents that neither
+  `ContentType` is right inside raw text. Each is correct; together they hide a
+  case where both rules are followed and the output is still wrong. Inserting
+  `日` into a `<script>` in a windows-1252 document produces
+  `<script>var s = '&#26085;'</script>` - eight literal characters in the script
+  instead of the one that was meant - with no error from the insertion, from
+  `Write` or from `Close`, and no difference between `Text` and `HTML`, because
+  the substitution happens after escaping. There is nothing to fix in the call:
+  either keep the body inside the document's encoding, using an escape the target
+  language understands, or serve the document as UTF-8.
+
 - **The selector section says how attribute values are matched, not just which
   selectors exist.** It said names are matched case-insensitively, which is true
   and reads as though it covered values. Values follow a different and non-uniform

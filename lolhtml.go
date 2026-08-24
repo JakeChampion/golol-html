@@ -335,6 +335,23 @@
 // A textarea and a title are *escapable* raw text, where references are
 // decoded, so Text behaves normally in them.
 //
+// One more way this goes wrong, and it does not involve escaping at all. When the
+// document's encoding cannot represent a character, [WithEncoding] emits a
+// numeric character reference instead - which is right everywhere a reference is
+// decoded, and raw text is where it is not:
+//
+//	WithEncoding("windows-1252")
+//	e.SetInnerContent(`var s = '日'`, lolhtml.Text)
+//	// <script>var s = '&#26085;'</script>
+//
+// The script now holds those eight characters instead of the one that was meant.
+// Both rules were followed - the content type is right for the position and the
+// fallback is the documented one - and the result is still wrong, so there is
+// nothing to fix in the call. Either keep the script body inside the document's
+// encoding, using an escape the target language understands - "\u65e5" for
+// JavaScript, "\65e5" for CSS - or serve the document as UTF-8, where the
+// question does not arise. Pinned in encoding_test.go.
+//
 // # Building markup yourself makes you the serialiser
 //
 // Every path that writes a value for you escapes it. [Element.SetAttribute]
