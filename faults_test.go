@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -35,11 +36,21 @@ var (
 
 // failingWriter fails every write from the nth onwards, so the failure can land
 // at the start, in the middle, or never.
+//
+// shortFrom is the other way a destination misbehaves: accepting some of the
+// chunk and reporting no error. That breaks io.Writer's contract, and trusting
+// it would truncate the response in silence, so the rewriter reports
+// io.ErrShortWrite the way io.Copy does. It is in the scenario space because a
+// silent truncation is exactly the failure a seeded run should be able to
+// produce.
 type failingWriter struct {
-	buf    bytes.Buffer
-	failAt int // -1 never
-	writes int
-	failed bool
+	buf       bytes.Buffer
+	failAt    int // -1 never
+	shortFrom int // -1 never: accept only shortAccept bytes from this write on
+	shortN    int
+	writes    int
+	failed    bool
+	shorted   bool
 }
 
 func (w *failingWriter) Write(p []byte) (int, error) {
@@ -47,6 +58,11 @@ func (w *failingWriter) Write(p []byte) (int, error) {
 	if w.failAt >= 0 && w.writes > w.failAt {
 		w.failed = true
 		return 0, errInjectedSink
+	}
+	if w.shortFrom >= 0 && w.writes > w.shortFrom && len(p) > w.shortN {
+		w.shorted = true
+		n, _ := w.buf.Write(p[:w.shortN])
+		return n, nil
 	}
 	return w.buf.Write(p)
 }
@@ -56,6 +72,8 @@ type scenario struct {
 	doc          string
 	chunk        int
 	sinkFailAt   int
+	sinkShortAt  int // report a short write from this write on; -1 never
+	sinkShortN   int // bytes to accept when writing short
 	maxMemory    int
 	handlerFail  int // fail on the nth element handler call; -1 never
 	handlerPanic bool
@@ -89,6 +107,14 @@ func scenarioFor(seed uint64) scenario {
 		s.sinkFailAt = -1
 	}
 
+	s.sinkShortAt = -1
+	if s.sinkFailAt < 0 && r.IntN(3) == 0 {
+		// Only when the sink is not already failing, so the two do not race to
+		// be the reported cause.
+		s.sinkShortAt = r.IntN(6)
+		s.sinkShortN = r.IntN(4)
+	}
+
 	if r.IntN(3) == 0 {
 		s.maxMemory = 32 + r.IntN(512)
 	}
@@ -106,15 +132,16 @@ func scenarioFor(seed uint64) scenario {
 }
 
 func (s scenario) String() string {
-	return fmt.Sprintf("seed=%d chunk=%d sinkFailAt=%d maxMemory=%d handlerFail=%d panic=%v",
-		s.seed, s.chunk, s.sinkFailAt, s.maxMemory, s.handlerFail, s.handlerPanic)
+	return fmt.Sprintf("seed=%d chunk=%d sinkFailAt=%d sinkShortAt=%d/%d maxMemory=%d handlerFail=%d panic=%v",
+		s.seed, s.chunk, s.sinkFailAt, s.sinkShortAt, s.sinkShortN, s.maxMemory,
+		s.handlerFail, s.handlerPanic)
 }
 
 // run executes one scenario and returns whether it panicked as instructed.
 func (s scenario) run(t *testing.T) {
 	t.Helper()
 
-	dst := &failingWriter{failAt: s.sinkFailAt}
+	dst := &failingWriter{failAt: s.sinkFailAt, shortFrom: s.sinkShortAt, shortN: s.sinkShortN}
 	calls := 0
 	panicked := false
 
@@ -190,13 +217,33 @@ func (s scenario) run(t *testing.T) {
 	switch {
 	case dst.failed && failure == nil:
 		t.Fatalf("%v: the destination writer failed but the rewrite reported nothing", s)
+	case dst.shorted && failure == nil:
+		t.Fatalf("%v: the destination accepted only part of a chunk but the rewrite "+
+			"reported nothing, so the output is silently truncated", s)
 	case s.handlerFail >= 0 && calls > s.handlerFail && failure == nil:
 		t.Fatalf("%v: a handler failed but the rewrite reported nothing", s)
 	}
 
-	if s.handlerFail >= 0 && failure != nil && !dst.failed && s.maxMemory == 0 {
-		if !errors.Is(failure, errInjectedHandler) {
-			t.Fatalf("%v: rewrite failed with %v; want the handler's error", s, failure)
+	// And the error reported must be one that was actually injected, rather than
+	// something invented on the way out. Which of them wins depends on what the
+	// rewriter reached first, so any injected cause is acceptable.
+	if failure != nil && s.maxMemory == 0 {
+		switch {
+		case errors.Is(failure, errInjectedHandler):
+			if s.handlerFail < 0 {
+				t.Fatalf("%v: reported a handler failure that was not injected", s)
+			}
+		case errors.Is(failure, errInjectedSink):
+			if !dst.failed {
+				t.Fatalf("%v: reported a sink failure that was not injected", s)
+			}
+		case errors.Is(failure, io.ErrShortWrite):
+			if !dst.shorted {
+				t.Fatalf("%v: reported a short write that did not happen", s)
+			}
+		default:
+			t.Fatalf("%v: rewrite failed with %v, which is none of the injected faults",
+				s, failure)
 		}
 	}
 }

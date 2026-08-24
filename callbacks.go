@@ -6,6 +6,7 @@ package lolhtml
 import "C"
 
 import (
+	"io"
 	"runtime/cgo"
 )
 
@@ -172,7 +173,18 @@ func golol_sink_cb(chunk *C.char, n C.size_t, ud C.uintptr_t) {
 	}
 	// borrowBytes rather than a copy: io.Writer implementations must not
 	// retain p, so the destination may read but not keep lol-html's buffer.
-	if _, err := cb.c.st.dst.Write(borrowBytes(chunk, n)); err != nil {
+	b := borrowBytes(chunk, n)
+	written, err := cb.c.st.dst.Write(b)
+
+	// A short write with no error breaks io.Writer's contract, and trusting it
+	// would truncate the response in silence: a destination that accepted five
+	// bytes of every chunk delivered 14 bytes of a 213-byte document and
+	// reported success from both Write and Close. io.Copy checks this for the
+	// same reason, and reports the same error.
+	if err == nil && written < len(b) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
 		cb.c.st.sinkErr = err
 	}
 }

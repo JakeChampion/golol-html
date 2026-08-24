@@ -262,6 +262,93 @@ func TestGracefulBailOut(t *testing.T) {
 	})
 }
 
+// TestShortWriteFromTheDestination: io.Writer requires an implementation that
+// accepts fewer bytes than it was given to return an error, and not every
+// implementation does. Trusting the count would truncate the response in
+// silence, so it is checked, and io.ErrShortWrite is reported - the same error
+// io.Copy reports for the same reason.
+func TestShortWriteFromTheDestination(t *testing.T) {
+	doc := "<p>" + strings.Repeat("abcdefghij", 20) + "</p>"
+
+	t.Run("accepting part of each chunk", func(t *testing.T) {
+		for _, accept := range []int{0, 1, 5} {
+			dst := &partialWriter{accept: accept}
+			w, err := lolhtml.NewWriter(dst)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, werr := w.Write([]byte(doc))
+			cerr := w.Close()
+
+			if !errors.Is(werr, io.ErrShortWrite) {
+				t.Errorf("accept=%d: Write = %v, want io.ErrShortWrite", accept, werr)
+			}
+			if !errors.Is(cerr, lolhtml.ErrPoisoned) {
+				t.Errorf("accept=%d: Close = %v, want ErrPoisoned", accept, cerr)
+			}
+			if dst.buf.Len() >= len(doc) {
+				t.Errorf("accept=%d: the destination somehow received everything", accept)
+			}
+		}
+	})
+
+	t.Run("a destination that accepts everything is untouched", func(t *testing.T) {
+		dst := &partialWriter{accept: -1}
+		w, err := lolhtml.NewWriter(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(doc)); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if dst.buf.String() != doc {
+			t.Errorf("output was %d bytes, want %d", dst.buf.Len(), len(doc))
+		}
+	})
+
+	t.Run("a destination's own error is reported, not ErrShortWrite", func(t *testing.T) {
+		// A compliant writer returns n < len(p) together with an error. That
+		// error is the caller's and must survive rather than being replaced.
+		own := errors.New("the destination's own error")
+		dst := &partialWriter{accept: 3, err: own}
+
+		w, err := lolhtml.NewWriter(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, werr := w.Write([]byte(doc))
+		w.Close()
+
+		if !errors.Is(werr, own) {
+			t.Errorf("Write = %v, want the destination's own error", werr)
+		}
+		if errors.Is(werr, io.ErrShortWrite) {
+			t.Error("the destination's error was replaced with io.ErrShortWrite")
+		}
+	})
+}
+
+// partialWriter accepts at most accept bytes of every write, or all of them when
+// accept is negative, and returns err alongside the count.
+type partialWriter struct {
+	buf    bytes.Buffer
+	accept int
+	err    error
+}
+
+func (w *partialWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	if w.accept >= 0 && n > w.accept {
+		n = w.accept
+	}
+	w.buf.Write(p[:n])
+	return n, w.err
+}
+
 func TestEncoding(t *testing.T) {
 	t.Run("windows-1252", func(t *testing.T) {
 		// 0xA9 is (c) in windows-1252 and invalid as standalone UTF-8, so a
