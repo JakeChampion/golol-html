@@ -298,7 +298,34 @@ func OnText(selector string, fn func(*TextChunk) error) Option {
 	})
 }
 
-// OnDoctype registers fn to run for the document type declaration.
+// OnDoctype registers fn to run for a document type declaration.
+//
+// For a declaration, not for the declaration: fn runs for every "<!DOCTYPE ...>"
+// token in the input, wherever it appears. An HTML parser honours a DOCTYPE only
+// before anything else has been seen, and discards the rest as parse errors, so
+// the handler is told about doctypes the document does not have. Compared against
+// golang.org/x/net/html:
+//
+//	<!DOCTYPE html><html>...                     handler 1, parser keeps 1
+//	<!-- c --><!DOCTYPE html><html>...           handler 1, parser keeps 1
+//	<meta charset="utf-8"><!DOCTYPE html>...     handler 1, parser keeps 0
+//	<html><!DOCTYPE html><body>...               handler 1, parser keeps 0
+//	x<!DOCTYPE html><html>...                    handler 1, parser keeps 0
+//	<!DOCTYPE html><!DOCTYPE html><html>...      handler 2, parser keeps 1
+//
+// So "a doctype was seen" is not "this page has a doctype", and the third row is
+// a document that renders in quirks mode however much its source looks otherwise.
+// A rewrite that decides to leave a page alone because it already has a doctype
+// can be wrong; one that removes every doctype it is offered is fine, since the
+// extra removals were of tokens nothing was honouring.
+//
+// The declaration cannot be added or replaced either. Doctype has Remove and no
+// insertion methods - the C API has none to bind - and neither has the position
+// before the first element, so there is no way to put a doctype in front of a
+// document that lacks one. Writing it to the destination before the rewriter
+// starts is the only route, and that is only correct when the input has no
+// doctype of its own: prefixing one that has puts the input's declaration second,
+// where a parser discards it. Pinned in differential/doctype_test.go.
 func OnDoctype(fn func(*Doctype) error) Option {
 	return optionFunc(func(c *config) {
 		c.docRegs = append(c.docRegs, docReg{doctype: fn})
