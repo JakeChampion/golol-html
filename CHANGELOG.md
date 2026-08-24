@@ -226,6 +226,23 @@
   order they were written.
 
 ### Testing
+- **`properties/` is vetted now, and a script fails if a module is added without
+  being.** `go vet ./...` stops at a module boundary, so the root's invocation
+  covers neither `differential/` nor `properties/`. CI vetted the first two and
+  `make lint` vetted only the root, which means `properties/` - a whole module,
+  including the generator - had never been vetted since the day it landed.
+  Confirmed by putting a `fmt.Printf` with the wrong argument type in it: `make
+  lint` passed, and so would CI.
+
+  `scripts/check-modules.sh` finds every `go.mod` in the tree and fails unless the
+  workflow both vets and tests each one, so the next module cannot be forgotten
+  the same way. Verified in both directions by removing a vet step and by
+  pointing a test job at a directory that does not exist.
+
+  `properties/` also runs under `-race` now, like the root and `differential`.
+  Measured at 1.5 seconds without and 7.9 with, for 2000 checks, which is worth
+  paying for code that drives the library harder than any fixed corpus.
+
 - **The documentation's code is compiled and run now, at least in part.** The
   package carried about 140 lines of indented code inside doc comments and zero
   example functions, so none of it was compiled, let alone executed.

@@ -34,8 +34,12 @@ jobs:
           fi
           echo "all files are gofmt-clean"
 
+      # One vet per module: ./... stops at a module boundary, so the root's
+      # invocation covers neither of the others. scripts/check-modules.sh fails
+      # if a module is added and not listed here.
       - run: go vet ./...
       - run: cd differential && go vet ./...
+      - run: cd properties && go vet ./...
 
   # Every supported platform links its own archive and runs the suite. The
   # matrix mirrors native.yml's smoke job, so an archive is exercised the same
@@ -160,6 +164,7 @@ jobs:
           cache: false
       - run: scripts/check-platforms.sh
       - run: scripts/check-workflows.sh
+      - run: scripts/check-modules.sh
 
   # AddressSanitizer is where a cgo binding's real bugs live: use-after-free
   # across the boundary, double frees, overruns. The tests check what the
@@ -226,7 +231,13 @@ jobs:
         working-directory: properties
         # More than the default 100 checks: these are cheap, and the
         # interesting counter-examples so far turned up in the hundreds.
-        run: go test -count=1 -rapid.checks=2000 ./...
+        #
+        # Under -race as well, like the root and differential. Measured at 1.5s
+        # without and 7.9s with, for 2000 checks, which is worth it for code that
+        # drives the library harder than any fixed corpus does.
+        run: |
+          go test -count=1 -rapid.checks=2000 ./...
+          go test -race -count=1 -rapid.checks=2000 ./...
 
   # The differential tests live in their own module so the root stays
   # dependency-free, which also means `go test ./...` at the root never sees
