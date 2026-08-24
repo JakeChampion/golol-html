@@ -239,3 +239,83 @@ func TestWritingBackTheRawValueRoundTrips(t *testing.T) {
 		t.Errorf("expected a bare ampersand: %s", decoded)
 	}
 }
+
+// TestHandBuiltAttributesAreNotEscapedForYou is the injection the documentation
+// now warns about, and the reason it recommends changing an element rather than
+// replacing it.
+//
+// Every path that writes a value escapes it. Markup you build yourself and pass
+// as HTML is the one that does not, and a single-quoted attribute in the source
+// can hold a bare double quote to walk straight out of.
+func TestHandBuiltAttributesAreNotEscapedForYou(t *testing.T) {
+	// A title that closes its own attribute and opens an event handler.
+	const doc = `<iframe title='" onload=alert(1) x="'></iframe>`
+
+	t.Run("hand-built markup lets it out", func(t *testing.T) {
+		got, err := lolhtml.RewriteString(doc,
+			lolhtml.OnElement("iframe", func(e *lolhtml.Element) error {
+				title, _ := e.Attribute("title")
+				return e.Replace(`<div data-x="`+title+`"></div>`, lolhtml.HTML)
+			}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The payload has become an attribute of the div.
+		if !strings.Contains(got, "onload=alert(1)") {
+			t.Fatalf("expected the injection to be reproduced here: %s", got)
+		}
+		if strings.Contains(got, "&quot;") {
+			t.Errorf("hand-built markup escaped the value, so this route is now "+
+				"safe and the documentation should be revisited: %s", got)
+		}
+	})
+
+	t.Run("changing the element keeps it in", func(t *testing.T) {
+		got, err := lolhtml.RewriteString(doc,
+			lolhtml.OnElement("iframe", func(e *lolhtml.Element) error {
+				title, _ := e.Attribute("title")
+				if err := e.SetAttribute("data-x", title); err != nil {
+					return err
+				}
+				if err := e.RemoveAttribute("title"); err != nil {
+					return err
+				}
+				return e.SetTagName("div")
+			}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(got, "&quot;") {
+			t.Errorf("SetAttribute did not escape the quote: %s", got)
+		}
+		// The payload is a value, not an attribute: no bare "onload=" outside a
+		// quoted value.
+		if strings.Contains(got, `" onload=alert(1)`) {
+			t.Errorf("the payload escaped its attribute: %s", got)
+		}
+	})
+}
+
+// TestWhatSetAttributeEscapes, so the "escape & and the double quote yourself"
+// advice can be checked against what the library does.
+func TestWhatSetAttributeEscapes(t *testing.T) {
+	for _, tt := range []struct{ in, want string }{
+		{`a"b`, `a&quot;b`},
+		{"a&b", "a&b"},         // a bare ampersand is left, being valid source
+		{"a&amp;b", "a&amp;b"}, // and an existing reference round-trips
+		{"a<b", "a<b"},         // legal in an attribute value
+		{"a>b", "a>b"},
+		{"a'b", "a'b"}, // the value is emitted double-quoted, so this is safe
+	} {
+		got, err := lolhtml.RewriteString(`<p>x</p>`,
+			lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+				return e.SetAttribute("d", tt.in)
+			}))
+		if err != nil {
+			t.Fatalf("%q: %v", tt.in, err)
+		}
+		if want := `<p d="` + tt.want + `">x</p>`; got != want {
+			t.Errorf("SetAttribute(%q)\n got: %s\nwant: %s", tt.in, got, want)
+		}
+	}
+}
