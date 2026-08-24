@@ -226,6 +226,22 @@
   order they were written.
 
 ### Testing
+- **The README's code is compiled now, and one block of it did not compile.**
+  Eight Go blocks, none of them built by anything. `readme_snippets_test.go` holds
+  each one verbatim inside something that typechecks, and `readme_test.go` asserts
+  the README and that file have not drifted - comparing with whitespace collapsed,
+  since the snippet file carries an extra tab and gofmt aligns trailing comments
+  its own way. A changed identifier or argument still fails; indentation does not.
+
+  The block illustrating detached units declared `src` and never used it, so it
+  could not have compiled. It now copies the value out, which is the contrast the
+  surrounding paragraph is about anyway - a copied string survives its handler and
+  a retained `*Element` does not.
+
+  Four of the blocks make a claim in a comment about what they produce, and those
+  claims are checked too, which a compiler cannot do. Verified the gates can fail:
+  changing a block's code, adding a block nothing compiles, and both are caught.
+
 - **`readme_test.go` checks the README against the package.** Three tests: every
   `lolhtml.X` it names exists, a short explicit list of names a caller cannot
   safely do without is mentioned at all, and the sentence that went stale has not

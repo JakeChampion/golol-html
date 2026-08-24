@@ -508,11 +508,12 @@ Nothing gates the following. This is the shopping list.
   possible check and it immediately found two: `WithGracefulBailOut`, which was
   broken, and `HandlerError.Unwrap`. It also counts the surface, so an added
   export shows up in a diff.
-- **The README.** Partly gated now: `readme_test.go` checks that every name it
-  claims exists, that the handful a caller cannot safely do without are mentioned
-  at all, and that the one sentence known to have gone stale has not come back.
-  Its prose and its seven Go code blocks are still unchecked - the blocks are not
-  compiled, the same gap the package documentation had.
+- **The README.** Its prose is still unchecked. Its code is not: `readme_test.go`
+  checks that every name it claims exists, that the handful a caller cannot safely
+  do without are mentioned, and that the sentence known to have gone stale has not
+  come back; `readme_snippets_test.go` holds all eight Go blocks verbatim, so the
+  test binary compiles them and four tests check the outputs their comments
+  claim. One of the eight did not compile as written.
 - **Documentation accuracy.** Partly gated now: `example_test.go` holds sixteen
   runnable transcriptions of the claims the documentation makes in code, so those
   cannot rot without `go test` failing. The prose is still unchecked, and so are
