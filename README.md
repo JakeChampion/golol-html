@@ -128,10 +128,31 @@ e.Before("<b>x</b>", lolhtml.HTML)  // <b>x</b>
 a `textarea` or `title`, and inside a comment - but **not inside a `<script>` or
 a `<style>`**. Those are raw text: a parser does not decode references in them,
 so `Text` gives you `if (a &lt; b)` in the script source, which is valid HTML
-that throws in the browser. `HTML` there is verbatim, so a `</script>` in a
-string literal ends the element. Build script and style bodies from values you
-control, and pass untrusted data through a data attribute or a
-`<script type="application/json">` block instead.
+that throws in the browser.
+
+`HTML` is verbatim, and there it is refused rather than trusted: inserting into
+the content of a `script`, `style`, `textarea` or `title` returns
+`ErrRawTextBreakout` when the content would close that element, so a `</script>`
+in a string literal is an error rather than a script injection. The refusal
+cannot cover everything - inserting a *whole* `<script>` element as markup is
+allowed, because its payload legitimately contains its own closing tag - so build
+script and style bodies from values you control, and pass untrusted data through
+a data attribute or a `<script type="application/json">` block instead. JSON's
+own `\/` escape exists for exactly this.
+
+When you have to assemble markup yourself, `EscapeText` and `EscapeAttribute` are
+the escaping the library would have done for you:
+
+```go
+e.SetInnerContent(
+	`<a href="`+lolhtml.EscapeAttribute(url)+`">`+lolhtml.EscapeText(label)+`</a>`,
+	lolhtml.HTML)
+```
+
+Both take a literal value, not markup. Everything the library reports is raw
+source with character references still encoded, so escaping a value read from the
+document turns `&amp;` into `&amp;amp;` - decode it first, or leave it raw and do
+not escape it.
 
 For content that is large or produced incrementally, the `Stream*` methods take
 a callback invoked at the point the content is needed, so nothing has to be
