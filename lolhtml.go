@@ -397,6 +397,15 @@
 // attributes on the element. A text handler sees two chunks per text node, the
 // content and its empty boundary marker, so it starts at two.
 //
+// Registering selectors has its own cost, paid once per [NewWriter]: about five
+// allocations per distinct selector, one fewer for a repeat, since each distinct
+// selector is parsed once and reused. Matching cost grows with the number
+// registered as well, on every element - there is no index by tag or class - so a
+// tool that registers one handler per rule in a stylesheet pays for all of them
+// at every element of the document. Registering a few handlers with broad
+// selectors and deciding inside them is cheaper than registering many narrow
+// ones.
+//
 // [Writer.Write] is quadratic at byte granularity while the rewriter is
 // buffering an unclosed tag, because each write rescans the pending buffer.
 // Network-sized reads are far from this; writing a byte at a time is not.
