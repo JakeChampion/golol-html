@@ -130,6 +130,21 @@
 // Each sees what the previous one did, so a handler reading an attribute gets
 // the value an earlier handler wrote to it.
 //
+// Selectors do not. Matching is decided against the document as it arrived,
+// before any handler runs, so an edit never changes which handlers fire:
+//
+//	OnElement(".a", func(e *Element) error { return e.SetAttribute("class", "b") }),
+//	OnElement(".b", ...)   // does not fire
+//
+// and neither does renaming a tag, in either registration order. The reverse
+// holds too: removing the class an already-matched selector needed does not
+// un-fire it, so a handler on ".a" still runs even if an earlier handler took the
+// attribute away.
+//
+// That is worth relying on. There is no cascade, no order-dependence in which
+// handlers run, and no way for a rewrite to trigger itself. It also means a
+// rewrite cannot act on what another handler produced: that needs a second pass.
+//
 // Between kinds, every selector-associated handler runs before every
 // document-level handler for the same unit, whatever order the options were
 // written in. [OnComment] runs before [OnDocumentComment] and [OnText] before

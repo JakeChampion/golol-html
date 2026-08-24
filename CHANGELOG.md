@@ -168,6 +168,16 @@
 
 ### Documentation
 
+- **Selectors match the document as it arrived; handlers see each other's
+  edits.** The handler-order section said the second half. The first was
+  unstated, and it is what makes a rewrite predictable: matching is decided
+  before any handler runs, so renaming a class does not trigger a rule keyed on
+  the new name, renaming a tag does not trigger a rule keyed on the new tag, and
+  removing the attribute a selector matched on does not un-fire a handler that
+  was going to run. No cascade, no order-dependence in which handlers fire, no
+  way for a rewrite to trigger itself - and no way to act on what another handler
+  produced without a second pass. Pinned by `order_test.go`.
+
 - **The supported selector subset is written down.** `SelectorError` used to say
   "lol-html implements a subset of CSS selectors; see its README for which",
   which sends a caller to another project's documentation for something they need
