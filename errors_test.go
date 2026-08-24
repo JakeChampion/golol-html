@@ -281,18 +281,79 @@ func TestEncoding(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown label is rejected", func(t *testing.T) {
-		_, err := lolhtml.NewWriter(io.Discard, lolhtml.WithEncoding("not-an-encoding"))
-		if err == nil {
-			t.Fatal("expected an error for an unknown encoding label")
+	// Both rejections name the label. The native message does not - "Unknown
+	// character encoding has been provided" leaves a caller whose encoding came
+	// from configuration with nothing to grep for.
+	rejected := []struct{ name, label string }{
+		{"unknown label", "not-an-encoding"},
+		// lol-html requires an ASCII-compatible encoding.
+		{"utf-16le", "utf-16le"},
+		{"utf-16be", "utf-16be"},
+		{"utf-16", "utf-16"},
+		{"replacement", "replacement"},
+	}
+	for _, tt := range rejected {
+		t.Run(tt.name+" is rejected", func(t *testing.T) {
+			_, err := lolhtml.NewWriter(io.Discard, lolhtml.WithEncoding(tt.label))
+			if err == nil {
+				t.Fatalf("expected an error for %q", tt.label)
+			}
+
+			var ee *lolhtml.EncodingError
+			if !errors.As(err, &ee) {
+				t.Fatalf("err = %T (%v), want *EncodingError", err, err)
+			}
+			if ee.Label != tt.label {
+				t.Errorf("Label = %q, want %q", ee.Label, tt.label)
+			}
+			if ee.Message == "" {
+				t.Error("Message is empty, so the reason is lost")
+			}
+			if !strings.Contains(err.Error(), tt.label) {
+				t.Errorf("error text does not name the label: %v", err)
+			}
+		})
+	}
+
+	// The WHATWG labels are aliases, not encodings: these four all select
+	// windows-1252, which is what the standard requires and what browsers do.
+	// Anyone expecting true Latin-1 gets a different answer over 0x80 to 0x9F,
+	// so it is asserted rather than left to be discovered.
+	t.Run("latin-1 labels are windows-1252", func(t *testing.T) {
+		for _, label := range []string{"windows-1252", "iso-8859-1", "latin1", "ascii", "us-ascii"} {
+			var got string
+			// 0x80 is the euro sign in windows-1252 and a control character in
+			// true Latin-1.
+			if _, err := lolhtml.Rewrite([]byte{'<', 'p', '>', 0x80, '<', '/', 'p', '>'},
+				lolhtml.WithEncoding(label),
+				lolhtml.OnText("p", func(tc *lolhtml.TextChunk) error {
+					got += tc.Text()
+					return nil
+				})); err != nil {
+				t.Fatalf("%s: %v", label, err)
+			}
+			if got != "\u20ac" {
+				t.Errorf("%s decoded 0x80 as %q, want the euro sign", label, got)
+			}
 		}
 	})
 
-	t.Run("utf-16 is rejected", func(t *testing.T) {
-		// lol-html requires an ASCII-compatible encoding.
-		_, err := lolhtml.NewWriter(io.Discard, lolhtml.WithEncoding("utf-16le"))
-		if err == nil {
-			t.Fatal("expected an error for a non-ASCII-compatible encoding")
+	// Inserted content is UTF-8 and is encoded on the way out. A character the
+	// target cannot represent becomes a numeric character reference rather than
+	// being dropped or replaced.
+	t.Run("unrepresentable inserted characters become references", func(t *testing.T) {
+		out, err := lolhtml.Rewrite([]byte(`<p>x</p>`),
+			lolhtml.WithEncoding("windows-1252"),
+			lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+				return e.SetInnerContent("euro \u20ac party \U0001f389", lolhtml.Text)
+			}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The euro exists in windows-1252 as 0x80; the emoji does not.
+		want := []byte("<p>euro \x80 party &#127881;</p>")
+		if !bytes.Equal(out, want) {
+			t.Errorf("\n got: % x\nwant: % x", out, want)
 		}
 	})
 }
