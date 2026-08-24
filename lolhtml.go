@@ -46,6 +46,79 @@
 //		return nil
 //	})
 //
+// # Which selectors are supported
+//
+// One rule covers almost all of it: a selector can be used if the rewriter can
+// decide it when it sees the start tag. It has no tree to look at and it cannot
+// wait, so anything that depends on what comes after the element is out.
+//
+// Supported:
+//
+//	div  *  .cls  #id                  type, universal, class, id
+//	a, b                               a selector list
+//	div p     div > p                  descendant and child combinators
+//	[a]  [a=v]  [a~=v]  [a|=v]         attribute presence and matching
+//	[a^=v]  [a$=v]  [a*=v]
+//	[a=v i]   [a=v s]                  case-sensitivity flags
+//	:not(x)                            one simple selector only, see below
+//	:first-child  :nth-child(2n+1)     odd, even and an+b all work
+//	:first-of-type  :nth-of-type(n)
+//	*|name                             any namespace
+//
+// Not supported, because deciding them needs what follows the start tag:
+//
+//	:last-child  :only-child  :empty
+//	:last-of-type  :nth-last-child(n)  :nth-last-of-type(n)
+//
+// Not supported for other reasons - state a stream does not have, or simply
+// unimplemented:
+//
+//	x + y   x ~ y                      sibling combinators
+//	:root  :scope  :host
+//	:checked  :disabled  :hover
+//	:is(...)  :where(...)  :has(...)
+//	::before  ::first-line  ::marker    any pseudo-element
+//	ns|name                            an explicit namespace other than *|
+//
+// Tag and attribute names are matched case-insensitively, so "LI" and "li" are
+// the same selector and [CLASS=a] matches class="a". An attribute selector
+// matches a present-but-empty attribute: [style] matches style="".
+//
+// An unsupported selector is rejected by [NewWriter], not silently ignored, with
+// a [SelectorError] naming it and saying which part it could not use.
+//
+// # :not() is wrong for anything but a single simple selector
+//
+// This one is not a limitation but a defect, and it is silent, so it is worth
+// knowing exactly.
+//
+// :not() is correct when its argument is one simple selector - :not(div),
+// :not(.a), :not([href]), :not(:first-child). Give it a compound selector and it
+// negates each part separately and requires all of them, which is the wrong half
+// of De Morgan's law: :not(div.a) is evaluated as :not(div):not(.a).
+//
+// On the document
+//
+//	<div class="a">1</div><div class="b">2</div><span class="a">3</span><span class="b">4</span>
+//
+// :not(div.a) should match everything except the first, three elements. It
+// matches one, span.b - the same as :not(div):not(.a). A selector list inside is
+// affected too: :not(div.a, span.b) matches nothing at all.
+//
+// So a rewrite meant to process everything except trusted anchors, written
+// OnElement(":not(a.trusted)"), skips every anchor and everything carrying that
+// class. For a filter that is a hole rather than a nuisance.
+//
+// Until it is fixed upstream, use :not() with a single simple selector, or match
+// positively and decide inside the handler:
+//
+//	lolhtml.OnElement("a", func(e *lolhtml.Element) error {
+//		if cls, _ := e.Attribute("class"); strings.Contains(cls, "trusted") {
+//			return nil
+//		}
+//		...
+//	})
+//
 // # Handler order
 //
 // More than one handler can see the same unit, and the order they run in
