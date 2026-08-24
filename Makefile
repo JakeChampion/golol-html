@@ -1,7 +1,7 @@
 GO ?= go
 REPO ?= JakeChampion/golol-html
 
-.PHONY: all test race vet lint bench differential properties platforms workflows native native-all verify attest-verify tidy clean
+.PHONY: all test race vet lint bench differential properties platforms workflows modules native native-all verify attest-verify tidy clean
 
 all: test
 
@@ -13,12 +13,17 @@ test:
 race:
 	$(GO) test -race -count=1 ./...
 
+# One vet per module: ./... stops at a module boundary, so the root's invocation
+# covers neither of the others. scripts/check-modules.sh keeps CI honest about
+# the same thing.
 vet:
 	$(GO) vet ./...
+	cd differential && $(GO) vet ./...
+	cd properties && $(GO) vet ./...
 
 # Not `gofmt -l . | ... | (! read)`: that idiom aborts under macOS bash 3.2
 # with set -e even when it passes.
-lint: vet platforms workflows
+lint: vet platforms workflows modules
 	@unformatted=$$(gofmt -l .); \
 	if [ -n "$$unformatted" ]; then \
 		echo "unformatted files:"; echo "$$unformatted"; \
@@ -38,6 +43,10 @@ platforms:
 # Catch a workflow file that git accepts and GitHub rejects.
 workflows:
 	scripts/check-workflows.sh
+
+# Catch a module that CI does not vet or test.
+modules:
+	scripts/check-modules.sh
 
 # The differential tests are a separate module, so the root ./... misses them.
 differential:

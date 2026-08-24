@@ -485,6 +485,7 @@ really diverged.
 | `go test -asan` (Linux only) | use-after-free, double free, overrun, on our heap and Rust's | a leak that is still reachable, which is exactly what a handle leak is; and how much the library allocates, because the sanitizer's allocator is not the one that ships - `alloc_test.go` skips here |
 | `scripts/check-platforms.sh` | that all seven rows select their link file and none falls through to a guard | whether the archive then links or runs |
 | `scripts/check-workflows.sh` | a workflow file git accepts and GitHub rejects | whether the workflow does the right thing |
+| `scripts/check-modules.sh` | a module CI does not vet or test; `go vet ./...` stops at a module boundary | whether the vet and test it finds are the right ones |
 | the benchmarks | allocations and bytes per operation, on six shapes | any shape not among the six |
 | `make verify` | that the host archive reproduces from the pinned upstream | the other six archives; and it is a diff to read, not an assertion, because Rust builds are not bit-identical |
 | `minimum-go` | that the declared Go floor is true | that the floor is the right one |
