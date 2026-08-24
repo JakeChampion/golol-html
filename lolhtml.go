@@ -95,6 +95,46 @@
 // [Element.Before], [Element.After] and [Element.Replace] position content
 // outside the element, and surviving its removal is what they are for.
 //
+// # Inserting into a script or a style
+//
+// Neither [ContentType] is right for the inside of a <script> or a <style>, and
+// the failures are quiet in opposite directions.
+//
+// Those two are *raw text* elements: an HTML parser does not decode character
+// references in them. So [Text], which escapes <, > and &, produces content
+// that is inert but no longer says what it said:
+//
+//	e.SetInnerContent(`if (a < b && c > d) {}`, lolhtml.Text)
+//	// <script>if (a &lt; b &amp;&amp; c &gt; d) {}</script>
+//
+// The document is valid, nothing returns an error, and the script throws a
+// syntax error in the browser. [Element.Attribute] and the HTML around it look
+// exactly as intended, which is why this is easy to ship.
+//
+// [HTML] inserts the text as written, and then the element ends wherever the
+// content says it does:
+//
+//	e.SetInnerContent(`var s = "</script><img src=1 onerror=alert(1)>";`, lolhtml.HTML)
+//	// <script>var s = "</script><img src=1 onerror=alert(1)>";</script>
+//
+// That is a working injection out of a string literal, and it is the caller's
+// responsibility rather than a defect: HTML means raw markup.
+//
+// There is no combination of the two that makes arbitrary text safe here, and
+// escaping it correctly needs to know where in the JavaScript it lands - inside
+// a string literal, "</script" has to become "<\/script", which is a JavaScript
+// transformation rather than an HTML one. So: build script and style bodies from
+// values you control, and if untrusted data has to reach a script, put it in a
+// data attribute or a JSON <script type="application/json"> block and read it
+// from there.
+//
+// [Comment.SetText] is the one context where this is checked for you: it refuses
+// text containing a comment-closing sequence rather than emitting markup that
+// escapes the comment.
+//
+// A textarea and a title are *escapable* raw text, where references are
+// decoded, so Text behaves normally in them.
+//
 // # Character references are not decoded
 //
 // Text, comment text and attribute values are reported as raw source: the href
@@ -130,14 +170,27 @@ import (
 )
 
 // ContentType says how inserted content should be interpreted.
+//
+// The choice is context-insensitive: Text escapes the same three characters
+// wherever the content lands. That is correct in element content, in escapable
+// raw text (textarea and title) and inside a comment, and it is wrong
+// inside <script> and <style>. See the package documentation on inserting into
+// a script or a style.
 type ContentType int
 
 const (
-	// Text inserts content as text, escaping anything that would otherwise be
-	// read as markup. This is the safe choice for untrusted values.
+	// Text inserts content as text, escaping <, > and & so that none of it can
+	// be read as markup. This is the safe choice for untrusted values.
+	//
+	// It escapes nothing else. A quote, an apostrophe and a backtick pass
+	// through, which is correct for element content. So does a NUL, as a literal
+	// zero byte: any parser reading the result replaces it with U+FFFD, so a
+	// value containing one does not survive a round trip.
 	Text ContentType = iota
 
-	// HTML inserts content as raw markup, parsed as part of the document.
+	// HTML inserts content as raw markup, parsed as part of the document. The
+	// caller is responsible for everything about it, including that it does not
+	// end the element it is being inserted into.
 	HTML
 )
 

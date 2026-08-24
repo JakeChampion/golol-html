@@ -124,6 +124,15 @@ e.Before("<b>x</b>", lolhtml.Text)  // &lt;b&gt;x&lt;/b&gt;
 e.Before("<b>x</b>", lolhtml.HTML)  // <b>x</b>
 ```
 
+`Text` escapes exactly `<`, `>` and `&`. That is right for element content, for
+a `textarea` or `title`, and inside a comment - but **not inside a `<script>` or
+a `<style>`**. Those are raw text: a parser does not decode references in them,
+so `Text` gives you `if (a &lt; b)` in the script source, which is valid HTML
+that throws in the browser. `HTML` there is verbatim, so a `</script>` in a
+string literal ends the element. Build script and style bodies from values you
+control, and pass untrusted data through a data attribute or a
+`<script type="application/json">` block instead.
+
 For content that is large or produced incrementally, the `Stream*` methods take
 a callback invoked at the point the content is needed, so nothing has to be
 assembled in memory first:
