@@ -35,6 +35,12 @@ type MemorySettings struct {
 	//
 	// Exceeding it fails the Write or Close that noticed, with a *NativeError
 	// whose MemoryLimitExceeded reports true.
+	//
+	// How much a document needs depends on how it is written, not only on the
+	// document: one measured 5170-byte page completes at 1024 when fed in a
+	// single Write and needs 8192 when fed in 256-byte writes. Size the limit
+	// against the write pattern the caller will actually use, or a value that
+	// passed a test will bail out under io.Copy.
 	MaxMemory int
 
 	// GracefulBailOut changes what the rewriter does when MaxMemory is

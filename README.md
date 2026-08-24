@@ -203,17 +203,40 @@ lolhtml.WithMemorySettings(lolhtml.MemorySettings{
 })
 ```
 
+**Size the limit with the writes you will actually make.** How much memory a
+rewrite needs depends on how the input is fed, and not by a little: the 5170-byte
+document below completes with `MaxMemory: 1024` when written in one call, and
+needs `8192` when written in 256-byte chunks. A limit chosen by testing with a
+single `Write` is far too low for the `io.Copy` this README recommends, and the
+first sign of it is a bail-out in production.
+
 Exceeding `MaxMemory` fails the rewrite with a `*NativeError` whose
-`MemoryLimitExceeded()` reports true. What happens to the response depends on
-`GracefulBailOut`; measured on v3.0.1 with a 64-byte cap and a 4112-byte input:
+`MemoryLimitExceeded()` reports true. What reaches the sink depends on
+`GracefulBailOut` **and on how the input was fed**, which is the part worth
+knowing before choosing a default.
 
-| `GracefulBailOut` | Bytes reaching the sink |
-|---|---|
-| `false` (default) | 0 - the response is broken |
-| `true` | all 4112, rewritten up to the bail-out boundary and verbatim after it |
+Measured on v3.0.1 with a 5170-byte document containing 41 links and one
+pathological tag in the middle, at a 1 KiB cap:
 
-With it on you can keep serving by writing subsequent bytes straight to your own
-sink, bypassing the now-unusable rewriter.
+| fed as | `GracefulBailOut` | reaches the sink |
+|---|---|---|
+| one `Write` | `false` (default) | nothing |
+| one `Write` | `true` | every byte received, none of it rewritten |
+| 256-byte `Write`s | `false` (default) | **670 bytes: a rewritten prefix, then it stops** |
+| 256-byte `Write`s | `true` | every byte received: rewritten prefix, then verbatim |
+
+The third row is the one to design for, because it is what `io.Copy` does. On
+the default setting a bail-out does not empty the response, it **truncates**
+it - and the truncation lands on an element boundary, so the result is
+well-formed HTML that a parser accepts without complaint. A client that gets it
+sees a plausible page missing most of its content. Check the error from `Write`
+and `Close` and discard the response; do not rely on the client noticing.
+
+With `GracefulBailOut` on, everything the rewriter received still reaches the
+sink, so you can keep serving by writing subsequent bytes straight to your own
+sink, bypassing the now-unusable rewriter. The handover point is the last byte
+you wrote, and the flushed tail can end mid-tag, so append to it rather than
+inserting anything of your own.
 
 ## Performance
 
