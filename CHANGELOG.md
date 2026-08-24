@@ -154,6 +154,25 @@
   No disagreement was found. That is the result, not a lack of one: the claim is
   now checked rather than assumed.
 
+- **The fuzzers now vary the rewriter's configuration.** Neither passed a `With*`
+  option, so every one of roughly 32 million nightly executions ran with the
+  defaults: utf-8, strict on, no memory limit, no ESI. Whole categories were
+  therefore unexplored - an insertion transcoded into a legacy encoding, a
+  streaming sink interrupted by a memory bail-out, malformed markup with strict
+  mode off - and both fuzzers assert the live handle count on every iteration, so
+  a leak reachable only under one of those would never have been found. That is
+  the same shape of gap that hid the `StreamFunc` panic leak.
+
+  `FuzzOperations` now derives an encoding, a strict-mode choice, ESI and an
+  occasional generous memory limit from the program bytes. `FuzzRewrite` derives
+  an encoding and strict mode, given to both of its writers - but deliberately
+  **not** a memory limit: the memory a rewrite needs depends on how the input is
+  fed, by a factor of eight in one measured case, so a limit one writer stayed
+  under and the other did not would make them differ legitimately and the
+  chunk-invariance test would report it as a bug. Both run clean, and both found
+  new interesting inputs immediately - 35 and 26 - so the variation is reaching
+  states neither had before.
+
 - **The cost of registering selectors is gated, and the parse cache now has a
   test.** `config.register` parses each distinct selector once and reuses it,
   which is deliberate and had no test - removing it would have broken nobody's

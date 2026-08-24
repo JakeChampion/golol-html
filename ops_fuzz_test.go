@@ -305,6 +305,46 @@ func (r *run) docEnd(d *lolhtml.DocumentEnd) error {
 // NewWriter and the program never runs, which would waste most iterations.
 var fuzzSelectors = []string{"div", "a", "p", "*", "span, b", "div > p", "[id]"}
 
+// fuzzEncodings are the labels worth varying. Every one is ASCII compatible and
+// accepted, so no iteration is wasted on a rejected writer, and the non-UTF-8
+// ones exercise the transcoding that every insertion goes through on the way out.
+var fuzzEncodings = []string{"utf-8", "windows-1252", "shift_jis", "koi8-r", "big5"}
+
+// fuzzSettings derives the rewriter's configuration from the program bytes.
+//
+// Until this existed, every iteration ran with the defaults - utf-8, strict on,
+// no memory limit, no ESI - so the combinations were unexplored: an insertion
+// transcoded into a legacy encoding, a streaming sink interrupted by a memory
+// bail-out, malformed markup with strict mode off. The leak fixed in the
+// StreamFunc panic change was missed for the same shape of reason, the fuzzer
+// never having reached the path.
+//
+// The memory limit is generous and rare. A tight one bails out before the
+// program runs, which wastes the iteration rather than testing anything.
+func fuzzSettings(program []byte) []lolhtml.Option {
+	if len(program) < 2 {
+		return nil
+	}
+	b := program[len(program)-1]
+
+	opts := []lolhtml.Option{
+		lolhtml.WithEncoding(fuzzEncodings[int(b)%len(fuzzEncodings)]),
+		lolhtml.WithStrict(b&0x08 == 0),
+	}
+	if b&0x10 != 0 {
+		opts = append(opts, lolhtml.WithESITags())
+	}
+	if b&0xE0 == 0xE0 {
+		// Roughly one iteration in eight, and large enough that the program
+		// still runs before anything bails out.
+		opts = append(opts, lolhtml.WithMemorySettings(lolhtml.MemorySettings{
+			MaxMemory:       4096 + int(b)*64,
+			GracefulBailOut: b&0x01 == 0,
+		}))
+	}
+	return opts
+}
+
 func FuzzOperations(f *testing.F) {
 	docs := []string{
 		`<div id="a"><p>hi</p><!--c--></div>`,
@@ -336,6 +376,7 @@ func FuzzOperations(f *testing.F) {
 		handlesBefore := lolhtml.LiveHandles()
 		r := &run{p: &prog{b: program}}
 		sel := fuzzSelectors[int(program[0])%len(fuzzSelectors)]
+		settings := fuzzSettings(program)
 
 		panicked := func() (panicked bool) {
 			defer func() {
@@ -349,21 +390,29 @@ func FuzzOperations(f *testing.F) {
 				}
 			}()
 
-			_, err := lolhtml.Rewrite([]byte(doc),
+			opts := append([]lolhtml.Option{
 				lolhtml.OnElement(sel, r.element),
 				lolhtml.OnComment(sel, r.comment),
 				lolhtml.OnText(sel, r.text),
 				lolhtml.OnDoctype(r.doctype),
 				lolhtml.OnDocumentEnd(r.docEnd),
-			)
+			}, settings...)
 
-			// A handler that reported failure must be why the rewrite failed.
-			if r.failed {
-				if err == nil {
-					t.Fatalf("a handler returned errProgram but the rewrite succeeded")
-				}
-				if !errors.Is(err, errProgram) {
-					t.Fatalf("rewrite failed with %v; want the handler's error", err)
+			_, err := lolhtml.Rewrite([]byte(doc), opts...)
+
+			// A handler that reported failure must be why the rewrite failed -
+			// unless the configuration gave the rewriter its own reason to stop
+			// first. A memory bail-out and a strict-mode ambiguity are both
+			// legitimate causes, so they are excluded rather than asserted
+			// against.
+			if r.failed && err == nil {
+				t.Fatalf("a handler returned errProgram but the rewrite succeeded")
+			}
+			if r.failed && err != nil && !errors.Is(err, errProgram) {
+				var ne *lolhtml.NativeError
+				if !errors.As(err, &ne) {
+					t.Fatalf("rewrite failed with %v; want the handler's error or a "+
+						"native one from the settings", err)
 				}
 			}
 			return false
