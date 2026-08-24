@@ -159,8 +159,24 @@ func (e *Element) HasAttribute(name string) (bool, error) {
 	return rc == 1, nil
 }
 
-// SetAttribute sets the named attribute, adding it if absent. The value is
-// escaped as needed, so it is safe to pass untrusted input.
+// SetAttribute sets the named attribute, adding it if absent.
+//
+// The value is raw attribute-value source, the mirror of what Attribute
+// reports, so it needs no escaping from the caller: a value read from one
+// element and written to another is unchanged, and a value containing a quote
+// cannot end the attribute or start another. The only character rewritten on
+// the way out is the double quote, which becomes &quot;.
+//
+// Raw source is not the same as text, and the difference is worth one sentence
+// because it is silent when it bites. Passing the five characters "&amp;" sets
+// an attribute that a browser reads as the single character "&", because that
+// is what those five characters mean in an attribute. If what you have is a
+// literal value rather than source - a string that should arrive at the other
+// end byte for byte - encode it first with EscapeAttribute.
+//
+// Escaping is not sanitising, either. SetAttribute will set href to
+// "javascript:alert(1)" without complaint, because that is a valid attribute
+// value; which schemes to allow is the caller's decision.
 func (e *Element) SetAttribute(name, value string) error {
 	p, err := e.live()
 	if err != nil {

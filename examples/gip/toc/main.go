@@ -281,6 +281,9 @@ func (b *tocBuilder) onePass(src io.Reader, dst io.Writer) error {
 // "Configure &amp;amp; run", which is what an earlier version of this did.
 // Re-emitting source text as HTML round-trips, because a literal < could not
 // have been text in the first place.
+//
+// The id cannot be written through the same way, because it is being put inside
+// quotes this function chose. See the comment where it is written.
 func renderList(entries []entry) string {
 	if len(entries) == 0 {
 		return ""
@@ -321,7 +324,15 @@ func renderList(entries []entry) string {
 			sb.WriteString("</li>")
 		}
 
-		fmt.Fprintf(&sb, `<li><a href="#%s">%s</a>`, e.id, e.text)
+		// The id is escaped and the text is not, and the difference is the
+		// point. Both arrive as raw source, but the id is going into an
+		// attribute this function is quoting itself, and a single-quoted id in
+		// the document may hold a bare double quote: a heading with
+		// id='a" onmouseover="alert(1)' put a working event handler in the
+		// table of contents. Decoded first and escaped after, so an id of
+		// "a&amp;b" does not come out as "a&amp;amp;b".
+		fmt.Fprintf(&sb, `<li><a href="#%s">%s</a>`,
+			lolhtml.EscapeAttribute(stdhtml.UnescapeString(e.id)), e.text)
 		openLi = true
 	}
 

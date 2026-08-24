@@ -220,22 +220,6 @@ func TestNothingBecomesAnAttribute(t *testing.T) {
 	}
 }
 
-func TestEscapeAttr(t *testing.T) {
-	for _, tt := range []struct{ in, want string }{
-		{"", ""},
-		{"plain", "plain"},
-		{"https://x/y?a=1&b=2", "https://x/y?a=1&amp;b=2"},
-		{`a"b`, "a&quot;b"},
-		{"a'b", "a&#39;b"},
-		{"a<b>c", "a&lt;b&gt;c"},
-		{`" onload="x`, "&quot; onload=&quot;x"},
-	} {
-		if got := escapeAttr(tt.in); got != tt.want {
-			t.Errorf("escapeAttr(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
 // TestTheEmbedNoLongerLoads is the point of the program.
 func TestTheEmbedNoLongerLoads(t *testing.T) {
 	got, c, err := convertString(

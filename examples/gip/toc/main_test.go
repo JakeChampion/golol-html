@@ -279,3 +279,49 @@ func TestOnePassIsIdempotentInItsHeadings(t *testing.T) {
 		}
 	}
 }
+
+// TestAnIdCannotEscapeItsAttribute is a regression: the ids and the text both
+// arrive as raw source, and the id goes inside quotes this program chose. A
+// single-quoted id in the document may hold a bare double quote, and for a while
+// that put a working event handler in the table of contents.
+func TestAnIdCannotEscapeItsAttribute(t *testing.T) {
+	const in = `<div id="toc"></div>` +
+		`<h2 id='a" onmouseover="alert(1)'>Heading</h2>`
+	got, _, err := onePassString(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The parser decides what an attribute is. Searching the output for
+	// "onmouseover=" would fail on output that is correct, because the escaped
+	// text legitimately contains it.
+	var attrs []string
+	if _, err := lolhtml.RewriteString(got,
+		lolhtml.OnElement("a", func(e *lolhtml.Element) error {
+			for name := range e.Attributes() {
+				attrs = append(attrs, name)
+			}
+			return nil
+		})); err != nil {
+		t.Fatal(err)
+	}
+	if len(attrs) != 1 || attrs[0] != "href" {
+		t.Errorf("the contents link carries %v, want just href: %s", attrs, got)
+	}
+}
+
+// TestAnIdIsNotDoubleEscaped is the other half of the same rule: an id that
+// already holds a character reference must not gain another layer, or the
+// fragment stops matching the heading it points at.
+func TestAnIdIsNotDoubleEscaped(t *testing.T) {
+	got, _, err := onePassString(`<div id="toc"></div><h2 id="a&amp;b">Configure &amp; run</h2>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `href="#a&amp;b"`) {
+		t.Errorf("the id was not round-tripped: %s", got)
+	}
+	if !strings.Contains(got, `>Configure &amp; run</a>`) {
+		t.Errorf("the heading text was altered: %s", got)
+	}
+}

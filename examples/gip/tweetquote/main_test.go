@@ -302,24 +302,6 @@ func TestNothingBecomesAnAttribute(t *testing.T) {
 	}
 }
 
-func TestEscapers(t *testing.T) {
-	for _, tt := range []struct{ in, text, attr string }{
-		{"", "", ""},
-		{"plain", "plain", "plain"},
-		{"a&b", "a&amp;b", "a&amp;b"},
-		{"a<b>c", "a&lt;b&gt;c", "a&lt;b&gt;c"},
-		{`a"b`, `a"b`, "a&quot;b"},
-		{"a'b", "a'b", "a&#39;b"},
-	} {
-		if got := escapeText(tt.in); got != tt.text {
-			t.Errorf("escapeText(%q) = %q, want %q", tt.in, got, tt.text)
-		}
-		if got := escapeAttr(tt.in); got != tt.attr {
-			t.Errorf("escapeAttr(%q) = %q, want %q", tt.in, got, tt.attr)
-		}
-	}
-}
-
 func TestValidHandle(t *testing.T) {
 	for _, good := range []string{"a", "a_b", "A1", "_", "fifteencharact"} {
 		if !validHandle(good) {

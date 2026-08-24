@@ -239,30 +239,39 @@ func (c *checker) decide(t *lolhtml.EndTag) error {
 	// earlier version of this did, and which looks like valid output until you
 	// read it.
 	//
-	// The note is document-derived, and it is being assembled into HTML here
-	// rather than inserted as Text, so it is escaped here: escaping > is what
-	// stops it ending the comment.
-	return t.After("<!-- linktext: "+escapeForComment(note)+" -->", lolhtml.HTML)
+	// The note is document-derived and this is a comment being assembled, so it
+	// has to be made safe - but not by escaping. Character references are not
+	// decoded inside comment data, so an escaped ">" stays the four characters
+	// "&gt;" in the comment for anyone who reads it. What ends a comment is two
+	// hyphens, so what keeps one intact is not letting two sit together.
+	return t.After("<!-- linktext: "+commentSafe(note)+" -->", lolhtml.HTML)
 }
 
-// escapeForComment makes document-derived text safe inside a comment we are
-// building. Escaping > is the part that matters: without it a "-->" in the text
-// ends the comment and everything after it becomes markup.
-func escapeForComment(s string) string {
+// commentSafe makes document-derived text safe inside a comment being built,
+// without changing what it says.
+//
+// A space between any two hyphens is enough: it is "--" that ends a comment,
+// whether as "-->" or "--!>", so no two adjacent hyphens means no early end. A
+// leading ">" or "->" is the other rule - "<!-->" and "<!--->" are both empty
+// comments - and a space in front settles it. Everything else, including "&" and
+// "<", is left exactly as it arrived, because a comment is not parsed.
+func commentSafe(s string) string {
 	var b strings.Builder
-	for _, r := range s {
-		switch r {
-		case '&':
-			b.WriteString("&amp;")
-		case '<':
-			b.WriteString("&lt;")
-		case '>':
-			b.WriteString("&gt;")
-		default:
-			b.WriteRune(r)
+	b.Grow(len(s))
+	prevHyphen := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '-' && prevHyphen {
+			b.WriteByte(' ')
 		}
+		b.WriteByte(c)
+		prevHyphen = c == '-'
 	}
-	return b.String()
+	out := b.String()
+	if strings.HasPrefix(out, ">") || strings.HasPrefix(out, "->") {
+		return " " + out
+	}
+	return out
 }
 
 func isGeneric(text string) bool {
