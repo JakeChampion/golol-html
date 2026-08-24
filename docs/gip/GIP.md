@@ -494,18 +494,30 @@ Nothing gates the following. This is the shopping list.
 
 - ~~**Allocation complexity class.**~~ Closed: `alloc_test.go` pins the shape,
   asserting that passthrough and non-matching handlers do not allocate per byte
-  and that the per-match cost is exactly what it is, while letting the fixed
-  overhead drift with the toolchain.
+  and that the per-match cost is what it is, while letting the fixed overhead
+  drift with the toolchain. Twice repaired since, both times because it asserted
+  a number more precisely than the number can be measured: it skips under
+  `-asan`, whose allocator is not the one that ships, and it compares the slope
+  within 0.05 and the base within 8 rather than exactly. Any gate on a measured
+  quantity needs the same question asked of it - what is this number's noise, and
+  is the tolerance above it?
 - **Documentation accuracy.** Nothing checks that a doc comment matches
-  behaviour. Every one of the three claims found wrong so far was found by
-  hand.
+  behaviour. Every claim found wrong so far was found by hand, and the count is
+  now five: the three earlier ones, plus SetAttribute claiming its value "is
+  escaped as needed, so it is safe to pass untrusted input" when it rewrites
+  only the double quote, and the package doc saying it escapes the ampersand
+  too. Both were in the same area and disagreed with a third comment on
+  Attribute that had it right, which is the shape this failure takes - the same
+  fact stated in three places and only two of them maintained.
 - ~~**Error message quality.**~~ Closed: `errquality_test.go` collects every
   reachable error and checks that it is attributable to the package, free of
   formatting faults and dangling colons, and - where it concerns a caller's
   input - that it contains that input. A companion test fails if an exported
   error type has no case.
-- **Anything under `examples/`.** `go build ./...` compiles it; the test job
-  runs `go test -count=1 .` and never executes it.
+- ~~**Anything under `examples/`.**~~ Closed: the test, Rosetta, musl and
+  minimum-go legs run `go test -count=1 ./...`, so every program in `examples/`
+  is executed on every platform row rather than merely compiled. The cost of
+  that is a constraint on what may go there: fast, and no network.
 - **`-race` on darwin/amd64 and on both musl rows.** Rosetta and the container
   skip it, so the race detector runs on four of seven rows.
 - **Benchmarks on the musl and Rosetta rows.** They compile nowhere and run

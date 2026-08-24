@@ -5,5 +5,10 @@
 
 # rapid writes a timestamped fail file next to a failing property; useful while
 # reproducing, not worth committing.
-testdata/rapid/
+#
+# The pattern needs the ** because a pattern containing a slash is anchored to
+# the directory holding the .gitignore: plain "testdata/rapid/" matched only a
+# top-level one, and the only module that uses rapid is properties/, so it
+# covered nothing. Three .fail files reached a commit before this was noticed.
+**/testdata/rapid/
 .fuzzchain/

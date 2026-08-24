@@ -102,11 +102,81 @@ func TestTheMarkerCannotEndItsOwnComment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(got, "-->") != 1 {
-		t.Errorf("the comment was ended more than once: %s", got)
+	// Asked of the parser, not of the string. The comment data legitimately
+	// contains "<script>" - a comment is not parsed, so that is text inside it -
+	// and a search for the substring fails on output that is correct. What
+	// matters is that the document has one comment and no script element.
+	var comments, tags int
+	if _, err := lolhtml.RewriteString(got,
+		lolhtml.OnDocumentComment(func(*lolhtml.Comment) error {
+			comments++
+			return nil
+		}),
+		lolhtml.OnElement("script", func(*lolhtml.Element) error {
+			tags++
+			return nil
+		})); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(got, "<script>") {
-		t.Errorf("markup escaped the comment: %s", got)
+	if comments != 1 {
+		t.Errorf("the output has %d comments, want 1: %s", comments, got)
+	}
+	if tags != 0 {
+		t.Errorf("a script element escaped the comment: %s", got)
+	}
+}
+
+// TestCommentSafeDoesNotChangeWhatItSays: the alternative to breaking up the
+// hyphens is escaping, and escaping a comment corrupts it - character references
+// are not decoded inside comment data, so "&gt;" stays four characters. The rule
+// here is to touch only what could end the comment.
+func TestCommentSafeDoesNotChangeWhatItSays(t *testing.T) {
+	for _, tt := range []struct{ in, want string }{
+		{"", ""},
+		{"plain text", "plain text"},
+		{"a & b < c > d", "a & b < c > d"},
+		{"&amp; stays", "&amp; stays"},
+		{"a - b", "a - b"},
+		{"a -- b", "a - - b"},
+		{"a --> b", "a - -> b"},
+		{"a --!> b", "a - -!> b"},
+		{"a ---- b", "a - - - - b"},
+		{"-->", "- ->"},
+		{">leading", " >leading"},
+		{"->leading", " ->leading"},
+		{"trailing-", "trailing-"},
+		{"trailing--", "trailing- -"},
+	} {
+		if got := commentSafe(tt.in); got != tt.want {
+			t.Errorf("commentSafe(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestCommentSafeSurvivesAReparse asks the parser: whatever goes in, the comment
+// this program writes is one comment and holds the whole note.
+func TestCommentSafeSurvivesAReparse(t *testing.T) {
+	for _, note := range []string{
+		"a --> b", "-->", "--!>", "---", ">x", "->x", "a & b", "<script>x</script>",
+		"<!-- nested -->", "]]>", strings.Repeat("-", 10),
+	} {
+		doc := "<!-- linktext: " + commentSafe(note) + " -->"
+
+		var texts []string
+		if _, err := lolhtml.RewriteString(doc+"<p>after</p>",
+			lolhtml.OnDocumentComment(func(c *lolhtml.Comment) error {
+				texts = append(texts, c.Text())
+				return nil
+			})); err != nil {
+			t.Fatal(err)
+		}
+		if len(texts) != 1 {
+			t.Errorf("note %q produced %d comments: %s", note, len(texts), doc)
+			continue
+		}
+		if want := " linktext: " + commentSafe(note) + " "; texts[0] != want {
+			t.Errorf("note %q came back as %q, want %q", note, texts[0], want)
+		}
 	}
 }
 

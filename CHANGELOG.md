@@ -2,7 +2,52 @@
 
 ## Unreleased
 
+### Added
+
+- **`EscapeText` and `EscapeAttribute`.** The package documentation has told
+  callers for some time that building markup yourself makes you the serialiser,
+  and then handed them no serialiser. These are it: `EscapeText` is byte for byte
+  what the library applies for `ContentType` `Text` - asserted against the
+  library over a corpus rather than assumed - and `EscapeAttribute` adds both
+  quote characters so a value is safe inside quotes you chose yourself. Both
+  return their argument unchanged when there is nothing to escape, and allocate
+  exactly once when there is. Four properties in `properties/` state the
+  relationship over generated values rather than a table: that EscapeText is
+  ContentType Text, that an escaped value makes exactly one attribute between
+  either quote, that it reads back as what went in, and that EscapeAttribute is
+  EscapeText plus the two quotes.
+
+  They take literal values, not markup. Everything the library reports is raw
+  source with character references still encoded, so a value read from the
+  document must either be left raw and not escaped, or decoded first; escaping it
+  twice turns "Configure &amp; run" into "Configure &amp;amp; run". The
+  documentation says which of those applies where.
+
 ### Fixed
+
+- **`.gitignore` actually ignores rapid's failure files now.** The pattern was
+  `testdata/rapid/`, and a pattern containing a slash is anchored to the
+  directory holding the `.gitignore` - so it matched only a top-level
+  `testdata/rapid/`, and the only module that uses rapid is `properties/`. It has
+  therefore never ignored anything. Three `.fail` files reached a commit before
+  it was noticed, from deliberately breaking an escaper to check the new
+  properties fail.
+
+- **`SetAttribute` no longer claims to make untrusted input safe.** Its doc
+  comment said "the value is escaped as needed, so it is safe to pass untrusted
+  input", and the package documentation said it escaped the quote and the
+  ampersand. Measured, it rewrites the double quote and nothing else - which is
+  correct, because its argument is raw attribute-value source, the mirror of what
+  `Attribute` reports. `Attribute`'s own comment said so all along. The two now
+  agree, and `SetAttribute` says what the difference between source and a literal
+  value costs: passing the five characters "&amp;" sets an attribute a browser
+  reads as one "&".
+
+- **The table of contents in `examples/gip/toc` no longer carries an
+  injection.** It interpolated a heading's id straight into an href it quoted
+  itself, so a heading with `id='a" onmouseover="alert(1)'` produced a working
+  event handler in the contents. This is what the missing escaper cost in
+  practice, in a program written after the documentation warning existed.
 - **The handle-leak assertions no longer measure other tests' garbage.**
   `LiveHandles` counts the whole process, and a `Writer` dropped without being
   closed releases its handles from a `runtime.AddCleanup` callback that runs one
@@ -14,7 +59,6 @@
   across the measurement so it cannot collect what it is counting. Demonstrated:
   the same window measures -20 unsettled and 0 settled, and the assertions still
   report 30 leaked handles when the streaming panic fix is reverted.
-
 
 - **The allocation gate no longer demands an exactness the measurement cannot
   give.** It compared the per-match slope for equality with an integer and

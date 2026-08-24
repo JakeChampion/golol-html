@@ -283,10 +283,10 @@
 // # Building markup yourself makes you the serialiser
 //
 // Every path that writes a value for you escapes it. [Element.SetAttribute]
-// escapes the quote and the ampersand; [ContentType] Text escapes the three
-// characters that would be markup. The one path that escapes nothing is markup
-// you construct and pass as [HTML] - and that is the tempting route for turning
-// one element into another.
+// escapes the double quote, which is the character that could end the attribute;
+// [ContentType] Text escapes the three characters that would be markup. The one
+// path that escapes nothing is markup you construct and pass as [HTML] - and
+// that is the tempting route for turning one element into another.
 //
 // A document-derived value dropped into an attribute you wrote yourself is an
 // injection. A single-quoted attribute may contain a bare double quote, and it
@@ -308,12 +308,22 @@
 // <div> carrying whatever attributes you want, with every value escaped on the
 // way out, and the result is less code than assembling a string.
 //
-// When you do have to build markup - a wrapper, a template, a block of
-// pre-escaped content - remember that a double-quoted attribute value needs "&"
-// and the double quote escaped, and nothing else: "<" and ">" are legal there. In
-// element content it is the other way round. If the value came from the document
-// it is already raw source, so escaping it again double-escapes; see the section
-// on character references.
+// When you do have to build markup - a wrapper, a template, an element that does
+// not exist yet and so has no handler to hold it - [EscapeText] and
+// [EscapeAttribute] are the escaping SetAttribute and Text would have done for
+// you. EscapeText is byte for byte what the library applies for Text, which is
+// asserted against the library rather than assumed, so a value built into markup
+// keeps the guarantee it would have had:
+//
+//	e.Replace(`<div data-x="`+EscapeAttribute(title)+`">`+EscapeText(s)+`</div>`, HTML)
+//
+// Two things they do not do. They do not sanitise: a URL is still a URL after
+// escaping, so EscapeAttribute will happily produce a well-formed href of
+// "javascript:alert(1)", and deciding which schemes to allow is a separate job.
+// And they are not idempotent, because nothing that escapes "&" can be: a value
+// that came from the document is already raw source, so escaping it again turns
+// "&amp;" into "&amp;amp;". Decode it first, or leave it raw and do not escape
+// it; see the section on character references.
 //
 // # Reading an element's whole text
 //
@@ -418,6 +428,18 @@
 // text, so "<!--x-->" inside one of those is text and no handler sees it. Nor is
 // a stray end tag like "</bogus end tag>", nor a second <!DOCTYPE>. A nested
 // comment ends at the first "-->", leaving the remainder as text.
+//
+// Writing a comment has a rule of its own, and it is not escaping. Character
+// references are not decoded inside comment data, so [EscapeText] does not
+// protect a comment - it prevents the break-out and corrupts the text doing it:
+//
+//	SetText("a --> b")      // comment data is "a ", and " b -->" becomes text
+//	SetText("a --&gt; b")   // comment data is literally "a --&gt; b"
+//	SetText("a - -> b")     // comment data is "a - -> b", which is what was meant
+//
+// What ends a comment is two hyphens, so what keeps one intact is not letting two
+// hyphens sit together. A comment must also not begin with ">" or "->": "<!-->"
+// and "<!--->" are both empty comments, with everything after them left as text.
 //
 // # Cost
 //

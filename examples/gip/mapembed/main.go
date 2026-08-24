@@ -111,8 +111,11 @@ func (c *converter) convert(e *lolhtml.Element, src string, p place) error {
 		return err
 	}
 
-	w := firstNonEmpty(attr(e, "width"), c.width)
-	h := firstNonEmpty(attr(e, "height"), c.height)
+	// Decoded on the way in, because these come from the document as raw source
+	// and everything imgTag builds is escaped as a literal value. Reading them
+	// raw and escaping them again would turn a width of "1&amp;" into "1&amp;amp;".
+	w := firstNonEmpty(stdhtml.UnescapeString(attr(e, "width")), c.width)
+	h := firstNonEmpty(stdhtml.UnescapeString(attr(e, "height")), c.height)
 	alt := firstNonEmpty(c.alt, altText(p))
 
 	c.replaced++
@@ -141,46 +144,26 @@ func (c *converter) templateFits(p place) bool {
 	return true
 }
 
-// imgTag builds one <img>. Every interpolated value is escaped for a
-// double-quoted attribute, because inside a string that is inserted as HTML
-// nothing else will escape it.
+// imgTag builds one <img>. Every interpolated value goes through
+// lolhtml.EscapeAttribute, because inside a string that is inserted as HTML
+// nothing else will escape it, and every value here is a literal: the template
+// is the operator's, the alt text was decoded, and the dimensions were decoded
+// on the way in.
 func imgTag(src, alt, w, h string) string {
 	var sb strings.Builder
 	sb.WriteString(`<img src="`)
-	sb.WriteString(escapeAttr(src))
+	sb.WriteString(lolhtml.EscapeAttribute(src))
 	sb.WriteString(`" alt="`)
-	sb.WriteString(escapeAttr(alt))
+	sb.WriteString(lolhtml.EscapeAttribute(alt))
 	sb.WriteString(`" loading="lazy" decoding="async"`)
 	if w != "" {
-		fmt.Fprintf(&sb, ` width="%s"`, escapeAttr(w))
+		fmt.Fprintf(&sb, ` width="%s"`, lolhtml.EscapeAttribute(w))
 	}
 	if h != "" {
-		fmt.Fprintf(&sb, ` height="%s"`, escapeAttr(h))
+		fmt.Fprintf(&sb, ` height="%s"`, lolhtml.EscapeAttribute(h))
 	}
 	sb.WriteString(`>`)
 	return sb.String()
-}
-
-// escapeAttr escapes a value for the inside of a double-quoted attribute in
-// markup this program assembles itself.
-//
-// SetAttribute does this for an element a handler already holds, and needs
-// nothing from the caller. There is no equivalent for an element being built as
-// a string, so the third program in a row to build markup writes this function
-// again: hand-rolling an escaper is the wrong place for a caller to be, and
-// getting it slightly wrong is how a document-derived value becomes an
-// attribute.
-func escapeAttr(s string) string {
-	if !strings.ContainsAny(s, `&<>"'`) {
-		return s
-	}
-	return strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		`"`, "&quot;",
-		"'", "&#39;",
-	).Replace(s)
 }
 
 func fillTemplate(tmpl string, p place, w, h string) string {

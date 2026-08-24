@@ -213,49 +213,28 @@ func readName(text, handle string) string {
 // attribution is the markup added before the closing </blockquote>.
 //
 // Every value in it came out of the document, so every value is escaped for the
-// context it lands in. That escaping is written out by hand because the element
-// does not exist yet: SetAttribute can only reach an element a handler already
-// holds.
+// context it lands in. lolhtml.EscapeText and lolhtml.EscapeAttribute rather
+// than SetAttribute, because SetAttribute needs an element a handler is holding
+// and none of this exists yet. They take literal values, which is what these
+// are: the name was decoded to find it, the permalink was decoded to parse it,
+// and a handle is fifteen characters of [A-Za-z0-9_] or it was rejected.
 func (q *quoter) attribution(t *tweet) string {
 	var sb strings.Builder
 	sb.WriteString(`<footer class="tweetquote-attribution">`)
 
 	if t.name != "" {
 		sb.WriteString(`<span class="tweetquote-name">`)
-		sb.WriteString(escapeText(t.name))
+		sb.WriteString(lolhtml.EscapeText(t.name))
 		sb.WriteString(`</span> `)
 	}
 	if t.handle != "" {
 		fmt.Fprintf(&sb, `<a class="tweetquote-handle" href="https://twitter.com/%s" rel="noopener nofollow">@%s</a> `,
-			escapeAttr(t.handle), escapeText(t.handle))
+			lolhtml.EscapeAttribute(t.handle), lolhtml.EscapeText(t.handle))
 	}
 	fmt.Fprintf(&sb, `<a class="tweetquote-permalink" href="%s" rel="noopener nofollow">permalink</a>`,
-		escapeAttr(t.permalink))
+		lolhtml.EscapeAttribute(t.permalink))
 	sb.WriteString(`</footer>`)
 	return sb.String()
-}
-
-// escapeText escapes a value for a position where HTML text is expected. These
-// are the three characters the library escapes for ContentType Text, measured
-// rather than assumed.
-func escapeText(s string) string {
-	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
-}
-
-// escapeAttr escapes a value for the inside of a double-quoted attribute.
-//
-// This is the fourth program in this directory to write this function. There is
-// no equivalent in the library for an element being assembled as a string -
-// SetAttribute needs an element a handler already holds - so each one rolls its
-// own, which is the wrong place for a caller to be.
-func escapeAttr(s string) string {
-	return strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		`"`, "&quot;",
-		"'", "&#39;",
-	).Replace(s)
 }
 
 // statusURL reads a tweet permalink. Both hosts are accepted because an embed
