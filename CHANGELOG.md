@@ -202,6 +202,21 @@
   every row of the list in both directions, so the documentation cannot drift
   from the implementation.
 
+- **Building markup yourself makes you the serialiser.** Every path that writes a
+  value escapes it: `SetAttribute` escapes the quote and the ampersand,
+  `ContentType` `Text` escapes the three characters that would be markup. The one
+  path that escapes nothing is markup you construct and pass as `HTML` - and that
+  is the tempting route for turning one element into another. A single-quoted
+  attribute in the source may hold a bare double quote, so
+  `<iframe title='" onload=alert(1) x="'>` put through
+  `e.Replace(`+"`"+`<div data-x="`+"`"+`+title+...)` produces a div with a working
+  event handler taken from the document. The same value through `SetAttribute` is
+  inert. Now documented, with the recommendation that follows: change the element
+  with `SetTagName`, `SetAttribute` and `RemoveAttribute` rather than replacing
+  it, which does the same job with every value escaped and in less code. Pinned by
+  `contenttype_test.go`, which also records exactly what `SetAttribute` escapes
+  and what it correctly leaves.
+
 - **"Decide on the decoded form, rewrite the raw one."** The raw-source
   behaviour was documented as a fact, with `html.UnescapeString` mentioned for
   "when you need the decoded form". The security shape of it was not: a browser

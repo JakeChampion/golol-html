@@ -252,6 +252,41 @@
 //
 // [DocumentEnd.Append] is in order, like the other Append.
 //
+// # Building markup yourself makes you the serialiser
+//
+// Every path that writes a value for you escapes it. [Element.SetAttribute]
+// escapes the quote and the ampersand; [ContentType] Text escapes the three
+// characters that would be markup. The one path that escapes nothing is markup
+// you construct and pass as [HTML] - and that is the tempting route for turning
+// one element into another.
+//
+// A document-derived value dropped into an attribute you wrote yourself is an
+// injection. A single-quoted attribute may contain a bare double quote, and it
+// reads back as one:
+//
+//	<iframe title='" onload=alert(1) x="'>
+//
+//	e.Replace(`<div data-x="`+title+`">`, lolhtml.HTML)
+//	// <div data-x="" onload=alert(1) x=""></div>
+//
+// The div now has a working event handler that came from the document. The same
+// value through SetAttribute is inert:
+//
+//	e.SetAttribute("data-x", title)
+//	// data-x="&quot; onload=alert(1) x=&quot;"
+//
+// So prefer changing the element to replacing it. [Element.SetTagName],
+// SetAttribute and [Element.RemoveAttribute] between them turn an <iframe> into a
+// <div> carrying whatever attributes you want, with every value escaped on the
+// way out, and the result is less code than assembling a string.
+//
+// When you do have to build markup - a wrapper, a template, a block of
+// pre-escaped content - remember that a double-quoted attribute value needs "&"
+// and the double quote escaped, and nothing else: "<" and ">" are legal there. In
+// element content it is the other way round. If the value came from the document
+// it is already raw source, so escaping it again double-escapes; see the section
+// on character references.
+//
 // # Inserted content is not re-parsed
 //
 // Nothing a handler inserts is dispatched to any handler, including the one that
