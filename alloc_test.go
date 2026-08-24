@@ -198,6 +198,89 @@ func TestAllocationsPerMatchAreConstant(t *testing.T) {
 	}
 }
 
+// TestRegisteringSelectorsCostsLinearly, and a repeated selector costs less than
+// a distinct one because the parse is cached.
+//
+// The cache is deliberate - config.register parses each distinct selector once
+// and reuses it - and nothing tested it, so removing it would have broken nobody's
+// build. The saving is one allocation per duplicate registration, which is small
+// per selector and not small for a tool that registers one handler per rule in a
+// stylesheet.
+//
+// The assertions are a band rather than an exact number: build allocations
+// include slice growth, so the per-selector figure is not an integer. What is
+// asserted is the shape - linear, not quadratic - and that the cache saves
+// something that grows with the number of duplicates.
+func TestRegisteringSelectorsCostsLinearly(t *testing.T) {
+	build := func(opts []lolhtml.Option) int {
+		f := func() {
+			w, err := lolhtml.NewWriter(io.Discard, opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		f()
+		return int(testing.AllocsPerRun(allocRuns, f))
+	}
+
+	distinct := func(n int) []lolhtml.Option {
+		out := make([]lolhtml.Option, 0, n)
+		for i := 0; i < n; i++ {
+			out = append(out, lolhtml.OnElement(fmt.Sprintf(".c%d", i),
+				func(*lolhtml.Element) error { return nil }))
+		}
+		return out
+	}
+	same := func(n int) []lolhtml.Option {
+		out := make([]lolhtml.Option, 0, n)
+		for i := 0; i < n; i++ {
+			out = append(out, lolhtml.OnElement("div",
+				func(*lolhtml.Element) error { return nil }))
+		}
+		return out
+	}
+
+	const lo, hi = 100, 400
+
+	t.Run("linear in the number of selectors", func(t *testing.T) {
+		a, b := build(distinct(lo)), build(distinct(hi))
+
+		// Quadratic growth would be about sixteen times, not four.
+		if b > 6*a {
+			t.Errorf("%d selectors cost %d allocations and %d cost %d, which is worse "+
+				"than linear", lo, a, hi, b)
+		}
+		perSelector := float64(b-a) / float64(hi-lo)
+		if perSelector < 4 || perSelector > 8 {
+			t.Errorf("%.2f allocations per selector; the shape has changed enough to "+
+				"be worth looking at (%d at %d, %d at %d)", perSelector, a, lo, b, hi)
+		}
+	})
+
+	t.Run("a repeated selector is parsed once", func(t *testing.T) {
+		for _, n := range []int{lo, hi} {
+			d, s := build(distinct(n)), build(same(n))
+			if s >= d {
+				t.Errorf("n=%d: %d allocations for one selector registered %d times, "+
+					"%d for %d distinct ones; the parse cache is not saving anything",
+					n, s, n, d, n)
+			}
+		}
+
+		// And the saving grows with the number of duplicates, which is what
+		// makes it a cache rather than a constant.
+		savedLo := build(distinct(lo)) - build(same(lo))
+		savedHi := build(distinct(hi)) - build(same(hi))
+		if savedHi <= savedLo {
+			t.Errorf("the cache saved %d allocations at %d selectors and %d at %d; "+
+				"it should save more when there is more to save", savedLo, lo, savedHi, hi)
+		}
+	})
+}
+
 // TestAttributeIterationCostsPerAttribute: AttributeList and Attributes
 // materialise every name and value, so their cost is per attribute rather than
 // per element - four allocations each, measured. Reaching for one of them to read

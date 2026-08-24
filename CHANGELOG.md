@@ -154,6 +154,18 @@
   No disagreement was found. That is the result, not a lack of one: the claim is
   now checked rather than assumed.
 
+- **The cost of registering selectors is gated, and the parse cache now has a
+  test.** `config.register` parses each distinct selector once and reuses it,
+  which is deliberate and had no test - removing it would have broken nobody's
+  build. `alloc_test.go` now asserts that build allocations are linear in the
+  number of selectors rather than quadratic, that a repeated selector costs less
+  than a distinct one, and that the saving grows with the number of duplicates.
+  Verified by defeating the cache: both assertions fail, reporting "the parse
+  cache is not saving anything". The cost model is documented too - about five
+  allocations per distinct selector at build, and matching cost that grows with
+  the number registered on every element, since there is no index by tag or
+  class.
+
 - **Allocation complexity is gated.** The benchmarks measure six fixed shapes and
   nothing compared them across document sizes, so nothing would have noticed a
   path going from a constant number of allocations to one proportional to the
