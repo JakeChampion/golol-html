@@ -28,8 +28,30 @@ func (e *Element) TagName() string {
 	return takeStr(C.lol_html_element_tag_name_get(p))
 }
 
-// TagNamePreserveCase returns the tag name as spelled in the source document,
-// which matters for foreign content such as SVG's <linearGradient>.
+// TagNamePreserveCase returns the tag name exactly as spelled in the source
+// document: <DiV> reports "DiV" and <svg><LINEARGRADIENT> reports
+// "LINEARGRADIENT".
+//
+// As spelled, not as canonical, and for foreign content those differ. A parser
+// applies the SVG tag-name adjustment, so a browser's DOM holds "linearGradient"
+// however the page wrote it. Neither method here does that:
+//
+//	source                  TagName            TagNamePreserveCase
+//	<linearGradient/>       lineargradient     linearGradient
+//	<LINEARGRADIENT/>       lineargradient     LINEARGRADIENT
+//	<lineargradient/>       lineargradient     lineargradient
+//
+// against "linearGradient" from an independent parser in all three cases. So
+// comparing either result with a canonical SVG name is wrong for two spellings
+// out of three, and which one a page used is not a thing to rely on. Match with a
+// selector, which is case-insensitive and gets all three, or lower-case and map
+// through the adjustment table yourself.
+//
+// Nothing is wrong with the output: the source spelling is emitted unchanged and
+// a browser adjusts it on the way in, so a passthrough of <LINEARGRADIENT/> is
+// still a linearGradient. [Element.SetTagName] writes what it is given, so a
+// rewrite can normalise the spelling if it wants to. Pinned in
+// differential/tagname_test.go.
 func (e *Element) TagNamePreserveCase() string {
 	p, err := e.live()
 	if err != nil {
