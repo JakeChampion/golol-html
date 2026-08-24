@@ -33,6 +33,37 @@
 // For a document already in memory, [Rewrite] and [RewriteString] wrap the same
 // machinery.
 //
+// # An insertion can only go where the rewriter has not been yet
+//
+// The output is produced as the input is consumed, so a handler can insert
+// content only at a position the rewriter has not passed. That is obvious said
+// plainly and easy to walk into, because it constrains the shape of a rewrite
+// rather than any single call: whatever a rewrite decides has to be decided
+// before the position it wants to write to.
+//
+// Some things are therefore not one-pass rewrites at all. Head content derived
+// from the body is the common one - a rel=next link from a pagination nav, a
+// canonical URL from the page's own content, a table of contents built from the
+// headings - because the head has closed before the evidence arrives. Nothing
+// reports this: the handler that would insert simply never runs, or runs before
+// it knows what to say.
+//
+// Where the evidence and the position both exist, pick the position that is
+// after every place the evidence could be. That is usually an end tag rather
+// than a start tag, and the choice is not cosmetic: a program that decides at
+// the first element what to insert cannot know about a second candidate further
+// on, and the usual result is inserting and then also rewriting - two of the
+// thing it was meant to leave one of.
+//
+// Where they do not both exist, the answer is two passes, and the cost is worth
+// knowing before choosing it. A second pass roughly doubles the fixed allocation
+// count - measured at 27 allocations for one pass and 57 for two, a ratio that
+// does not grow with document size, since almost all of it is building the
+// rewriter. What does grow is the buffer: the document has to be held while the
+// first pass reads it, which is the part that stops it being a streaming
+// rewrite. examples/gip/pagenav does this, with the second pass behind a flag
+// so a caller who already knows the answer stays on one.
+//
 // # Handler lifetime
 //
 // The value passed to a handler is valid only until that handler returns.

@@ -277,6 +277,20 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **The package documentation names the ordering constraint that shapes every
+  rewrite.** Output is produced as input is consumed, so an insertion can only go
+  at a position the rewriter has not passed - which means a rewrite whose content
+  depends on evidence appearing after the position it writes to is not a one-pass
+  rewrite at all. Head content derived from the body is the common case: a
+  rel=next from a pagination nav, a canonical URL from the page's own content, a
+  table of contents from the headings. Nothing reports it, and three of the
+  programs in `examples/gip/` walked into a milder version of it - deciding at the
+  first element what to insert, then finding a second candidate later and both
+  inserting and rewriting. The new section says where to put the decision when
+  both the evidence and the position exist, and what two passes cost when they do
+  not: about double the fixed allocation count, flat in document size, plus a
+  buffer that is not.
+
 - **The numeric-reference fallback is not safe inside a script or a style, and
   both sections that describe it now say so.** `WithEncoding` documents that a
   character the target encoding cannot represent is emitted as a numeric
