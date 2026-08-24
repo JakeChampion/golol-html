@@ -226,6 +226,24 @@
   order they were written.
 
 ### Testing
+- **The documentation's code is compiled and run now, at least in part.** The
+  package carried about 140 lines of indented code inside doc comments and zero
+  example functions, so none of it was compiled, let alone executed.
+  `example_test.go` holds sixteen runnable transcriptions of the load-bearing
+  claims - the streaming shape, the insertion-order table, that matching is
+  decided before any handler runs, the `:not()` defect, the escaper equivalence,
+  the repeated-attribute split, the raw-text refusal, raw source in and out, the
+  document-end truncation, bogus comments, comment refusal, removal semantics, the
+  encoding fallback, strict mode, and text chunking. `go test` compiles them, runs
+  them and checks their output, so those claims cannot rot silently.
+
+  Two of the sixteen failed on the first run, and both times the transcription
+  was wrong rather than the documentation: an example of `:not()` dropped the
+  element the documented output depended on, and a strict-mode example used a
+  construct that does not trigger the guard. The documentation was right in both
+  cases, which is worth recording alongside the five claims that have been found
+  wrong by hand.
+
 - **`apisurface_test.go` fails if a test file does not so much as mention an
   exported name.** The crudest possible coverage check - a name appearing in the
   text of a test, not a claim that anything about it is asserted - and it found
