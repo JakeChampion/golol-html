@@ -4,6 +4,20 @@
 
 ### Fixed
 
+- **`WithESITags` said what it enabled but not what it does.** The option was
+  documented as enabling "parsing of ESI tags such as `<esi:include>`". What it
+  does is treat them as **void elements**. Without it an `esi:` element is an
+  ordinary container whose content runs to the next matching end tag - which,
+  since ESI is conventionally written unclosed, is the enclosing element's. So
+  replacing or removing an include takes that end tag with it:
+  `<span><esi:include src=a></span>` with a handler replacing the include gives
+  `<span>?` rather than `<span>?</span>`, with no error. A trailing slash does
+  not help, because HTML ignores it on an element that is neither void nor
+  foreign. `Element.CanHaveContent` is what reports the treatment. The existing
+  `TestESITags` said outright that it asserted no ESI-specific parsing and used
+  the self-closing form; it now pins the void treatment, the swallowed end tag,
+  the trailing slash, and that `<esi:remove>` keeps its content either way.
+
 - **`WithStrict(false)` is a sanitiser bypass, and its documentation called it
   "tolerance".** Strict mode is on by default, and the option said only that
   turning it off "trades that safety for tolerance of markup the rewriter cannot
