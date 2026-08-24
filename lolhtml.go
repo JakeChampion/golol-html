@@ -64,6 +64,65 @@
 // rewrite. examples/gip/pagenav does this, with the second pass behind a flag
 // so a caller who already knows the answer stays on one.
 //
+// # An end tag is a token, not a fact about the element
+//
+// HTML lets a document leave many end tags out. A list item is closed by the
+// next list item, a table cell by the next row, a paragraph by anything that
+// cannot be inside one. In a browser's tree those elements are closed exactly
+// like any other. Here there is no tree, and an element ends where the next end
+// tag token is - which, for an element whose own end tag was omitted, is the
+// enclosing element's.
+//
+// So the element the library hands a handler is bigger than the element the page
+// describes, and everything positioned at its end goes somewhere else. Measured
+// on <ul><li>a<li>b<li>c</ul>, one operation applied to every item:
+//
+//	Prepend  <ul><li>[1]a<li>[2]b<li>[3]c</ul>   correct
+//	Before   <ul>[1]<li>a[2]<li>b[3]<li>c</ul>  correct
+//	Append   <ul><li>a<li>b<li>c[1]</ul>        one survives, at the end of the list
+//	After    <ul><li>a<li>b<li>c</ul>[1]        one survives, outside the list
+//	SetInner <ul><li>[1]</ul>                   items b and c are gone
+//	Replace  <ul>[1]                            every item is gone
+//
+// And [Element.Remove] on the *first* item alone empties the whole list:
+//
+//	<ul><li>a<li>b<li>c</ul>  ->  <ul>
+//
+// No call returns an error and nothing in the output looks damaged, which is
+// what makes this the worst trap in the library. The same program on
+// <ul><li>a</li><li>b</li><li>c</li></ul> is correct in every row, so it works
+// on the pages written one way and destroys content on the pages written the
+// other.
+//
+// Positions taken from the start tag are safe: Prepend, Before, SetAttribute and
+// anything read from the element. Positions taken from the end are not.
+//
+// [Element.OnEndTag] has the same shape, and it is the one place the mismatch
+// can be detected. The handler still runs - against the tag that closed the
+// element, which has a different name:
+//
+//	tag := e.TagName()
+//	e.OnEndTag(func(t *lolhtml.EndTag) error {
+//		if t.Name() != tag {
+//			return nil // closed implicitly; this position is not this element's
+//		}
+//		return t.Before("<span class=\"marker\"></span>", lolhtml.HTML)
+//	})
+//
+// An end tag closes the nearest open element of its name, which is the element
+// itself, so a name that matches is this element's end tag and a name that
+// differs is not. Measured against what the source spells at that position, over
+// every shape in endtagposition_test.go.
+//
+// If nothing closes the element - <p>a<p>b at the top level - the handler does
+// not run at all, and Append and After produce nothing. That is at least a
+// silence rather than a wrong answer.
+//
+// What to do about the other branch is the rewrite's decision. Doing nothing is
+// honest. Where the rewrite must be right on both kinds of page, the answer is
+// the same as everywhere else evidence arrives too late: read the document
+// twice, and let the first pass find out which elements have their own end tags.
+//
 // # Handler lifetime
 //
 // The value passed to a handler is valid only until that handler returns.
