@@ -194,6 +194,24 @@ caught people out:
 
 An unusable label fails from `NewWriter`, with an `*EncodingError` naming it.
 
+## Strict mode
+
+Strict mode is on by default and should stay on. A handful of non-conforming
+shapes - a `<title>`, `<style>`, `<iframe>`, `<xmp>`, `<plaintext>`, `<noembed>`,
+`<noframes>` or `<noscript>` opening inside a `<select>`, or any of those but
+`<noframes>` inside a `<frameset>` - leave a streaming parser unable to tell
+whether what follows is markup or text. Nothing else triggers it.
+
+Neither setting is simply the safe one:
+
+- **strict on**: the rewrite fails from `Write` or `Close`, and whatever was
+  already emitted has reached the sink. Truncated response; discard it.
+- **strict off**: the rewrite succeeds and the content after the ambiguous tag
+  is treated as text, so no handler runs for it. For a sanitiser that is a
+  bypass - `<select><xmp><script>alert(1)</script>` comes out verbatim, with no
+  error and no handler invocation. The unseen region runs to the closing tag, or
+  to the end of the document if there is not one.
+
 ## Memory limits
 
 ```go

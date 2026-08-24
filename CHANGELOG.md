@@ -4,6 +4,22 @@
 
 ### Fixed
 
+- **`WithStrict(false)` is a sanitiser bypass, and its documentation called it
+  "tolerance".** Strict mode is on by default, and the option said only that
+  turning it off "trades that safety for tolerance of markup the rewriter cannot
+  fully reason about". What actually happens is that content after an ambiguous
+  tag is treated as raw text, so no handler runs for it: a rewriter that removes
+  every `<script>` does not remove the one in
+  `<select><xmp><script>alert(1)</script>`, and emits it verbatim with no error
+  and no handler invocation. The unseen region runs to the closing tag, or to
+  the end of the document if there is not one - and a document malformed enough
+  to trip the guard often has not got one. The other direction is not free
+  either: with strict on the rewrite fails mid-stream, leaving a truncated
+  response that the caller must discard. `WithStrict` now says all of this, with
+  the exact trigger set (eight tags inside `<select>`; the same minus
+  `<noframes>` inside `<frameset>`; nothing else), and `strict_test.go` pins it,
+  the bypass included.
+
 - **The README's graceful bail-out table was wrong about the default, and it is
   the dangerous direction.** It said that exceeding `MaxMemory` with
   `GracefulBailOut` off delivers 0 bytes and "the response is broken". That

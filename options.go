@@ -364,11 +364,43 @@ func WithEncoding(label string) Option {
 	return optionFunc(func(c *config) { c.encoding = label })
 }
 
-// WithStrict controls strict mode, which is on by default.
+// WithStrict controls strict mode, which is on by default. Leave it on.
 //
-// In strict mode the rewriter fails rather than continue when it cannot
-// determine the correct parsing context. Turning it off trades that safety for
-// tolerance of markup the rewriter cannot fully reason about.
+// The rewriter works on a token stream with no DOM to backtrack through, so a
+// few shapes of non-conforming markup leave it unable to tell whether what
+// follows is markup or raw text. In strict mode it stops; with strict off it
+// guesses, and a wrong guess means your handlers never see that content.
+//
+// The trigger is narrow and worth knowing exactly. Inside a <select>, a start
+// tag for one of
+//
+//	title  style  iframe  xmp  plaintext  noembed  noframes  noscript
+//
+// is ambiguous. So is any of them except <noframes> inside a <frameset>, where
+// <noframes> is legal. <script> is explicitly allowed in a <select>, and
+// <select>, <textarea>, <input> and <keygen> end the ambiguous context rather
+// than entering it. Nothing outside those two contexts triggers it.
+//
+// Neither mode is simply the safe one, which is why this is spelled out:
+//
+// With strict on, the rewrite fails from Write or Close with a *NativeError,
+// and whatever had already been emitted has reached the sink. That is a
+// truncated document, exactly as with a memory bail-out, so a caller has to
+// discard the response rather than serve what it has.
+//
+// With strict off, the rewrite succeeds and the content after the ambiguous tag
+// is treated as text, so no handler runs for it. For a rewriter that adds
+// attributes this means a missed region. For anything that removes content it
+// is a bypass: a sanitiser that strips every <script> does not strip this one,
+//
+//	<select><xmp><script>alert(1)</script>
+//
+// and emits it verbatim, with no error and no handler invocation to notice.
+// Turning strict off to get past a failure hands that through.
+//
+// The unseen region runs from the ambiguous tag to its closing tag, or to the
+// end of the input if there is not one - and a document that trips this guard is
+// already malformed, so often there is not.
 func WithStrict(strict bool) Option {
 	return optionFunc(func(c *config) { c.strict = strict })
 }
