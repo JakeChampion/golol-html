@@ -501,6 +501,12 @@ Nothing gates the following. This is the shopping list.
   within 0.05 and the base within 8 rather than exactly. Any gate on a measured
   quantity needs the same question asked of it - what is this number's noise, and
   is the tolerance above it?
+- ~~**Whether every exported name is exercised at all.**~~ Closed:
+  `apisurface_test.go` enumerates the exported declarations from the source and
+  fails if a test file does not so much as mention one. It is the crudest
+  possible check and it immediately found two: `WithGracefulBailOut`, which was
+  broken, and `HandlerError.Unwrap`. It also counts the surface, so an added
+  export shows up in a diff.
 - **Documentation accuracy.** Nothing checks that a doc comment matches
   behaviour. Every claim found wrong so far was found by hand, and the count is
   now five: the three earlier ones, plus SetAttribute claiming its value "is

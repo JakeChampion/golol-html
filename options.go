@@ -62,6 +62,13 @@ type config struct {
 	esiTags  bool
 	mem      MemorySettings
 
+	// graceful records a WithGracefulBailOut separately from mem, so that the
+	// two options compose whatever order they are given in. WithMemorySettings
+	// replaces the whole struct, so without this a WithGracefulBailOut before it
+	// was silently discarded - and the difference is whether a bail-out keeps
+	// the output produced so far or throws it away.
+	graceful bool
+
 	selectorRegs []selectorReg
 	docRegs      []docReg
 }
@@ -188,9 +195,10 @@ func (c *config) build(cr *core, builder *C.lol_html_rewriter_builder_t) (*C.lol
 		maxMem = C.size_t(c.mem.MaxMemory)
 	}
 	mem := C.lol_html_memory_settings_t{
-		preallocated_parsing_buffer_size:           C.size_t(c.mem.PreallocatedParsingBuffer),
-		max_allowed_memory_usage:                   maxMem,
-		graceful_bail_out_on_memory_limit_exceeded: C.bool(c.mem.GracefulBailOut),
+		preallocated_parsing_buffer_size: C.size_t(c.mem.PreallocatedParsingBuffer),
+		max_allowed_memory_usage:         maxMem,
+		// The union of the two ways of asking: see WithGracefulBailOut.
+		graceful_bail_out_on_memory_limit_exceeded: C.bool(c.mem.GracefulBailOut || c.graceful),
 	}
 
 	sinkH := handleOf(cr, &sinkCB{c: cr})
@@ -462,10 +470,22 @@ func WithMemorySettings(m MemorySettings) Option {
 	return optionFunc(func(c *config) { c.mem = m })
 }
 
-// WithGracefulBailOut is shorthand for setting GracefulBailOut on the current
-// MemorySettings. See MemorySettings.GracefulBailOut.
+// WithGracefulBailOut asks for graceful bail-out. See
+// MemorySettings.GracefulBailOut.
+//
+// It composes with [WithMemorySettings] in either order, which is worth saying
+// because WithMemorySettings takes a whole struct and therefore replaces
+// everything in it. The two are combined by union: graceful bail-out is on if
+// either this option or a MemorySettings asks for it, so
+//
+//	WithMemorySettings(MemorySettings{MaxMemory: n}), WithGracefulBailOut()
+//	WithGracefulBailOut(), WithMemorySettings(MemorySettings{MaxMemory: n})
+//
+// mean the same thing. Passing MemorySettings{GracefulBailOut: false} does not
+// turn off a WithGracefulBailOut given elsewhere; nothing does, because there is
+// no reason to ask for both.
 func WithGracefulBailOut() Option {
-	return optionFunc(func(c *config) { c.mem.GracefulBailOut = true })
+	return optionFunc(func(c *config) { c.graceful = true })
 }
 
 // WithESITags treats Edge Side Includes tags as void elements, so an

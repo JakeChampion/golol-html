@@ -47,6 +47,16 @@
   documentation says which of those applies where.
 
 ### Fixed
+- **`WithGracefulBailOut` before `WithMemorySettings` no longer does nothing.**
+  Every other option sets one field, so order cannot matter;
+  `WithMemorySettings` takes a whole struct and replaces every field in it,
+  including the graceful flag an earlier `WithGracefulBailOut()` had set. The
+  difference is not subtle once it bites: on a bail-out, the graceful path flushed
+  2021 bytes of already-rewritten output in one measured case and the strict path
+  flushed none. The flag is now kept separately and combined by union, so the two
+  compose in either order, and `MemorySettings{GracefulBailOut: false}` does not
+  turn off an explicit `WithGracefulBailOut` - there is no reason to ask for both.
+
 
 - **`.gitignore` actually ignores rapid's failure files now.** The pattern was
   `testdata/rapid/`, and a pattern containing a slash is anchored to the
@@ -216,6 +226,16 @@
   order they were written.
 
 ### Testing
+- **`apisurface_test.go` fails if a test file does not so much as mention an
+  exported name.** The crudest possible coverage check - a name appearing in the
+  text of a test, not a claim that anything about it is asserted - and it found
+  two gaps immediately. `WithGracefulBailOut` was never used in a test, only the
+  `MemorySettings` field it sets, which is why the bug above could exist;
+  `HandlerError.Unwrap` was never mentioned either, though it is the only way a
+  caller recovers the error their own handler returned. Both now have tests. The
+  same file counts the exported names, so adding one is a deliberate act visible
+  in a diff.
+
 - **`FuzzRewrite` compares what the handlers were told, not only what came out.**
   It checked output bytes, failure parity, handle counts and handler invocation
   counts - all four of which are identical whether a source location is absolute
