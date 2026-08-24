@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **The allocation-complexity gate no longer fails the AddressSanitizer build.**
+  `alloc_test.go` asserts how many times a rewrite allocates, and `-asan`
+  replaces the allocator with one that allocates on its own account: a path that
+  allocates once per match allocates four times per match under the sanitizer,
+  and setting an attribute goes from two to 19.84. The gate was therefore
+  measuring the sanitizer rather than the binding, and the `sanitize` job had
+  failed on every commit since the gate landed. The six allocation tests now
+  skip under `-asan`, behind a build constraint, and say why where they skip.
+  The sanitizer still runs the rest of the suite, which is what it is for.
+
 - **`:not()` is wrong for anything but a single simple selector.** Upstream's,
   and not fixable here, so it is documented and pinned instead. `:not()` is
   correct with one simple selector - `:not(div)`, `:not(.a)`, `:not([href])`,

@@ -32,6 +32,27 @@ import (
 // repetition buys nothing beyond smoothing the first-run warmup.
 const allocRuns = 8
 
+// requireRealAllocationCounts skips a test whose subject is how many times the
+// library allocates, when the build is one where that number is not the number
+// that ships.
+//
+// AddressSanitizer replaces the allocator, and the replacement allocates on its
+// own account: a rewrite that allocates once per match on a normal build
+// allocates four times per match under -asan, and setting an attribute goes
+// from 2 per match to 19.84. The slope this file pins is a design property of
+// the binding, and under -asan it is a property of the sanitizer instead.
+//
+// The skip is not a way to keep the suite quiet. These tests still run in the
+// three legs that count - plain, -race, and every platform in the matrix - and
+// -asan is there to find memory errors across the cgo boundary, which it still
+// does with these skipped.
+func requireRealAllocationCounts(t *testing.T) {
+	t.Helper()
+	if asanEnabled {
+		t.Skip("allocation counts under -asan are the sanitizer's, not the binding's")
+	}
+}
+
 // allocsFor reports the average allocations for one whole rewrite of in.
 func allocsFor(t *testing.T, in string, opts ...lolhtml.Option) int {
 	t.Helper()
@@ -78,6 +99,8 @@ func paraDoc(n int) string {
 // allocation cost before that change, and this is what would notice it coming
 // back.
 func TestPassthroughAllocationsDoNotGrowWithTheDocument(t *testing.T) {
+	requireRealAllocationCounts(t)
+
 	small := allocsFor(t, linkDoc(1))
 	large := allocsFor(t, linkDoc(400))
 
@@ -90,6 +113,8 @@ func TestPassthroughAllocationsDoNotGrowWithTheDocument(t *testing.T) {
 // TestUnmatchedContentAllocationsDoNotGrowWithTheDocument: a registered handler
 // that never fires must not cost anything per byte either.
 func TestUnmatchedContentAllocationsDoNotGrowWithTheDocument(t *testing.T) {
+	requireRealAllocationCounts(t)
+
 	opt := lolhtml.OnElement("a[href]", func(*lolhtml.Element) error { return nil })
 
 	small := allocsFor(t, paraDoc(1), opt)
@@ -110,6 +135,8 @@ func TestUnmatchedContentAllocationsDoNotGrowWithTheDocument(t *testing.T) {
 // none because it is two integers. A regression in any of those would leave
 // every output identical.
 func TestAllocationsPerMatchAreConstant(t *testing.T) {
+	requireRealAllocationCounts(t)
+
 	tests := []struct {
 		name   string
 		opt    lolhtml.Option
@@ -212,6 +239,8 @@ func TestAllocationsPerMatchAreConstant(t *testing.T) {
 // asserted is the shape - linear, not quadratic - and that the cache saves
 // something that grows with the number of duplicates.
 func TestRegisteringSelectorsCostsLinearly(t *testing.T) {
+	requireRealAllocationCounts(t)
+
 	build := func(opts []lolhtml.Option) int {
 		f := func() {
 			w, err := lolhtml.NewWriter(io.Discard, opts...)
@@ -287,6 +316,8 @@ func TestRegisteringSelectorsCostsLinearly(t *testing.T) {
 // a single attribute is the easy mistake, and this is the number that says how
 // much it costs.
 func TestAttributeIterationCostsPerAttribute(t *testing.T) {
+	requireRealAllocationCounts(t)
+
 	// Two documents with the same number of matches and a different number of
 	// attributes on each match.
 	doc := func(attrs int) string {
@@ -336,6 +367,8 @@ func TestAttributeIterationCostsPerAttribute(t *testing.T) {
 // one, so a rewrite that edits every match costs the same as one that only
 // inspects them. A regression here would not change any output.
 func TestSetAttributeCostsNoMoreThanReadingOne(t *testing.T) {
+	requireRealAllocationCounts(t)
+
 	doc := linkDoc(200)
 
 	read := allocsFor(t, doc, lolhtml.OnElement("a[href]", func(e *lolhtml.Element) error {
