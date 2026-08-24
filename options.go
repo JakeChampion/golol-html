@@ -231,8 +231,8 @@ func parseSelector(sel string) (*C.lol_html_selector_t, error) {
 }
 
 // A SelectorError reports a CSS selector that lol-html could not parse or does
-// not support. lol-html implements a subset of CSS selectors; see its README for
-// which.
+// not support. Selector is the value that was passed. See the package
+// documentation on which selectors are supported.
 type SelectorError struct {
 	Selector string
 	Message  string

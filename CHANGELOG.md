@@ -4,6 +4,23 @@
 
 ### Fixed
 
+- **`:not()` is wrong for anything but a single simple selector.** Upstream's,
+  and not fixable here, so it is documented and pinned instead. `:not()` is
+  correct with one simple selector - `:not(div)`, `:not(.a)`, `:not([href])`,
+  `:not(:first-child)`. Given a compound selector it negates each part separately
+  and requires all of them, which is the wrong half of De Morgan's law:
+  **`:not(div.a)` is evaluated as `:not(div):not(.a)`**. On a document of
+  `div.a div.b span.a span.b` it matches one element where CSS says three, and
+  `:not(div.a, span.b)` matches nothing at all. There is no error. A filter
+  written `OnElement(":not(a.trusted)")` therefore skips every anchor and
+  everything carrying that class, which for a filter is a hole rather than a
+  nuisance. The cause is `add_selector_components` in `selectors_vm/ast.rs`,
+  which flips the negation flag per component and adds each to a predicate whose
+  expressions are ANDed; upstream's own tests only ever put a single simple
+  selector inside `:not()`. `selector_test.go` asserts the wrong behaviour
+  deliberately, so a fix upstream fails the test and the documentation gets
+  corrected rather than rotting.
+
 - **`WithESITags` said what it enabled but not what it does.** The option was
   documented as enabling "parsing of ESI tags such as `<esi:include>`". What it
   does is treat them as **void elements**. Without it an `esi:` element is an
@@ -150,6 +167,18 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+
+- **The supported selector subset is written down.** `SelectorError` used to say
+  "lol-html implements a subset of CSS selectors; see its README for which",
+  which sends a caller to another project's documentation for something they need
+  before their code compiles. The subset is now listed, with the rule behind
+  almost all of it: a selector works if the rewriter can decide it when it sees
+  the start tag, so `:first-child` and `:nth-child(2n+1)` are in and
+  `:last-child`, `:only-child` and `:empty` are out. Every attribute operator
+  works, including the `i` and `s` case flags; `[style]` matches `style=""`; tag
+  and attribute names match case-insensitively. `selector_test.go` exercises
+  every row of the list in both directions, so the documentation cannot drift
+  from the implementation.
 
 - **"Decide on the decoded form, rewrite the raw one."** The raw-source
   behaviour was documented as a fact, with `html.UnescapeString` mentioned for
