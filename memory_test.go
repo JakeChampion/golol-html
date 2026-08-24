@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -246,5 +247,134 @@ func TestBailOutPoisonsTheWriter(t *testing.T) {
 		if strings.Contains(out.String(), "/after") {
 			t.Errorf("graceful=%v: content written after the bail-out reached the sink", graceful)
 		}
+	}
+}
+
+// memoryFloor is the smallest MaxMemory at which doc completes with the given
+// preallocation, found by bisection.
+func memoryFloor(t *testing.T, doc string, prealloc int) int {
+	t.Helper()
+
+	lo, hi := prealloc+1, 1<<21
+	for lo < hi {
+		mid := (lo + hi) / 2
+		w, err := lolhtml.NewWriter(io.Discard,
+			lolhtml.WithMemorySettings(lolhtml.MemorySettings{
+				PreallocatedParsingBuffer: prealloc, MaxMemory: mid}),
+			lolhtml.OnElement("div", func(e *lolhtml.Element) error {
+				_, _ = e.Attribute("class")
+				return nil
+			}))
+		if err != nil {
+			lo = mid + 1
+			continue
+		}
+		_, writeErr := w.Write([]byte(doc))
+		if closeErr := w.Close(); writeErr != nil || closeErr != nil {
+			lo = mid + 1
+			continue
+		}
+		hi = mid
+	}
+	return lo
+}
+
+// TestPreallocationCountsAgainstTheLimit. The knob reads like a performance
+// setting and behaves like a charge: whatever is reserved up front comes out of
+// MaxMemory and does not reduce the peak, so raising it raises the smallest limit
+// that works, roughly one for one.
+func TestPreallocationCountsAgainstTheLimit(t *testing.T) {
+	doc := `<div class="` + strings.Repeat("x", 3000) + `">t</div>`
+
+	base := memoryFloor(t, doc, 0)
+	for _, prealloc := range []int{16, 1024, 4096} {
+		floor := memoryFloor(t, doc, prealloc)
+		if floor <= base {
+			t.Errorf("preallocating %d lowered the floor from %d to %d; if that is "+
+				"now true, the documentation on PreallocatedParsingBuffer is wrong",
+				prealloc, base, floor)
+		}
+		// Additive within a slop of one buffer's worth: the point is the
+		// direction and the order of magnitude, not an exact figure that would
+		// pin an upstream implementation detail.
+		if floor > base+prealloc*2+1024 {
+			t.Errorf("preallocating %d raised the floor from %d to %d, which is more "+
+				"than the buffer accounts for", prealloc, base, floor)
+		}
+	}
+}
+
+// TestPreallocationNeverLoweredTheFloor over documents chosen to reallocate:
+// many small elements, deep nesting, a long attribute, a long text node. If one
+// of these ever gets cheaper with a buffer, the advice to leave it alone changes.
+func TestPreallocationNeverLoweredTheFloor(t *testing.T) {
+	for name, doc := range map[string]string{
+		"one long attribute":  `<div class="` + strings.Repeat("x", 4000) + `">t</div>`,
+		"many small elements": strings.Repeat(`<div class="a">t</div>`, 400),
+		"deep nesting":        strings.Repeat(`<div class="a">`, 200) + strings.Repeat(`</div>`, 200),
+		"long text":           `<div class="a">` + strings.Repeat("word ", 800) + `</div>`,
+	} {
+		without := memoryFloor(t, doc, 0)
+		with := memoryFloor(t, doc, 4096)
+		if with < without {
+			t.Errorf("%s: preallocating lowered the floor from %d to %d, so a buffer "+
+				"can pay for itself after all", name, without, with)
+		}
+	}
+}
+
+// TestAPreallocationEqualToTheLimitCannotWork. validate accepts it - only a
+// buffer larger than the limit is refused - and it leaves nothing for a selector
+// to match with.
+//
+// Which handler is registered decides whether it bites, and that is worth
+// pinning: with no handlers, or with document-level handlers only, nothing needs
+// the buffer and the same pair is fine. One OnElement handler and an element to
+// match is enough to fail.
+func TestAPreallocationEqualToTheLimitCannotWork(t *testing.T) {
+	settings := lolhtml.MemorySettings{PreallocatedParsingBuffer: 1024, MaxMemory: 1024}
+
+	w, err := lolhtml.NewWriter(io.Discard, lolhtml.WithMemorySettings(settings),
+		lolhtml.OnElement("p", func(*lolhtml.Element) error { return nil }))
+	if err != nil {
+		t.Fatalf("NewWriter refused equal values, so this test is obsolete: %v", err)
+	}
+	_, writeErr := w.Write([]byte(`<p>x</p>`))
+	closeErr := w.Close()
+	if writeErr == nil && closeErr == nil {
+		t.Error("a buffer equal to the limit matched a selector; if that is now " +
+			"true the documentation can drop the warning")
+	}
+
+	// The same pair with nothing to match is fine, which is why validate cannot
+	// simply refuse it.
+	for name, opts := range map[string][]lolhtml.Option{
+		"no handlers": {lolhtml.WithMemorySettings(settings)},
+		"a text handler": {lolhtml.WithMemorySettings(settings),
+			lolhtml.OnDocumentText(func(*lolhtml.TextChunk) error { return nil })},
+	} {
+		w, err := lolhtml.NewWriter(io.Discard, opts...)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if _, err := w.Write([]byte(`<p>x</p>`)); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		if err := w.Close(); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+
+	// The same limit with no preallocation is ample.
+	w2, err := lolhtml.NewWriter(io.Discard,
+		lolhtml.WithMemorySettings(lolhtml.MemorySettings{MaxMemory: 1024}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w2.Write([]byte(`<p>x</p>`)); err != nil {
+		t.Errorf("1024 with no preallocation failed: %v", err)
+	}
+	if err := w2.Close(); err != nil {
+		t.Errorf("1024 with no preallocation failed on close: %v", err)
 	}
 }

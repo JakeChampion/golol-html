@@ -27,8 +27,30 @@ func (f optionFunc) apply(c *config) { f(c) }
 // MemorySettings bounds the memory a single rewriter may use.
 type MemorySettings struct {
 	// PreallocatedParsingBuffer is the parsing buffer size reserved up front,
-	// in bytes. Zero means allocate nothing up front, at the cost of
-	// reallocations later.
+	// in bytes. Zero means allocate nothing up front.
+	//
+	// It counts against MaxMemory, and it does not lower the peak. Measured on
+	// four documents, the smallest MaxMemory that completes rises by about
+	// whatever is preallocated:
+	//
+	//	prealloc      0     16   1024   4096   8192
+	//	floor       832    848   1856   4928   9024
+	//
+	// and no document tried was cheaper with a buffer than without one -
+	// including ones chosen to reallocate a lot, such as four hundred small
+	// elements or two hundred levels of nesting. So against a limit this is
+	// overhead to budget for, not a saving.
+	//
+	// Setting it equal to MaxMemory is accepted - validate refuses only a buffer
+	// larger than the limit - and fails as soon as a selector has to match:
+	// 1024 and 1024 with one OnElement handler bails out on <p>x</p>. Without
+	// handlers, or with document-level handlers only, the same pair is fine,
+	// because nothing needs the buffer. With no preallocation the same limit
+	// completes every document tried.
+	//
+	// It buys fewer reallocations in the Rust allocator, which nothing here can
+	// see: the Go allocation count is identical at 0, 1024 and 8192. Leave it
+	// alone unless a profile of the C side says otherwise.
 	PreallocatedParsingBuffer int
 
 	// MaxMemory caps total rewriter memory in bytes. Zero means unlimited.
