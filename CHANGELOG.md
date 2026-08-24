@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **An unusable encoding label was reported without naming it.** A bad
+  `WithEncoding` value failed with `rewriter_build: Unknown character encoding
+  has been provided`, which leaves a caller whose encoding comes from
+  configuration to go and find which one. It is now an `*EncodingError`
+  carrying the label, matching `*SelectorError`, which has always named the
+  selector. Every way `lol_html_rewriter_build` can fail is about the encoding
+  - upstream returns `UnknownEncoding` or `NonAsciiCompatibleEncoding` and
+  nothing else - so the attribution is exact rather than a guess, and the
+  native message is kept verbatim in `Message` in case that ever changes.
+
 - **A panic inside a `StreamFunc` leaked a cgo handle per rewrite.** The
   streaming callback was the one `//export`ed callback that did not go through
   the shared panic-recovery path, so a panic in a streaming insertion unwound
@@ -26,6 +36,16 @@
   order they were written.
 
 ### Documentation
+
+- **The encoding surface is documented.** `WithEncoding` had one sentence. It
+  now says that handlers always see UTF-8 whatever the document is, that
+  inserted content is taken as UTF-8 and encoded on the way out, and that a
+  character the target cannot represent becomes a numeric character reference.
+  It also names the two behaviours that come from the WHATWG standard and
+  surprise people: the labels are aliases, so `iso-8859-1`, `latin1`, `ascii`
+  and `us-ascii` all select windows-1252 and bytes 0x80 to 0x9F decode as
+  printable characters; and UTF-16 is refused outright, because the rewriter
+  has to find ASCII markup in the byte stream. Both are now pinned by test.
 
 - **Neither `ContentType` is right inside a `<script>` or a `<style>`.** Those
   are raw text elements, where an HTML parser does not decode character

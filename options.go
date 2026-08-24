@@ -196,7 +196,15 @@ func (c *config) build(cr *core, builder *C.lol_html_rewriter_builder_t) (*C.lol
 	runtime.KeepAlive(c.encoding)
 
 	if rw == nil {
-		return nil, nativeErr("rewriter_build", cerr)
+		// Every way this call can fail is about the encoding: upstream's
+		// lol_html_rewriter_build_inner returns UnknownEncoding or
+		// NonAsciiCompatibleEncoding and nothing else, and everything after
+		// that point is infallible. So the label is named, which the native
+		// message never does - "Unknown character encoding has been provided"
+		// leaves a caller with a config-driven encoding to go and find which
+		// one. The native text is kept verbatim in Message, so if upstream ever
+		// grows a third failure mode the wording still says what happened.
+		return nil, &EncodingError{Label: c.encoding, Message: takeStr(cerr)}
 	}
 	return rw, nil
 }
@@ -226,6 +234,19 @@ type SelectorError struct {
 
 func (e *SelectorError) Error() string {
 	return "lolhtml: invalid selector " + quote(e.Selector) + ": " + e.Message
+}
+
+// An EncodingError reports a character encoding label that lol-html would not
+// accept, either because it is not a label in the WHATWG Encoding Standard or
+// because the encoding it names is not ASCII compatible. Label is the value that
+// was passed to WithEncoding.
+type EncodingError struct {
+	Label   string
+	Message string
+}
+
+func (e *EncodingError) Error() string {
+	return "lolhtml: invalid encoding " + quote(e.Label) + ": " + e.Message
 }
 
 // Handler registration -------------------------------------------------------
@@ -306,6 +327,30 @@ func OnDocumentEnd(fn func(*DocumentEnd) error) Option {
 // WithEncoding sets the character encoding of the input, as an encoding label
 // from the WHATWG Encoding Standard, such as "utf-8" or "windows-1252". The
 // default is "utf-8".
+//
+// The encoding is the document's, not your handlers'. Whatever it is, a handler
+// always sees UTF-8: the text of <p>caf\xe9</p> in windows-1252 arrives as the
+// Go string "café". Content you insert is taken as UTF-8 and encoded on the way
+// out, so the output is in the document's encoding throughout. A character the
+// target encoding cannot represent is emitted as a numeric character reference
+// rather than dropped or replaced, so "🎉" inserted into a windows-1252 document
+// comes out as "&#127881;".
+//
+// Two things about the labels are worth knowing, because both come from the
+// standard rather than from this package and both have surprised people:
+//
+// The labels are aliases, not encodings. "iso-8859-1", "latin1", "ascii" and
+// "us-ascii" all select windows-1252, which is what the standard requires and
+// what browsers do. So a document declared "iso-8859-1" is decoded with
+// windows-1252, and the two differ over 0x80 to 0x9F: in true Latin-1 those are
+// control characters, and here 0x80 is the euro sign.
+//
+// A non-ASCII-compatible encoding is refused. "utf-16le", "utf-16be" and
+// "utf-16" are all rejected, because the rewriter has to find ASCII markup in
+// the byte stream. Decode to UTF-8 before rewriting.
+//
+// An unusable label fails from NewWriter, not from Write, with an
+// [EncodingError] naming it.
 //
 // Building fails if the label is unknown or names a non-ASCII-compatible
 // encoding such as UTF-16, which lol-html cannot rewrite.

@@ -169,6 +169,31 @@ goroutine that called `Write` or `Close`.
 A `Writer` is not safe for concurrent use, but independent `Writer`s on separate
 goroutines are fine.
 
+## Encodings
+
+The default is UTF-8. For anything else, name it with a WHATWG encoding label:
+
+```go
+lolhtml.WithEncoding("windows-1252")
+```
+
+The encoding is the document's, not your handlers'. A handler always sees UTF-8,
+whatever the document is, and content you insert is taken as UTF-8 and encoded on
+the way out - so the output stays in the document's encoding, and a character the
+target cannot represent becomes a numeric character reference rather than being
+dropped.
+
+Two things follow from the standard rather than from this library, and both have
+caught people out:
+
+- **The labels are aliases.** `iso-8859-1`, `latin1`, `ascii` and `us-ascii` all
+  select windows-1252, which is what the standard requires and what browsers do.
+  Bytes 0x80 to 0x9F therefore decode as printable characters, not controls.
+- **UTF-16 is refused.** The rewriter has to find ASCII markup in the byte
+  stream. Decode to UTF-8 first.
+
+An unusable label fails from `NewWriter`, with an `*EncodingError` naming it.
+
 ## Memory limits
 
 ```go
