@@ -239,6 +239,37 @@
 //		...
 //	})
 //
+// # An attribute can appear twice
+//
+// The HTML parsing specification calls a repeated attribute a parse error and
+// requires the parser to keep the first and drop the rest, so a browser's DOM
+// never has two. lol-html keeps them all, and the API is split over what to do
+// about that:
+//
+//	<p a="x" a="v">
+//
+//	[a="x"] matches, [a="v"] does not     the first only
+//	Attribute("a")   is "x"               the first only
+//	SetAttribute("a", "z")                replaces the first, leaves a="v"
+//	RemoveAttribute("a")                  removes both
+//	Attributes(), AttributeList()         yield a="x" and a="v"
+//
+// Three of those act on the first, which is the copy a browser would have kept.
+// Two do not, and both for a reason. Removal takes every copy, because a filter
+// that left one behind would be a filter that does not filter. Iteration yields
+// every copy, because a program reporting on a document should be able to see
+// what is actually in it.
+//
+// The consequence for a reader is worth stating plainly: iterating attributes
+// shows you attributes that nothing downstream will act on. A tool extracting
+// microdata, or Open Graph tags, or anything else keyed on attribute names, has
+// to decide which copy counts - and the answer that matches what a browser does
+// is the first. examples/gip/microdata does that.
+//
+// The consequence for a rewrite is smaller but sharper: reading a value,
+// deciding from it, and writing it back is consistent, because all three use the
+// first. Reading through the iterator and writing back is not.
+//
 // # Character references are not decoded
 //
 // Text, comment text and attribute values are reported as raw source: the href

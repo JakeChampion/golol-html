@@ -141,6 +141,12 @@ func (e *Element) SourceLocation() SourceLocation {
 // case-insensitively. The second result is false if the attribute is absent,
 // which distinguishes it from an attribute present with an empty value.
 //
+// An element can carry the same attribute twice - the HTML parsing specification
+// calls that a parse error and requires a parser to drop all but the first, and
+// lol-html keeps them all. Where that shows up is set out under "An attribute
+// can appear twice" in the package documentation; the short version is that this
+// method returns the first, which is the one a browser would have.
+//
 // The value is raw source text, with character references left encoded: the
 // href of <a href="?a=1&amp;b=2"> is "?a=1&amp;b=2", not "?a=1&b=2". Use
 // html.UnescapeString from the standard library if you need the decoded form.
@@ -218,6 +224,11 @@ func (e *Element) SetAttribute(name, value string) error {
 
 // RemoveAttribute removes the named attribute. Removing an absent attribute is
 // not an error.
+//
+// Every copy goes, not just the first, which is deliberate: a filter that left a
+// second copy behind would be a filter that does not filter, since what a
+// browser drops on parse is not necessarily what the next parser in the chain
+// drops. See "An attribute can appear twice" in the package documentation.
 func (e *Element) RemoveAttribute(name string) error {
 	p, err := e.live()
 	if err != nil {
@@ -248,6 +259,9 @@ type Attribute struct {
 // Attributes iterates the element's attributes in source order, yielding
 // lowercased names. Use AttributeList when the original spelling matters.
 //
+// Like AttributeList, this yields repeats of the same name rather than the first
+// only - see "An attribute can appear twice" in the package documentation.
+//
 // The iterator must be consumed inside the handler; once the element is
 // detached it yields nothing.
 func (e *Element) Attributes() iter.Seq2[string, string] {
@@ -261,6 +275,12 @@ func (e *Element) Attributes() iter.Seq2[string, string] {
 }
 
 // AttributeList returns every attribute of the element, in source order.
+//
+// Every attribute means every one, including repeats of the same name that a
+// browser's parser would have dropped. That is the opposite of what Attribute
+// and the selectors do, and it is the choice that matters for anything reporting
+// on a document rather than rewriting it: see "An attribute can appear twice" in
+// the package documentation.
 //
 // This collects eagerly rather than iterating lazily because the underlying
 // lol-html iterator invalidates each attribute when the next is fetched, and

@@ -318,6 +318,18 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **The package documentation says what happens when an attribute appears
+  twice.** The HTML parsing specification calls a repeat a parse error and
+  requires a parser to keep the first and drop the rest; lol-html keeps them all,
+  and the API is split over which copy counts. Selectors, `Attribute`,
+  `HasAttribute` and `SetAttribute` act on the first - the copy a browser would
+  have kept. `Attributes` and `AttributeList` yield every copy. `RemoveAttribute`
+  removes every copy. Two of those halves were recorded in test comments in the
+  `properties` module; the selector half was not recorded anywhere, and it is the
+  one a rewrite is most likely to depend on unknowingly, since `[a="v"]` does not
+  match `<p a="x" a="v">`. The whole rule is now in one section, referenced from
+  each of the five methods, and pinned in `duplicate_test.go`.
+
 - **The package documentation names the ordering constraint that shapes every
   rewrite.** Output is produced as input is consumed, so an insertion can only go
   at a position the rewriter has not passed - which means a rewrite whose content
