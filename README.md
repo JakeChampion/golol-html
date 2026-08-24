@@ -184,7 +184,8 @@ lolhtml.OnElement("img", func(e *lolhtml.Element) error {
 **A failed rewriter cannot be reused.** A handler returning an error stops the
 rewrite; the error surfaces from the `Write` or `Close` that was running, wrapped
 in a `*HandlerError` you can unwrap. lol-html cannot resume afterwards, so the
-`Writer` is poisoned and later writes return `ErrPoisoned`. A handler that panics
+`Writer` is poisoned and every later `Write` and the `Close` return `ErrPoisoned`
+wrapped around that first error, so `errors.Is` still reaches it. A handler that panics
 does not unwind through Rust: it is caught at the boundary and re-raised on the
 goroutine that called `Write` or `Close`.
 

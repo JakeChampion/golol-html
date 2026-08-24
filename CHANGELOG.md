@@ -25,12 +25,21 @@
   comment-closing sequence; the script and style equivalent was recorded in a test
   comment as "the model for what the script context is missing" and is now
   implemented. `Element.Prepend`, `Element.Append`, `Element.SetInnerContent` and
-  `EndTag.Before` on a `script`, `style`, `textarea` or `title`, with
-  `ContentType` `HTML`, return it when the content would end that element. The
+  `EndTag.Before` on any of the nine elements that hold raw text and can be
+  closed from inside - `script`, `style`, `textarea`, `title`, `iframe`,
+  `noembed`, `noframes`, `noscript`, `xmp` - with `ContentType` `HTML`, return it
+  when the content would end that element. `plaintext` is the tenth raw-text
+  element and is deliberately not covered: nothing closes it. The
   rule is the tokenizer's, measured against x/net/html rather than read off the
   specification, so `</scriptx` is accepted and `</script foo>` is not, and the
   end of the content counts as a terminator because what follows an insertion is
   the rest of the document.
+
+  Not checked either: `TextChunk.Before`, `TextChunk.After`, `TextChunk.Replace`
+  and every streaming insertion. A text chunk has no way to name the element it
+  is inside and a streaming write can split a closing tag across two calls, so
+  neither has anything to look up; `TestWhatIsStillNotChecked` pins where the
+  check stops.
 
   Not checked: `Before`, `After` and `Replace`, which write outside the element,
   where a closing tag is ordinary markup; `ContentType` `Text`, which escapes the
@@ -64,6 +73,17 @@
   documentation says which of those applies where.
 
 ### Fixed
+- **A poisoned `Writer` now says why it is poisoned.** lol-html cannot resume
+  after an error, so the first failure is reported from whichever call was
+  running and every later `Write` and the `Close` refuse. Those refusals returned
+  the bare `ErrPoisoned` sentinel, which names a state and not a cause - so a
+  caller writing the ordinary Go shape, write and then check `Close`, learned that
+  something had failed and never what. `ErrPoisoned` is now wrapped around the
+  first error, so `errors.Is` and `errors.As` reach the handler error or the
+  destination-writer error underneath it however late they are asked. A handler
+  panic is the exception: it poisons the `Writer` on its way to the caller without
+  leaving an error, and the sentinel then stands alone.
+
 - **`WithGracefulBailOut` before `WithMemorySettings` no longer does nothing.**
   Every other option sets one field, so order cannot matter;
   `WithMemorySettings` takes a whole struct and replaces every field in it,
