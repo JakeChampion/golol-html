@@ -244,17 +244,26 @@ func (e *Element) After(content string, ct ContentType) error {
 }
 
 // Prepend inserts content as the element's first child.
+//
+// Calling this after Remove still emits the content, without the element's tags
+// around it; see the package documentation on removal.
 func (e *Element) Prepend(content string, ct ContentType) error {
 	return e.content(content, ct, "element_prepend", cfElementPrepend)
 }
 
 // Append inserts content as the element's last child.
+//
+// Calling this after Remove still emits the content, without the element's tags
+// around it; see the package documentation on removal.
 func (e *Element) Append(content string, ct ContentType) error {
 	return e.content(content, ct, "element_append", cfElementAppend)
 }
 
 // SetInnerContent replaces everything inside the element, leaving its tags in
 // place.
+//
+// Calling this after Remove still emits the content, without the element's tags
+// around it; see the package documentation on removal.
 func (e *Element) SetInnerContent(content string, ct ContentType) error {
 	return e.content(content, ct, "element_set_inner_content", cfElementSetInnerContent)
 }
@@ -273,6 +282,11 @@ func (e *Element) content(content string, ct ContentType, op string, fn contentO
 }
 
 // Remove removes the element and everything inside it.
+//
+// Handlers still run for the content being removed, and their edits are
+// discarded with it. Content inserted inside the element after this call is not
+// discarded, which is a corner worth reading about: see the package
+// documentation on removal.
 func (e *Element) Remove() {
 	if p, err := e.live(); err == nil {
 		C.lol_html_element_remove(p)
@@ -281,13 +295,19 @@ func (e *Element) Remove() {
 
 // RemoveAndKeepContent removes the element's tags but keeps its children, so
 // <b>hi</b> becomes hi.
+//
+// Appending after this is well defined, and puts the content after the children
+// that were kept.
 func (e *Element) RemoveAndKeepContent() {
 	if p, err := e.live(); err == nil {
 		C.lol_html_element_remove_and_keep_content(p)
 	}
 }
 
-// IsRemoved reports whether the element has been removed by a handler.
+// IsRemoved reports whether the element has been removed by a handler, whether
+// by Remove or by RemoveAndKeepContent. It does not distinguish them, so it
+// cannot be used to decide whether inserting inside the element is safe - only
+// whether the element itself will be emitted.
 func (e *Element) IsRemoved() bool {
 	p, err := e.live()
 	if err != nil {

@@ -15,6 +15,22 @@
 
 ### Documentation
 
+- **Removal suppresses output, not handler calls, and one corner of it is
+  wrong.** A text handler still sees the text of a removed element and an
+  element handler still runs for its descendants; their edits are discarded,
+  but a handler that accumulates has to notice for itself. Separately, removal
+  decides the fate of the inner content when it is called, so `e.Remove()`
+  followed by `e.Append(...)` emits the appended content with the element's
+  tags gone from around it, while appending first and removing second discards
+  it. The two orders disagree, and when two handlers share a selector the order
+  is decided by which option was written first: one removing a `<script>` and
+  one appending inside it will, in one of the two orders, emit the appended
+  content as document markup. `Element.IsRemoved` cannot be used to guard
+  against it, because it is also true after `RemoveAndKeepContent`, where
+  appending is well defined. Now documented and pinned by `removal_test.go`;
+  the fix belongs upstream, where the flag that distinguishes the two removals
+  is not exposed through the C API.
+
 - **Handler order is now stated.** Handlers of one kind run in registration
   order and each sees the previous one's edits. Between kinds, a
   selector-associated handler always runs before a document-level one on the
