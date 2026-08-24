@@ -23,15 +23,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `rate` is executions per minute, measured from nightly runs, and is
+          # what converts the requested minutes into an execution count. See
+          # the Fuzz step for why this is counted rather than timed.
           - target: FuzzRewrite
             asan: false
+            rate: 1700000
           - target: FuzzOperations
             asan: false
+            rate: 2000000
           # FuzzOperations is the one that drives the cgo boundary, so it is
           # also the one worth the cost of running under AddressSanitizer.
+          # Roughly 12x slower: 2.6M executions a night against 31.8M without.
           - target: FuzzOperations
             asan: true
+            rate: 170000
     runs-on: ubuntu-24.04
+    # Counted rather than timed, so duration now depends on runner speed. This
+    # bounds a pathologically slow runner instead of letting it burn six hours.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
 
@@ -62,9 +72,23 @@ jobs:
             flags="-asan"
           fi
 
+          # Counted, not timed. A duration gives the fuzzing coordinator a
+          # deadline context; when it expires, workers are mid-RPC and the
+          # cancellation surfaced as "--- FAIL: context deadline exceeded".
+          # That was not occasional - it happened on every job on every one of
+          # the first three scheduled nights, so every run ended in a failure
+          # that had to be suppressed, which is no way to read a signal.
+          #
+          # `-fuzztime Nx` stops on an execution count and creates no deadline,
+          # so there is no timer for shutdown to race. The count comes from
+          # each target's measured throughput, so a night still takes about the
+          # requested number of minutes.
+          execs=$(( ${{ matrix.rate }} * minutes ))
+          echo "fuzzing ${{ matrix.target }} for ${execs} executions (~${minutes}m)"
+
           set +e
           go test $flags -run '^$' -fuzz '^${{ matrix.target }}$' \
-            -fuzztime "${minutes}m" . 2>&1 | tee fuzz.log
+            -fuzztime "${execs}x" . 2>&1 | tee fuzz.log
           rc=${PIPESTATUS[0]}
           set -e
           [ "$rc" -eq 0 ] && exit 0
@@ -80,9 +104,13 @@ jobs:
           # failing input is always written to testdata/fuzz/, so no crasher
           # plus that message means the shutdown raced. Anything else stays a
           # failure.
+          # Retained as a safety net, but counted fuzzing should never hit it.
+          # If this fires, the change above did not work and it needs looking
+          # at rather than living behind a warning.
           if grep -q 'context deadline exceeded' fuzz.log && [ ! -d testdata/fuzz ]; then
-            echo "::warning title=Fuzzing shutdown raced::${{ matrix.target }} hit Go's" \
-                 "shutdown deadline with no failing input; corpus is still saved."
+            echo "::warning title=Unexpected shutdown race::${{ matrix.target }} hit a" \
+                 "deadline despite counted fuzzing, with no failing input. This is not" \
+                 "supposed to be reachable any more - investigate."
             exit 0
           fi
 
