@@ -216,6 +216,24 @@
   order they were written.
 
 ### Testing
+- **`FuzzRewrite` compares what the handlers were told, not only what came out.**
+  It checked output bytes, failure parity, handle counts and handler invocation
+  counts - all four of which are identical whether a source location is absolute
+  or relative to the current `Write`, whether a tag name is reported in the wrong
+  case, or whether an attribute is read from the wrong element. What a handler
+  sees is the library's other interface and nothing compared it across chunkings.
+  Each structural handler now records what it was given and the two runs' records
+  are compared. Text is deliberately excluded: chunk boundaries do split text
+  nodes, so its record would differ legitimately.
+
+- **`sourceloc_test.go` pins the promise that made that gap matter.**
+  `SourceLocation` is documented as "counted from the first byte fed to the
+  rewriter", which anything extracting by slicing its own copy of the input
+  depends on. Ten documents at five chunk sizes, checking that element, comment
+  and doctype locations are identical however the input arrives, that slicing the
+  document at them returns the unit, and that text chunk locations stay absolute,
+  contiguous and in order even though the chunks themselves move.
+
 
 - **Two properties for attribute rewriting, and two for duplicates.**
   `properties/attributes_test.go` states four claims over generated documents:
