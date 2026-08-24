@@ -15,6 +15,25 @@
 
 ### Documentation
 
+- **Neither `ContentType` is right inside a `<script>` or a `<style>`.** Those
+  are raw text elements, where an HTML parser does not decode character
+  references, and the escaping choice does not consult the element it is
+  landing in. `Text` therefore produces content that is inert but corrupted:
+  `if (a < b)` becomes `if (a &lt; b)`, which is valid HTML, returns no error,
+  and throws a syntax error in the browser. `HTML` inserts the text verbatim,
+  so a `</script>` inside a JavaScript string literal ends the element and
+  whatever follows it becomes document markup. There is no combination that
+  makes arbitrary text safe there, because escaping it correctly is a
+  JavaScript transformation rather than an HTML one. Now documented, with what
+  to do instead, and pinned by `contenttype_test.go`. `Comment.SetText`, which
+  refuses a comment-closing sequence, is the model for what the script context
+  is missing.
+
+- **`Text` escapes exactly `<`, `>` and `&`.** A quote, an apostrophe, a
+  backtick and a NUL pass through. The NUL is emitted as a literal zero byte,
+  so a value containing one does not survive a round trip: any parser reading
+  the output replaces it with U+FFFD.
+
 - **Removal suppresses output, not handler calls, and one corner of it is
   wrong.** A text handler still sees the text of a removed element and an
   element handler still runs for its descendants; their edits are discarded,
