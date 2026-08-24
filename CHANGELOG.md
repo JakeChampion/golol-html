@@ -62,6 +62,19 @@
   nothing else - so the attribution is exact rather than a guess, and the
   native message is kept verbatim in `Message` in case that ever changes.
 
+- **A destination that reported a short write silently truncated the output.**
+  The sink discarded the count `io.Writer` returns. A destination accepting five
+  bytes of every chunk delivered 14 bytes of a 213-byte document, and both
+  `Write` and `Close` reported success; one accepting nothing delivered nothing,
+  still with no error. `io.Writer`'s contract says an implementation returning
+  `n < len(p)` must also return an error, and not every implementation obeys it -
+  which is why `io.Copy` checks. The count is now checked and `io.ErrShortWrite`
+  reported, the same error `io.Copy` reports. A destination that returns its own
+  error alongside a short count keeps that error rather than having it replaced.
+  The seeded fault scenarios in `faults_test.go` now include short writes, and
+  their assertion is stronger: the error reported has to be one of the faults
+  actually injected rather than merely non-nil.
+
 - **A panic inside a `StreamFunc` leaked a cgo handle per rewrite.** The
   streaming callback was the one `//export`ed callback that did not go through
   the shared panic-recovery path, so a panic in a streaming insertion unwound
