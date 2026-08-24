@@ -112,6 +112,16 @@
 
 ### Documentation
 
+- **Inserted content is not re-parsed, and that cuts both ways.** Nothing a
+  handler inserts is dispatched to any handler, including the one that inserted
+  it. Two conveniences follow - there is no loop hazard, so a handler inserting
+  an element matching its own selector fires once, and an accumulator is safe, so
+  a text handler collecting a heading's text does not also collect a label an
+  element handler prepended. One hazard follows too: a rewrite that removes every
+  `<script>` does not remove one another of its own handlers inserted, in either
+  registration order. Anything inserted has to be safe before it goes in. Now
+  documented and pinned by `insertion_test.go`.
+
 - **When a `StreamFunc` runs is now stated.** "On demand" reads as lazy, and if
   it were, a streaming insertion could compute its content from the whole
   document. It is not: the closure runs when its content is emitted, which is

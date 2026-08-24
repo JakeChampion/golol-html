@@ -65,6 +65,31 @@
 // a unit before anything else does has to register a selector-associated
 // handler, not a document-level one.
 //
+// # Inserted content is not re-parsed
+//
+// Nothing a handler inserts is dispatched to any handler, including the one that
+// inserted it and including handlers on other selectors in the same rewrite. It
+// goes into the output as written.
+//
+// Two of the consequences are conveniences. There is no loop hazard: a handler
+// that inserts an element matching its own selector fires once. And an
+// accumulator is safe, so a text handler collecting a heading's text does not
+// also collect a label an element handler prepended, which is what lets a
+// rewrite read and write the same element without compounding.
+//
+// The third is a hazard. A rewrite that removes every <script> does not remove
+// one that another of its own handlers inserted:
+//
+//	lolhtml.OnElement("script", func(e *lolhtml.Element) error { e.Remove(); return nil }),
+//	lolhtml.OnElement("div", func(e *lolhtml.Element) error {
+//		return e.Prepend(untrusted, lolhtml.HTML)   // never seen by the remover
+//	})
+//
+// The document's own scripts go; the inserted one stays, in either registration
+// order. Anything you insert has to be safe before it goes in - use [Text] for
+// values you did not author, and see the section on inserting into a script for
+// where even that is not enough.
+//
 // # Removal suppresses output, not handler calls
 //
 // [Element.Remove] takes the element and its content out of the output. It does
