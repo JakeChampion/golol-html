@@ -1,0 +1,256 @@
+Absolutise every relative link in a page against a supplied base URL.
+Strip utm_* and other tracking parameters from every href and src.
+Inject a Content-Security-Policy nonce into every inline script and style.
+Add subresource integrity attributes to script and link tags from a manifest.
+Rewrite http:// subresources to https:// and report what was upgraded.
+Add rel="noopener noreferrer" to every link that targets a new window.
+Add loading="lazy" and decoding="async" to images below a chosen index.
+Generate a srcset from a single src using a width list and an image CDN.
+Report every image that has no width and height attribute.
+Build a table of contents from the heading elements and insert it at a marker.
+Assign stable slug ids to headings, deduplicating collisions.
+Number headings hierarchically and rewrite their text in place.
+Collect every anchor's text and target into a link report.
+Find links whose text is "click here" or "read more" and flag them.
+Strip every comment from a document except conditional ones you keep.
+Remove all script elements and report how many bytes that saved.
+Remove inline event handler attributes such as onclick and onload.
+Strip style attributes and collect them into a stylesheet you emit at the end.
+Rename classes according to a CSS-modules style mapping.
+Report which selectors in a stylesheet never matched the document.
+Convert every iframe to a click-to-load placeholder.
+Add sandbox and referrerpolicy attributes to third-party iframes.
+Replace YouTube embeds with a lightweight thumbnail-and-play placeholder.
+Replace map embeds with a static image and a link.
+Rewrite tweet embeds into plain blockquotes with attribution.
+Inject a cookie-consent banner before the closing body content.
+Gate third-party scripts behind a consent flag by rewriting their type.
+Inject an analytics beacon and prove no other markup changed.
+Insert an environment badge on any page served from staging.
+Add a noindex robots meta to pages matching a path pattern.
+Enforce a single canonical link element, replacing or inserting as needed.
+Inject hreflang alternates from a locale table.
+Add rel next and prev links from pagination metadata.
+Emit schema.org breadcrumb JSON-LD derived from a breadcrumb nav.
+Extract every JSON-LD block and validate its shape.
+Extract microdata attributes into a flat key-value report.
+Extract Open Graph and Twitter card metadata and report what is missing.
+Inject Open Graph tags computed from the page's own first image and heading.
+Add a theme-color meta and a dark-mode stylesheet link.
+Inject a print stylesheet and page-break hints before every h2.
+Fix a missing or wrong viewport meta tag.
+Fix a missing charset declaration, honouring an existing one.
+Inject preconnect and dns-prefetch hints for every third-party origin seen.
+Inject preload hints for fonts referenced by a stylesheet you are given.
+Add defer to every blocking script that has no inline body.
+Split scripts into module and nomodule pairs.
+Inject an import map before the first module script.
+Report the total weight of scripts, styles and images referenced.
+Enforce a DOM depth budget and report the deepest path found.
+Enforce an HTML size budget while streaming, failing early when exceeded.
+Count elements by tag name and print a histogram.
+Report how many times each registered handler fired.
+Compute a rolling hash of the rewritten output as it streams.
+Prove passthrough is byte-identical over a corpus of documents.
+Prove a rewrite is idempotent by running it twice.
+Prove the output does not depend on how the input was chunked.
+Convert a document to plain text, preserving block boundaries.
+Convert a document to Markdown for the subset of tags you support.
+Count words and estimate reading time, ignoring script and style content.
+Compute keyword frequency, excluding boilerplate regions.
+Extract the first paragraph as a summary.
+Extract every table into CSV, handling colspan.
+Convert tables to JSON keyed by header cells.
+Report tables whose header cells lack scope or id association.
+Convert definition lists into a glossary and link terms in the body.
+Link glossary terms on first occurrence only, without touching existing links.
+Highlight search terms in text without ever injecting markup.
+Redact email addresses and phone numbers in text and attributes.
+Linkify bare URLs in text nodes without breaking existing anchors.
+Linkify @mentions and #hashtags with correct escaping.
+Expand emoji shortcodes in text content.
+Apply typographic quotes and dashes to prose but not to code.
+Prevent single-word widows in headings using a non-breaking space.
+Collapse insignificant whitespace while leaving pre and textarea alone.
+Minify a document conservatively and diff the parsed result against the input.
+Expand a server-side include marker into fetched content, streaming.
+Fill named slots in a template with supplied fragments.
+Inject a personalised greeting from a request header.
+Choose an A/B variant and mark the document with the bucket.
+Gate a feature block on a feature flag, removing it when off.
+Localise dates, numbers and currencies found in marked spans.
+Convert units in text, marking each conversion with a title attribute.
+Add lang attributes to elements whose text is in another script.
+Add translate="no" to code, kbd and samp elements.
+Add dir="rtl" to elements containing right-to-left text.
+Report headings that skip a level.
+Report images with no alt attribute and images with redundant alt text.
+Report form inputs with no associated label.
+Report duplicate id attributes across the document.
+Add ARIA landmarks to a document that has none.
+Add autocomplete hints to recognised form fields.
+Upgrade generic text inputs to email, tel and url types where the name implies it.
+Inject a CSRF token into every form that posts.
+Add a honeypot field to every form and report where it went.
+Disable autoplay on audio and video elements.
+Add controls and preload="none" to media elements.
+Add captions track placeholders to videos that have none.
+Wrap oversized elements in a scroll container.
+Inject an SVG sprite once and rewrite icon references to use it.
+Inline small SVG images referenced by src, given a resolver.
+Rewrite image URLs onto an image CDN with width and format parameters.
+Add a cache-busting hash to every static asset URL from a manifest.
+Rewrite asset URLs across a set of sharded domains, deterministically.
+Rewrite a base tag away by resolving every URL it affected.
+Report every origin the page would contact and classify it.
+Detect mixed content and fail the rewrite in strict mode.
+Detect and report deprecated elements such as center, font and marquee.
+Modernise deprecated elements into equivalent markup with classes.
+Normalise character references that are needlessly escaped.
+Detect mojibake in text and report the likely source encoding.
+Convert a document from a legacy encoding to UTF-8 and prove the text survived.
+Run a corpus through every supported input encoding and compare the text.
+Compare strict mode against permissive mode on malformed input.
+Demonstrate what a tight memory limit does with and without graceful bail-out.
+Demonstrate that a poisoned writer refuses further writes.
+Demonstrate that a retained unit refuses every method after its handler.
+Demonstrate a handler panic surfacing on the goroutine that wrote.
+Build a rewriter that only observes, changes nothing, and proves it.
+Compare a streaming rewrite against the same rewrite done in memory.
+Cross-check a meaning-preserving rewrite against an independent HTML parser.
+Cross-check an edit against the same edit done by tree surgery.
+Sample a document corpus for constructs that the rewriter reports differently.
+Feed a document one byte at a time and measure where the cost goes.
+Feed a document in network-sized chunks and compare handler invocation counts.
+Rewrite a document that is larger than any buffer you are willing to hold.
+Rewrite an infinite generated stream and stop on a condition.
+Rewrite while writing to a sink that fails partway through.
+Rewrite while the destination is a slow writer and measure back pressure.
+Pipe two rewriters together, the output of one being the input of the next.
+Run two independent rewriters concurrently over the same corpus.
+Run a rewriter per goroutine over a work queue and check for cross-talk.
+Rewrite an HTTP response body in a reverse proxy handler.
+Rewrite an HTTP response body in a middleware that must not break streaming.
+Rewrite email HTML: inline styles, absolutise links, strip scripts.
+Convert a modern page into table-based layout markup for email clients.
+Strip everything an email client would reject and report each removal.
+Sanitise untrusted HTML down to an allow-list of tags and attributes.
+Prove the sanitiser cannot be escaped by text insertion.
+Rewrite user-supplied HTML so that inserted text can never become markup.
+Build a comment renderer that linkifies safely and never trusts input.
+Extract an article body by scoring elements as you stream past them.
+Extract a recipe into structured data from marked-up ingredients.
+Extract prices and availability from a product page.
+Extract a calendar of events into ICS.
+Extract contact details into vCard.
+Extract every form's fields into a schema you can replay.
+Extract a sitemap from the links on a crawl of one page.
+Report broken internal links given a set of known paths.
+Report links whose target changed under your own rewrite.
+Diff two rewrites of the same document and report the edits.
+Fingerprint a document's structure so near-duplicates can be found.
+Build a concordance of terms with their surrounding sentence.
+Build an index of anchor text pointing at each target.
+Collect footnote references and emit backlinks to them.
+Renumber footnotes and citations after removing some.
+Link citation markers to a bibliography you append.
+Tag code blocks with a language guessed from their content.
+Add copy buttons to code blocks without touching their content.
+Add line-number markers to code blocks as attributes only.
+Wrap long tables in a container and add sortable attributes.
+Add a caption to every table that lacks one, from the preceding heading.
+Add figure and figcaption around images that have a following italic line.
+Move images out of paragraphs so they can be styled as blocks.
+Unwrap single-child wrappers that carry no attributes.
+Remove empty elements that carry no attributes and no meaning.
+Report elements whose only content is whitespace.
+Rewrite a document so every id is unique across a concatenation of pages.
+Concatenate several documents into one, renaming ids and anchors.
+Split a long document into chapters at a chosen heading level.
+Paginate a document into fixed-size chunks at element boundaries.
+Insert an advertisement slot after every nth paragraph.
+Insert a related-content slot at the first sensible break.
+Insert a maintenance overlay without disturbing the underlying markup.
+Brand an error page from a template while keeping its message.
+Add search suggestions to a 404 page based on the requested path.
+Inject a site search form into a header that lacks one.
+Inject a skip-to-content link as the first focusable element.
+Add a scroll-anchor id to every section for deep linking.
+Add view-transition names to elements that persist across pages.
+Annotate islands for partial hydration.
+Insert declarative shadow DOM templates for custom elements.
+Inventory custom elements used and report which are undefined.
+Upgrade legacy widget markup into web component markup.
+Rewrite Vue or Angular style attribute syntax into plain attributes.
+Rewrite handlebars-style placeholders into resolved values, escaping properly.
+Expand ESI tags yourself and compare against the unstable ESI support.
+Process edge-side include markers with a supplied fragment resolver.
+Inject a Server-Timing comment recording how long the rewrite took.
+Inject a build-info comment naming the commit that produced the page.
+Echo a deploy id into a meta tag from the environment.
+Extract cache tags from the document into a header value.
+Compute an etag from the rewritten output while streaming it.
+Stream a document to two sinks at once, one rewritten and one verbatim.
+Write the rewritten output into a gzip writer and check the round trip.
+Rewrite a document that arrives gzipped, decompressing as you go.
+Rewrite a multipart response, applying handlers only to the HTML part.
+Rewrite only the head of a document and pass the body through untouched.
+Stop rewriting once a marker is seen and pass the rest through.
+Apply different handler sets to different regions of one document.
+Choose handlers per document based on a first-look at its doctype.
+Report which of your selectors are unsupported before starting.
+Report the source location of every match, and prove it by slicing the input.
+Report the source location of every text chunk and reconstruct the document.
+Reconstruct the document text exactly from the text chunks reported.
+Prove that accumulating text across chunks recovers whole text nodes.
+Prove that the last text chunk of a node is the one flagged as last.
+Attach per-unit user data and read it back from an end-tag handler.
+Use an end-tag handler to act on an element after its content was seen.
+Buffer an element's content and replace it wholesale at its end tag.
+Move an element's content into a sibling you inserted before it.
+Duplicate a section, renaming its ids, without buffering the whole document.
+Insert content produced incrementally, using a streaming sink.
+Insert content read from a file with a streaming sink, never holding it all.
+Insert content fetched lazily only if the handler actually fired.
+Stream a large template into the document end handler.
+Append a generated report to the end of every document you rewrite.
+Emit a summary of what changed as a trailing HTML comment.
+Emit a machine-readable summary of edits on stderr while rewriting stdout.
+Build a command line tool with a flag per transformation.
+Build a tool that reads a rewrite recipe from a config file.
+Build a tool that applies a rewrite to every HTML file in a tree.
+Build a tool that checks a tree of HTML files and exits nonzero on findings.
+Build a linter with a rule per handler and a machine-readable report.
+Build a benchmark harness that reports allocations per handler invocation.
+Build a harness that measures cost against handler count, not document size.
+Build a harness that finds the document shape your handlers are slowest on.
+Build a fuzz target for your own handler program rather than the document.
+Build a corpus reducer that shrinks a failing document to its essence.
+Build a property test over generated documents for one invariant you care about.
+Build a golden-file test suite whose fixtures are the rewritten documents.
+Build a test that asserts no native resources are left behind.
+Build a test that drops writers without closing them and forces collection.
+Build a test that exercises every insertion method on the same element.
+Build a test that exercises every unit type in one document.
+Rewrite a real-world page saved to disk and report every edit made.
+Rewrite the HTML specification document and measure where the time goes.
+Rewrite a page with thousands of matches and report the crossing cost.
+Rewrite a page whose markup is deliberately malformed and survive it.
+Rewrite a page with an unclosed tag at the end and describe what happens.
+Rewrite a document made entirely of comments.
+Rewrite a document with a doctype that has public and system identifiers.
+Rewrite a document that begins with a byte-order mark.
+Rewrite a document containing invalid UTF-8 and describe the outcome.
+Rewrite a document containing NUL bytes and describe the outcome.
+Rewrite a document where a script contains something that looks like markup.
+Rewrite a document where a textarea contains something that looks like markup.
+Rewrite SVG and MathML content embedded in HTML.
+Rewrite a document with deeply nested identical elements.
+Rewrite a document with an attribute value of pathological length.
+Rewrite a document with thousands of attributes on one element.
+Rewrite a document with a selector that matches almost everything.
+Compare the cost of one broad selector against many narrow ones.
+Explain, with measurements, where a rewrite's allocations come from.
+Find the cheapest way to accumulate whole text nodes across chunks.
+Find the cheapest way to decide whether a document needs rewriting at all.
+Write the documentation you wish you had had before starting any of this.
