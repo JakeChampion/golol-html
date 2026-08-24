@@ -416,7 +416,27 @@ func WithGracefulBailOut() Option {
 	return optionFunc(func(c *config) { c.mem.GracefulBailOut = true })
 }
 
-// WithESITags enables parsing of ESI tags such as <esi:include>.
+// WithESITags treats Edge Side Includes tags as void elements, so an
+// <esi:include> written without a self-closing slash does not swallow what
+// follows it. It is off by default, matching lol-html.
+//
+// Without it, an esi: element is an ordinary container: its content runs until a
+// matching end tag, and since ESI is conventionally written unclosed, that is
+// usually the enclosing element's end tag. Replacing or removing the include
+// then takes that end tag with it, and the only sign is malformed output:
+//
+//	// <span><esi:include src=a></span>, with a handler replacing the include
+//	WithESITags absent:  <span>?
+//	WithESITags present: <span>?</span>
+//
+// Writing the tag as <esi:include src=a/> does not help: HTML ignores a
+// trailing slash on an element that is not void and not in a foreign namespace,
+// so the include is still a container without this option. There is no way to
+// spell it that avoids needing this.
+//
+// [Element.CanHaveContent] reports the treatment directly: false for an esi:
+// element when this is enabled, true when it is not. <esi:remove>, which is
+// meant to have content, keeps it either way.
 //
 // This wraps an upstream entry point explicitly marked unstable
 // (unstable_lol_html_rewriter_build_with_esi_tags) and may change or disappear

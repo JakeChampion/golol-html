@@ -852,19 +852,113 @@ func waitForCleanups(counter *atomic.Int64, want int) int {
 }
 
 func TestESITags(t *testing.T) {
-	// Unstable upstream, so this only pins down that enabling it keeps ordinary
-	// rewriting intact rather than asserting ESI-specific parsing.
-	got, err := lolhtml.RewriteString(`<div><esi:include src="/a"/>x</div>`,
-		lolhtml.WithESITags(),
-		lolhtml.OnElement("div", func(e *lolhtml.Element) error {
-			return e.SetAttribute("data-seen", "1")
-		}))
-	if err != nil {
-		t.Fatalf("rewrite: %v", err)
-	}
-	if !strings.Contains(got, `data-seen="1"`) {
-		t.Errorf("ESI mode broke ordinary element rewriting: %q", got)
-	}
+	t.Run("ordinary rewriting still works", func(t *testing.T) {
+		got, err := lolhtml.RewriteString(`<div><esi:include src="/a"/>x</div>`,
+			lolhtml.WithESITags(),
+			lolhtml.OnElement("div", func(e *lolhtml.Element) error {
+				return e.SetAttribute("data-seen", "1")
+			}))
+		if err != nil {
+			t.Fatalf("rewrite: %v", err)
+		}
+		if !strings.Contains(got, `data-seen="1"`) {
+			t.Errorf("ESI mode broke ordinary element rewriting: %q", got)
+		}
+	})
+
+	// The option's actual effect: an esi: element becomes a void element. This
+	// is what it is for, and it only shows on a tag written without a
+	// self-closing slash - which is how ESI is conventionally written.
+	//
+	// Without it the include is a container, its content runs to the next
+	// matching end tag, and replacing it takes the enclosing </span> with it.
+	// The output is malformed and nothing reports an error.
+	t.Run("an unclosed include is void only when enabled", func(t *testing.T) {
+		const doc = `<span><esi:include src=a></span>`
+
+		for _, tt := range []struct {
+			esi  bool
+			want string
+		}{
+			{esi: false, want: `<span>?`},
+			{esi: true, want: `<span>?</span>`},
+		} {
+			opts := []lolhtml.Option{
+				lolhtml.OnElement(`esi\:include`, func(e *lolhtml.Element) error {
+					return e.Replace("?", lolhtml.Text)
+				}),
+			}
+			if tt.esi {
+				opts = append(opts, lolhtml.WithESITags())
+			}
+
+			got, err := lolhtml.RewriteString(doc, opts...)
+			if err != nil {
+				t.Fatalf("esi=%v: %v", tt.esi, err)
+			}
+			if got != tt.want {
+				t.Errorf("esi=%v:\n got: %s\nwant: %s", tt.esi, got, tt.want)
+			}
+		}
+	})
+
+	// A trailing slash does not help, and it is worth pinning because it is the
+	// obvious thing to reach for: HTML ignores it on an element that is neither
+	// void nor foreign, so the include is still a container without the option.
+	// There is no way to write the tag that avoids needing it.
+	t.Run("a trailing slash does not make it void", func(t *testing.T) {
+		for _, doc := range []string{
+			`<span><esi:include src=a></span>`,
+			`<span><esi:include src=a/></span>`,
+			`<span><esi:include src="a" /></span>`,
+		} {
+			got, err := lolhtml.RewriteString(doc,
+				lolhtml.OnElement(`esi\:include`, func(e *lolhtml.Element) error {
+					return e.Replace("?", lolhtml.Text)
+				}))
+			if err != nil {
+				t.Fatalf("%s: %v", doc, err)
+			}
+			if got != `<span>?` {
+				t.Errorf("%s\n got: %s\nwant: <span>? (the end tag is swallowed)", doc, got)
+			}
+		}
+	})
+
+	// CanHaveContent is the only thing that reports the difference directly.
+	t.Run("CanHaveContent reports the void treatment", func(t *testing.T) {
+		for _, tt := range []struct {
+			tag  string
+			esi  bool
+			want bool
+		}{
+			{"esi:include", false, true},
+			{"esi:include", true, false},
+			// esi:remove is meant to have content and keeps it either way.
+			{"esi:remove", false, true},
+			{"esi:remove", true, true},
+		} {
+			var got bool
+			opts := []lolhtml.Option{
+				lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+					if e.TagName() == tt.tag {
+						got = e.CanHaveContent()
+					}
+					return nil
+				}),
+			}
+			if tt.esi {
+				opts = append(opts, lolhtml.WithESITags())
+			}
+			if _, err := lolhtml.RewriteString("<"+tt.tag+" src=a>", opts...); err != nil {
+				t.Fatalf("%s esi=%v: %v", tt.tag, tt.esi, err)
+			}
+			if got != tt.want {
+				t.Errorf("<%s> with esi=%v: CanHaveContent = %v, want %v",
+					tt.tag, tt.esi, got, tt.want)
+			}
+		}
+	})
 }
 
 func TestWithStrictDisabled(t *testing.T) {
