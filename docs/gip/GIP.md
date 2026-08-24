@@ -507,9 +507,12 @@ Nothing gates the following. This is the shopping list.
   possible check and it immediately found two: `WithGracefulBailOut`, which was
   broken, and `HandlerError.Unwrap`. It also counts the surface, so an added
   export shows up in a diff.
-- **Documentation accuracy.** Nothing checks that a doc comment matches
-  behaviour. Every claim found wrong so far was found by hand, and the count is
-  now five: the three earlier ones, plus SetAttribute claiming its value "is
+- **Documentation accuracy.** Partly gated now: `example_test.go` holds sixteen
+  runnable transcriptions of the claims the documentation makes in code, so those
+  cannot rot without `go test` failing. The prose is still unchecked, and so are
+  the code snippets that have not been transcribed - about 140 lines of them, none
+  compiled before this. Every claim found wrong so far was found by hand, and the
+  count is now five: the three earlier ones, plus SetAttribute claiming its value "is
   escaped as needed, so it is safe to pass untrusted input" when it rewrites
   only the double quote, and the package doc saying it escapes the ampersand
   too. Both were in the same area and disagreed with a third comment on
