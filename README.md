@@ -174,8 +174,9 @@ returns `ErrDetached` rather than reading freed memory. Copy out what you need:
 
 ```go
 lolhtml.OnElement("img", func(e *lolhtml.Element) error {
-	src, _ := e.Attribute("src")   // fine: a Go string
-	found = append(found, e)       // useless: detached once this returns
+	src, _ := e.Attribute("src")    // fine: a Go string
+	sources = append(sources, src)  // fine: copied out
+	elements = append(elements, e)  // useless: detached once this returns
 	return nil
 })
 ```
