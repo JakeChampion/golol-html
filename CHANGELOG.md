@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- **The allocation gate no longer demands an exactness the measurement cannot
+  give.** It compared the per-match slope for equality with an integer and
+  required the extrapolated fixed cost to be identical at both document sizes.
+  Neither holds in general: on darwin/amd64 under Rosetta the same code measured
+  222 allocations at 100 matches and 823 at 400, a slope of 2.003, because one
+  allocation of setup appeared somewhere between the two sizes. The gate failed
+  on a difference of one allocation and passed on the same commit elsewhere,
+  which makes it noise rather than a signal. The slope is now compared within
+  0.05 and the base within 8 allocations - fifteen times the observed noise, and
+  more than an order of magnitude below the regression it is there to catch,
+  which is verified by injecting one extra allocation per match and watching
+  both checks fire.
+
 - **The allocation-complexity gate no longer fails the AddressSanitizer build.**
   `alloc_test.go` asserts how many times a rewrite allocates, and `-asan`
   replaces the allocator with one that allocates on its own account: a path that

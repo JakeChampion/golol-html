@@ -22,6 +22,7 @@ package lolhtml_test
 import (
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"testing"
 
@@ -208,18 +209,39 @@ func TestAllocationsPerMatchAreConstant(t *testing.T) {
 			a := allocsFor(t, linkDoc(lo), tt.opt)
 			b := allocsFor(t, linkDoc(hi), tt.opt)
 
+			// The slope is compared within a tolerance rather than for
+			// equality. An allocation count is reproducible for a given input
+			// and toolchain, but the fixed part of it is not identical at every
+			// document size: on darwin/amd64 under Rosetta this measured 222
+			// allocations at 100 matches and 823 at 400, a slope of 2.003
+			// rather than 2, because one allocation of setup appeared somewhere
+			// between the two sizes.
+			//
+			// One stray allocation across a 300-match span moves the slope by
+			// 0.003. The regression this gate exists to catch - a per-match cost
+			// that doubles, or a per-match cost where there should be none -
+			// moves it by at least 1. A tolerance of 0.05 is more than fifteen
+			// times the noise and twenty times below the signal, so it
+			// separates them without being a judgement call.
+			const slopeTolerance = 0.05
+
 			slope := float64(b-a) / float64(hi-lo)
-			if slope != float64(tt.perHit) {
-				t.Errorf("%.3f allocations per match, want exactly %d "+
+			if math.Abs(slope-float64(tt.perHit)) > slopeTolerance {
+				t.Errorf("%.3f allocations per match, want %d "+
 					"(%d allocations at %d matches, %d at %d)",
 					slope, tt.perHit, a, lo, b, hi)
 			}
 
-			// And the fixed part is genuinely fixed: extrapolating back to zero
-			// matches from either measurement must agree.
-			if baseLo, baseHi := a-tt.perHit*lo, b-tt.perHit*hi; baseLo != baseHi {
-				t.Errorf("the fixed cost is not fixed: %d extrapolated from %d matches, "+
-					"%d from %d", baseLo, lo, baseHi, hi)
+			// And the fixed part does not grow with the document. linkDoc(hi)
+			// is four times the bytes of linkDoc(lo), so a base that tracked
+			// length would differ here by hundreds; the tolerance is for the
+			// same stray allocation as above and nothing larger.
+			const baseTolerance = 8
+
+			baseLo, baseHi := a-tt.perHit*lo, b-tt.perHit*hi
+			if diff := baseLo - baseHi; diff > baseTolerance || diff < -baseTolerance {
+				t.Errorf("the fixed cost grew with the document: %d extrapolated from "+
+					"%d matches, %d from %d", baseLo, lo, baseHi, hi)
 			}
 		})
 	}
