@@ -403,6 +403,18 @@ really diverged.
   gate. `sanitizer_on_test.go` and `sanitizer_off_test.go` hold the build
   constraint; `requireRealAllocationCounts` is the skip.
 
+- **A test that iterates the implementation's own list can only confirm the
+  implementation.** The raw-text guard shipped covering four elements out of
+  ten, and the test written to prove it covered "every raw-text element" walked
+  the package's own map of raw-text elements - so it passed with four, would
+  have passed with one, and could never have named the six that were missing.
+  When the correct list belongs to something outside the code - the parser, the
+  specification, the platform matrix - derive it from that thing and assert both
+  directions: everything it includes is covered, and nothing it excludes is.
+  `TestTheGuardCoversEveryRawTextElement` asks the parser about every element
+  name in the HTML index; it fails if the map is short and it fails if the map
+  is wide.
+
 - **A leak is `LiveHandles()`, never a heap profile.** Every cgo handle create
   and delete is counted, and a rewrite that finishes must leave the count where
   it started. That turns "the handles were probably released" into a checkable
@@ -534,6 +546,17 @@ Nothing gates the following. This is the shopping list.
   minimum-go legs run `go test -count=1 ./...`, so every program in `examples/`
   is executed on every platform row rather than merely compiled. The cost of
   that is a constraint on what may go there: fast, and no network.
+- **The rest of the raw-text guard.** It covers insertions into content through
+  `Element` and `EndTag`. `TextChunk.Before`, `After` and `Replace` are
+  unchecked, which is the gap that matters, because editing a script through a
+  text handler is the obvious way to do it; so is every streaming insertion. The
+  reasons are structural rather than oversight - a text chunk cannot name the
+  element it is inside, and a streaming write can split a closing tag across two
+  calls - so closing either needs new machinery: a raw-text depth tracked by the
+  rewriter, a tag threaded onto the streaming handle plus a rolling tail, or an
+  exported check the caller can apply itself, since a text handler does know the
+  tag it registered. `TestWhatIsStillNotChecked` pins where it stops.
+
 - **`-race` on darwin/amd64 and on both musl rows.** Rosetta and the container
   skip it, so the race detector runs on four of seven rows.
 - **Benchmarks on the musl and Rosetta rows.** They compile nowhere and run

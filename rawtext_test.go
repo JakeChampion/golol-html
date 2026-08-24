@@ -15,7 +15,10 @@ import (
 	lolhtml "github.com/JakeChampion/golol-html"
 )
 
-var rawTextTags = []string{"script", "style", "textarea", "title"}
+// rawTextTags are the nine the guard covers. plaintext is raw text too and is
+// deliberately not here; see TestPlaintextCannotBeBrokenOutOf.
+var rawTextTags = []string{"iframe", "noembed", "noframes", "noscript",
+	"script", "style", "textarea", "title", "xmp"}
 
 // TestWhatCountsAsClosingARawTextElement. The measured rule: "</" then the tag
 // name without regard to case, then something that can end a tag name - ">",
@@ -229,5 +232,246 @@ func TestAJSONLDBlockIsUnaffected(t *testing.T) {
 	}
 	if !strings.Contains(out, payload) {
 		t.Errorf("the payload was altered: %s", out)
+	}
+}
+
+// htmlElementNames is every element name in the HTML specification's index of
+// elements, plus the obsolete ones a parser still recognises. It is long on
+// purpose: the point of the test below is to ask the parser which elements hold
+// content that is not markup, rather than to assert that the ones the guard
+// knows about are the ones that exist.
+var htmlElementNames = strings.Fields(`a abbr acronym address applet area article aside audio
+b base basefont bdi bdo bgsound big blink blockquote body br button canvas caption center cite
+code col colgroup data datalist dd del details dfn dialog dir div dl dt em embed fieldset
+figcaption figure font footer form frame frameset h1 h2 h3 h4 h5 h6 head header hgroup hr html
+i iframe image img input ins isindex kbd keygen label legend li link listing main map mark
+marquee menu menuitem meta meter multicol nav nextid nobr noembed noframes noscript object ol
+optgroup option output p param picture plaintext portal pre progress q rb rp rt rtc ruby s samp
+script search section select selectedcontent shadow slot small source spacer span strike strong
+style sub summary sup table tbody td template textarea tfoot th thead time title tr track tt u
+ul var video wbr xmp`)
+
+// TestTheGuardCoversEveryRawTextElement is the test that was missing, and its
+// absence is why the guard shipped covering four elements out of ten. The old
+// version iterated the package's own list of raw-text elements, so it could only
+// ever confirm what the code already believed.
+//
+// This one asks the parser instead: for every element name, is an element inside
+// it an element? If it is not, the content is raw text and an insertion into it
+// can end it, so the guard has to cover it. Both directions are checked, because
+// a guard that is too wide refuses content that was fine.
+func TestTheGuardCoversEveryRawTextElement(t *testing.T) {
+	for _, tag := range htmlElementNames {
+		// Is the content parsed as markup? If a <b> inside is reported as an
+		// element, yes.
+		inner := 0
+		if _, err := lolhtml.RewriteString("<"+tag+"><b>x</b></"+tag+">",
+			lolhtml.OnElement("b", func(*lolhtml.Element) error { inner++; return nil })); err != nil {
+			t.Fatalf("<%s>: %v", tag, err)
+		}
+		rawText := inner == 0
+
+		// Is an insertion of the element's own closing tag refused?
+		_, err := lolhtml.RewriteString("<"+tag+">x</"+tag+">",
+			lolhtml.OnElement(tag, func(e *lolhtml.Element) error {
+				return e.SetInnerContent("y</"+tag+">z", lolhtml.HTML)
+			}))
+		guarded := errors.Is(err, lolhtml.ErrRawTextBreakout)
+
+		switch {
+		case tag == "plaintext":
+			// The one raw-text element that cannot be closed at all.
+			if guarded {
+				t.Errorf("<plaintext> was refused, but nothing can close it")
+			}
+		case rawText && !guarded:
+			t.Errorf("<%s> holds raw text and an insertion closed it: %v", tag, err)
+		case !rawText && guarded:
+			t.Errorf("<%s> parses its content as markup, so </%s> in an insertion "+
+				"is ordinary markup and should not be refused: %v", tag, tag, err)
+		}
+	}
+}
+
+// TestPlaintextCannotBeBrokenOutOf is the exception, and it is an exception
+// because of how plaintext ends, which is: it does not. Everything after the
+// start tag is its content, to the end of the input, so its own closing tag is
+// text like anything else and there is nothing to break out of.
+//
+// Two consequences are worth pinning, because CanHaveContent is true here and
+// the usual advice - check CanHaveContent before OnEndTag - does not help.
+func TestPlaintextCannotBeBrokenOutOf(t *testing.T) {
+	out, err := lolhtml.RewriteString(`<plaintext>a</plaintext>b`,
+		lolhtml.OnElement("plaintext", func(e *lolhtml.Element) error {
+			return e.SetInnerContent(`x</plaintext>y`, lolhtml.HTML)
+		}))
+	if err != nil {
+		t.Fatalf("refused: %v", err)
+	}
+	// The inserted closing tag is content, so nothing followed it out.
+	if want := `<plaintext>x</plaintext>y`; out != want {
+		t.Errorf("got %q, want %q", out, want)
+	}
+
+	// The closing tag in the document is content too.
+	var chunks []string
+	if _, err := lolhtml.RewriteString(`<plaintext>a</plaintext>b`,
+		lolhtml.OnText("plaintext", func(c *lolhtml.TextChunk) error {
+			if c.Text() != "" {
+				chunks = append(chunks, c.Text())
+			}
+			return nil
+		})); err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) != 1 || chunks[0] != `a</plaintext>b` {
+		t.Errorf("text chunks = %q, want one chunk of the whole rest of the input", chunks)
+	}
+
+	// And there is no end tag, so Append has nowhere to go and OnEndTag never
+	// runs - even though CanHaveContent is true, which is what makes this worth
+	// a test rather than a sentence.
+	endTags, canHaveContent := 0, false
+	out, err = lolhtml.RewriteString(`<plaintext>a</plaintext>b`,
+		lolhtml.OnElement("plaintext", func(e *lolhtml.Element) error {
+			canHaveContent = e.CanHaveContent()
+			if err := e.Append("[appended]", lolhtml.HTML); err != nil {
+				return err
+			}
+			return e.OnEndTag(func(*lolhtml.EndTag) error {
+				endTags++
+				return nil
+			})
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !canHaveContent {
+		t.Error("CanHaveContent is false for <plaintext>; the rest of this test assumed it was true")
+	}
+	if endTags != 0 {
+		t.Errorf("the end-tag handler ran %d times", endTags)
+	}
+	if strings.Contains(out, "[appended]") {
+		t.Errorf("Append reached the output: %q", out)
+	}
+}
+
+// TestForeignContentIsRefusedConservatively. The check is by tag name, like
+// selectors, so it does not know that inside SVG or MathML none of these
+// elements is raw text. The refusal is still defensible: an inserted "</title>"
+// ends an <svg><title> too, by tree construction rather than by the tokenizer.
+// Text goes through, which is the way out.
+func TestForeignContentIsRefusedConservatively(t *testing.T) {
+	const doc = `<svg><title>a</title></svg>`
+	_, err := lolhtml.RewriteString(doc,
+		lolhtml.OnElement("title", func(e *lolhtml.Element) error {
+			return e.SetInnerContent(`b</title>c`, lolhtml.HTML)
+		}))
+	if !errors.Is(err, lolhtml.ErrRawTextBreakout) {
+		t.Errorf("an <svg><title> insertion was not refused: %v", err)
+	}
+	if _, err := lolhtml.RewriteString(doc,
+		lolhtml.OnElement("title", func(e *lolhtml.Element) error {
+			return e.SetInnerContent(`b</title>c`, lolhtml.Text)
+		})); err != nil {
+		t.Errorf("Text was refused in <svg><title>: %v", err)
+	}
+}
+
+// TestTheErrorSaysWhatToDoInstead. Refusing an insertion is only half an answer
+// if the caller cannot tell what would have worked, and the answer is different
+// for every group: a JavaScript escape, a CSS escape, a different ContentType,
+// or nothing at all.
+func TestTheErrorSaysWhatToDoInstead(t *testing.T) {
+	for _, tt := range []struct{ tag, want string }{
+		{"script", `<\/script`},
+		{"style", `\3c /style`},
+		{"textarea", "ContentType Text"},
+		{"title", "ContentType Text"},
+		{"xmp", "cannot appear inside it"},
+		{"iframe", "cannot appear inside it"},
+		{"noembed", "cannot appear inside it"},
+		{"noframes", "cannot appear inside it"},
+		{"noscript", "cannot appear inside it"},
+	} {
+		_, err := lolhtml.RewriteString("<"+tt.tag+">a</"+tt.tag+">",
+			lolhtml.OnElement(tt.tag, func(e *lolhtml.Element) error {
+				return e.SetInnerContent("b</"+tt.tag+">c", lolhtml.HTML)
+			}))
+		if err == nil {
+			t.Errorf("<%s>: accepted", tt.tag)
+			continue
+		}
+		if !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("<%s>: error does not suggest %q: %v", tt.tag, tt.want, err)
+		}
+	}
+}
+
+// TestWhatIsStillNotChecked pins the boundary of the check, because a partial
+// guard is worse than none if nobody knows where it stops: a caller who has seen
+// ErrRawTextBreakout once will assume the next insertion is checked too.
+//
+// If one of these starts returning ErrRawTextBreakout, that is an improvement,
+// not a regression - update the case and the documentation on the error.
+func TestWhatIsStillNotChecked(t *testing.T) {
+	const bad = `</script><img src=x onerror=alert(1)>`
+	const doc = `<script>var x = 1</script><p>after`
+
+	// A text chunk cannot name the element it is inside, so there is nothing for
+	// the check to look up. This is the gap that matters, because editing a
+	// script through a text handler is the obvious way to do it.
+	textChunk := map[string]func(*lolhtml.TextChunk) error{
+		"TextChunk.Before":  func(c *lolhtml.TextChunk) error { return c.Before(bad, lolhtml.HTML) },
+		"TextChunk.After":   func(c *lolhtml.TextChunk) error { return c.After(bad, lolhtml.HTML) },
+		"TextChunk.Replace": func(c *lolhtml.TextChunk) error { return c.Replace(bad, lolhtml.HTML) },
+		"TextChunk.StreamReplace": func(c *lolhtml.TextChunk) error {
+			return c.StreamReplace(func(s *lolhtml.Sink) error { return s.WriteString(bad, lolhtml.HTML) })
+		},
+	}
+	for name, edit := range textChunk {
+		out, err := lolhtml.RewriteString(doc, lolhtml.OnText("script", func(c *lolhtml.TextChunk) error {
+			if c.Text() == "" {
+				return nil
+			}
+			return edit(c)
+		}))
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if !strings.Contains(out, "onerror") || strings.Count(out, "<img") != 1 {
+			t.Errorf("%s: expected the unchecked insertion in the output: %q", name, out)
+		}
+	}
+
+	// The streaming insertions write in pieces, and a closing tag can straddle
+	// two of them, so the check has nothing whole to look at.
+	streaming := map[string]func(*lolhtml.Element) error{
+		"Element.StreamPrepend": func(e *lolhtml.Element) error {
+			return e.StreamPrepend(func(s *lolhtml.Sink) error { return s.WriteString(bad, lolhtml.HTML) })
+		},
+		"Element.StreamAppend": func(e *lolhtml.Element) error {
+			return e.StreamAppend(func(s *lolhtml.Sink) error { return s.WriteString(bad, lolhtml.HTML) })
+		},
+		"Element.StreamSetInnerContent": func(e *lolhtml.Element) error {
+			return e.StreamSetInnerContent(func(s *lolhtml.Sink) error { return s.WriteString(bad, lolhtml.HTML) })
+		},
+		"EndTag.StreamBefore": func(e *lolhtml.Element) error {
+			return e.OnEndTag(func(x *lolhtml.EndTag) error {
+				return x.StreamBefore(func(s *lolhtml.Sink) error { return s.WriteString(bad, lolhtml.HTML) })
+			})
+		},
+	}
+	for name, edit := range streaming {
+		out, err := lolhtml.RewriteString(doc, lolhtml.OnElement("script", edit))
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if !strings.Contains(out, "onerror") {
+			t.Errorf("%s: expected the unchecked insertion in the output: %q", name, out)
+		}
 	}
 }

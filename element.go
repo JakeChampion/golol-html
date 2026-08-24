@@ -112,6 +112,12 @@ func (e *Element) IsSelfClosing() bool {
 //
 // Before, After and Replace are unaffected: they position content outside the
 // element and work on a void one.
+//
+// It reports true for <plaintext>, and that is correct - plaintext has content -
+// but it is not the guarantee it looks like. A plaintext element ends only at the
+// end of the input, so there is no end tag: OnEndTag returns nil and its handler
+// never runs, and Append has no position and is dropped without error. Prepend
+// and SetInnerContent work. Pinned in rawtext_test.go.
 func (e *Element) CanHaveContent() bool {
 	p, err := e.live()
 	if err != nil {

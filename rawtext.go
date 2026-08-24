@@ -6,63 +6,120 @@ import (
 	"strings"
 )
 
-// ErrRawTextBreakout is returned by an insertion into the content of a script,
-// style, textarea or title element when the inserted content would end that
-// element.
+// ErrRawTextBreakout is returned by an insertion into the content of a raw-text
+// element when the inserted content would end that element.
 //
-// Those four hold raw text: an HTML parser does not look for markup inside them,
-// so the only thing that can end one is its own closing tag. Content passed as
-// [HTML] is inserted verbatim, which means a "</script>" in it does not become
-// part of the script - it closes the script, and everything after it is markup in
-// the document. That is a working injection whenever the content came from
-// anywhere untrusted, and it is silent: the output parses, nothing errors, and
-// the script that runs is not the script that was written.
+// Ten element names hold content an HTML parser does not read as markup. Nine of
+// them can be ended from inside, and an insertion into one of those is checked:
+//
+//	script style                        raw text; references are not decoded
+//	iframe noembed noframes noscript xmp  the same, and nothing else is special
+//	textarea title                      escapable raw text; references decode
+//
+// The tenth is plaintext, which runs to the end of the input: nothing closes it,
+// so nothing can break out of it and there is nothing to check. See the note on
+// [Element.CanHaveContent] and plaintext.
+//
+// Inside those nine an HTML parser is not looking for markup, so the only thing
+// that can end one is its own closing tag. Content passed as [HTML] is inserted
+// verbatim, which means a "</script>" in it does not become part of the script -
+// it closes the script, and everything after it is markup in the document. That
+// is a working injection whenever the content came from anywhere untrusted, and
+// it is silent: the output parses, nothing errors, and the script that runs is
+// not the script that was written.
 //
 // [Comment.SetText] has always refused the same shape of input for the same
 // reason. This is the other half of that.
 //
-// The insertion is refused rather than escaped because there is no escaping that
-// works here. Escaping for HTML corrupts the script instead - see the package
-// documentation on inserting into a script or a style - and escaping for what
-// the script means needs to know where in the script the content lands. Do that
-// in the caller: in JavaScript a string literal can carry "<\/script>", and CSS
-// and JSON have their own answers.
+// The insertion is refused rather than escaped because the escape that works
+// depends on the element, and for five of the nine there is none. Where one
+// exists the error names it: a JavaScript or JSON "<\/script" for a script, a CSS
+// "\3c /style" for a style, and for a textarea or a title, inserting as [Text]
+// instead, because references are decoded there. Inside an iframe, noembed,
+// noframes, noscript or xmp, references are not decoded and there is no inner
+// language, so the sequence cannot be represented at all and the content has to
+// change.
 //
-// Only insertions into the element's own content are checked: [Element.Prepend],
-// [Element.Append], [Element.SetInnerContent] and [EndTag.Before] on one of the
-// four. [Element.Before], [Element.After] and [Element.Replace] write outside the
-// element, where a closing tag is ordinary markup, and are not affected. Nor is
-// [ContentType] [Text], which escapes the "<" and so cannot end anything.
+// What is checked is the position, not the type: insertions into the element's
+// own content, which are [Element.Prepend], [Element.Append],
+// [Element.SetInnerContent] and [EndTag.Before]. [Element.Before],
+// [Element.After] and [Element.Replace] write outside the element, where a
+// closing tag is ordinary markup, and are not affected. Nor is [ContentType]
+// [Text], which escapes the "<" and so cannot end anything - though in the seven
+// where references do not decode, Text corrupts the content instead; see the
+// package documentation on inserting into a script or a style.
+//
+// Two gaps, both measured. The streaming insertions ([Element.StreamPrepend] and
+// the rest) are not checked, because content arrives in pieces and a closing tag
+// can straddle two of them. Neither are [TextChunk.Before], [TextChunk.After]
+// and [TextChunk.Replace], which is the more surprising one, because editing a
+// script through a text handler is the obvious way to do it: a text chunk has no
+// way to name the element it is inside, so the check has nothing to look up.
+// Until it does, a text handler has to guard itself, and it knows the tag - it
+// registered the selector.
+//
+// The check is by tag name only, so it does not consider namespaces. In SVG and
+// MathML none of these elements is raw text, and the refusal there is
+// conservative rather than wrong: an inserted "</title>" still ends an
+// <svg><title>, by ordinary tree construction rather than by the tokenizer.
 var ErrRawTextBreakout = errors.New("lolhtml: inserted content would end the raw-text element it is inside")
 
-// rawTextElements are the elements whose content is not parsed as markup. The
-// map is by lower-case tag name, which is what TagName reports.
+// rawTextElements are the elements whose content an HTML parser does not read as
+// markup and which can be ended from inside. The map is by lower-case tag name,
+// which is what TagName reports, and the value is what the error suggests doing
+// instead - per element, because the answers have nothing in common: one is a
+// JavaScript escape, one is a CSS escape, one is a different ContentType, and one
+// is "you cannot".
 //
-// script and style are raw text; textarea and title are escapable raw text,
-// where character references are decoded. The difference does not matter here:
-// all four end only at their own closing tag.
-var rawTextElements = map[string]bool{
-	"script":   true,
-	"style":    true,
-	"textarea": true,
-	"title":    true,
+// The list was measured rather than read off the specification: every element
+// name in the HTML index was tried, and ten are the ones where an element inside
+// is not an element. The tenth is plaintext, deliberately absent because nothing
+// closes it. See TestTheGuardCoversEveryRawTextElement, which repeats that
+// measurement so this map cannot fall behind the parser.
+var rawTextElements = map[string]string{
+	"script": `escape it for the language inside the element, as "<\/script" in JavaScript or JSON`,
+	"style":  `escape it for CSS, as "\3c /style" inside a string`,
+
+	// Escapable raw text: character references are decoded, so Text works.
+	"textarea": decodesReferences("textarea"),
+	"title":    decodesReferences("title"),
+
+	// Raw text with no inner language: references are not decoded either, so
+	// there is nothing the caller can write.
+	"iframe":   noEscapeExists("iframe"),
+	"noembed":  noEscapeExists("noembed"),
+	"noframes": noEscapeExists("noframes"),
+	"noscript": noEscapeExists("noscript"),
+	"xmp":      noEscapeExists("xmp"),
+}
+
+func decodesReferences(tag string) string {
+	return "insert it with ContentType Text instead: character references are " +
+		"decoded in <" + tag + ">, so \"&lt;\" reads back as \"<\""
+}
+
+func noEscapeExists(tag string) string {
+	return "character references are not decoded in <" + tag + "> and it has no " +
+		"inner language, so this sequence cannot appear inside it at all"
 }
 
 // checkRawText refuses content that would close a raw-text element named tag.
-// It returns nil for any element that is not one of the four, and for content
-// with nothing in it that could close one.
+// It returns nil for any element not in rawTextElements - including plaintext,
+// which cannot be closed - and for content with nothing in it that could close
+// one.
 func checkRawText(tag, content string) error {
-	if !rawTextElements[strings.ToLower(tag)] {
+	lower := strings.ToLower(tag)
+	advice, ok := rawTextElements[lower]
+	if !ok {
 		return nil
 	}
-	if i := findClosingTag(strings.ToLower(tag), content); i >= 0 {
-		lower := strings.ToLower(tag)
-		return fmt.Errorf("%w: <%s> content contains %q at byte %d; escape it for "+
-			"the language inside the element instead, as <\\/%s in JavaScript or JSON",
-			ErrRawTextBreakout, lower,
-			content[i:min(i+len(lower)+3, len(content))], i, lower)
+	i := findClosingTag(lower, content)
+	if i < 0 {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("%w: <%s> content contains %q at byte %d; %s",
+		ErrRawTextBreakout, lower,
+		content[i:min(i+len(lower)+3, len(content))], i, advice)
 }
 
 // findClosingTag returns the index of a sequence that would end a raw-text
