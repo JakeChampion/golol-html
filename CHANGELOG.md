@@ -226,6 +226,12 @@
   order they were written.
 
 ### Testing
+- **`differential/tagname_test.go`.** `TagNamePreserveCase` had exactly one
+  mention in the whole suite - `_ = e.TagNamePreserveCase()` inside the operations
+  fuzzer, with the result discarded - so nothing checked what it returned. It now
+  has eight SVG cases and four HTML ones against `x/net/html`, which is where a
+  claim about what a parser does belongs.
+
 - **The README's code is compiled now, and one block of it did not compile.**
   Eight Go blocks, none of them built by anything. `readme_snippets_test.go` holds
   each one verbatim inside something that typechecks, and `readme_test.go` asserts
@@ -406,6 +412,19 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`TagNamePreserveCase` says what it preserves, which is the spelling and not
+  the meaning.** Its comment pointed at foreign content - "which matters for
+  foreign content such as SVG's `<linearGradient>`" - as though it produced the
+  useful form there. It produces whatever was typed. A parser applies the SVG
+  tag-name adjustment, so a browser holds `linearGradient` for all three of
+  `<linearGradient>`, `<LINEARGRADIENT>` and `<lineargradient>`; this library
+  reports the lower-cased name from `TagName` and the source spelling from
+  `TagNamePreserveCase`, and neither is canonical unless the page happened to
+  write it that way. Comparing either with a canonical SVG name is therefore wrong
+  for two spellings out of three. Nothing is wrong on the way out - the source
+  spelling is emitted and a browser adjusts it - and `SetTagName` writes what it
+  is given, so a rewrite can normalise if it wants to.
+
 - **`PreallocatedParsingBuffer` says what it costs.** It read like a performance
   knob - "at the cost of reallocations later" - and behaves like a charge against
   `MaxMemory`. Measured, the smallest limit that completes one document rises by
