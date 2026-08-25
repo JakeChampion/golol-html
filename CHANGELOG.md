@@ -1318,6 +1318,32 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **An HTML tag name inside an `<svg>` ends the svg, and the library's two views of
+  that disagree.** Foreign content is not a container the way an element is: the
+  parser breaks out of SVG when it meets an HTML tag name, and everything after that
+  tag is document content rather than image content.
+
+      <svg><rect/><p>x</p><circle/></svg>
+
+      in the tree   svg > rect, then p and circle beside the svg, both HTML elements
+
+  Measured against x/net/html, 44 names do it - b, big, blockquote, body, br,
+  center, code, dd, div, dl, dt, em, embed, h1 to h6, head, hr, i, img, li, listing,
+  menu, meta, nobr, ol, p, pre, ruby, s, small, span, strong, strike, sub, sup,
+  table, tt, u, ul, var - plus `font`, which breaks out only when it carries a
+  color, face or size attribute. `title`, `desc`, `a`, `script`, `style`, `g` and
+  `text` do not, so the list is a list rather than "HTML tag names".
+
+  Then the disagreement, from the same document at the same moment:
+  `NamespaceURI` follows the break-out and reports HTML for what comes after it,
+  while the selector engine does not - `svg circle` and even `svg > circle` match a
+  circle the tree puts outside the svg, because the engine pops its stack on end tags
+  and this was a start tag. So neither answers "is this still inside the image", and
+  a rewrite that needs to know has to look for the names itself.
+
+  New package documentation section, a note on `Element.NamespaceURI`,
+  `differential/foreign_test.go`, and B148.
+
 - **A value is only source for the context it came from.** The escaping section said
   that a value taken from the document is already raw source, so building markup with
   it means not escaping it again, and `EscapeText` added that "text can usually be

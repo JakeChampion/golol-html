@@ -244,6 +244,12 @@ func (e *Element) CanHaveContent() bool {
 // paragraph. The stack gets that right because the switch back is exactly what
 // foreignObject reports. Worked through in examples/gip/histogram.
 //
+// It also follows the parser out of foreign content, where a selector does not. An
+// HTML tag name inside an <svg> ends the svg - 44 names do it - and what comes after
+// reports the HTML namespace here while "svg > circle" still matches it. So the two
+// answers disagree, and a rewrite asking "is this element still inside that <svg>"
+// cannot use either on its own; see the package documentation on foreign content.
+//
 // The returned string is one of [NamespaceHTML], [NamespaceSVG] and
 // [NamespaceMathML], and is those constants rather than a copy of them: a fresh
 // 28- or 32-byte string per element was measured at 1000 allocations and 32 KB
