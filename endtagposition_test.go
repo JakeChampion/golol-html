@@ -306,3 +306,109 @@ func removeFirstOf(t *testing.T, doc, sel string) string {
 	}
 	return out
 }
+
+// TestTheThreeTimingsOfAnEndTagHandler. The guard on the tag name separates "my
+// own end tag" from "someone else's", which is what an insertion needs. An
+// observer needs more: of the two foreign cases, one is exactly where the
+// element ended and the other is after it, with content reported in between.
+func TestTheThreeTimingsOfAnEndTagHandler(t *testing.T) {
+	tests := []struct {
+		name string
+		doc  string
+		// want is the sequence of events, so the position of the close relative
+		// to the text is visible.
+		want []string
+	}{
+		{
+			name: "its own end tag",
+			doc:  `<p><em>a</em> b</p>`,
+			want: []string{"open:em", "text:a", "close:em@em", "text: b"},
+		},
+		{
+			name: "an ancestor's end tag, exactly where it ends",
+			doc:  `<p><em>a</p>b`,
+			want: []string{"open:em", "text:a", "close:em@p", "text:b"},
+		},
+		{
+			name: "an ancestor's end tag, after where it ends",
+			doc:  `<ul><li><em>a<li>b</ul>`,
+			want: []string{"open:em", "text:a", "text:b", "close:em@ul"},
+		},
+		{
+			name: "never",
+			doc:  `<p><em>a`,
+			want: []string{"open:em", "text:a"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var log []string
+			if _, err := lolhtml.RewriteString(tt.doc,
+				lolhtml.OnElement("em", func(e *lolhtml.Element) error {
+					tag := e.TagName()
+					log = append(log, "open:"+tag)
+					if !e.CanHaveContent() {
+						return nil
+					}
+					return e.OnEndTag(func(x *lolhtml.EndTag) error {
+						log = append(log, "close:"+tag+"@"+x.Name())
+						return nil
+					})
+				}),
+				lolhtml.OnDocumentText(func(c *lolhtml.TextChunk) error {
+					if len(c.Bytes()) > 0 {
+						log = append(log, "text:"+c.Text())
+					}
+					return nil
+				}),
+			); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(log, " ") != strings.Join(tt.want, " ") {
+				t.Errorf("got %q, want %q", log, tt.want)
+			}
+		})
+	}
+}
+
+// The consequence, as a rewrite rather than a log: closing something at the
+// callback wraps content that was not inside it.
+func TestActingOnAForeignEndTagCanWrapTooMuch(t *testing.T) {
+	// A converter that emits a closing delimiter whenever the callback arrives.
+	naive := func(doc string) string {
+		var b strings.Builder
+		if _, err := lolhtml.RewriteString(doc,
+			lolhtml.OnElement("em", func(e *lolhtml.Element) error {
+				b.WriteString("*")
+				if !e.CanHaveContent() {
+					return nil
+				}
+				return e.OnEndTag(func(*lolhtml.EndTag) error {
+					b.WriteString("*")
+					return nil
+				})
+			}),
+			lolhtml.OnDocumentText(func(c *lolhtml.TextChunk) error {
+				b.WriteString(c.Text())
+				return nil
+			}),
+		); err != nil {
+			t.Fatal(err)
+		}
+		return b.String()
+	}
+
+	// Its own end tag: right.
+	if got, want := naive(`<p><em>a</em> b</p>`), "*a* b"; got != want {
+		t.Errorf("own end tag: got %q, want %q", got, want)
+	}
+	// An ancestor's, at the right moment: also right.
+	if got, want := naive(`<p><em>a</p>b`), "*a*b"; got != want {
+		t.Errorf("ancestor's end tag: got %q, want %q", got, want)
+	}
+	// An ancestor's, too late: the second item is inside the emphasis, which is
+	// what examples/gip/markdown keeps its own stack to avoid.
+	if got, want := naive(`<ul><li><em>a<li>b</ul>`), "*ab*"; got != want {
+		t.Errorf("late callback: got %q, want %q", got, want)
+	}
+}

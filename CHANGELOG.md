@@ -493,6 +493,22 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **An end-tag handler has three timings, and the documentation described two.**
+  The guard added for insertions - compare `EndTag.Name` against the element's
+  tag name, and do nothing when they differ - is right for writing at a position
+  and too coarse for observing that an element is over:
+
+      <p><em>a</em> b</p>       at </em>, its own tag, exactly where it ends
+      <p><em>a</p>b             at </p>, an ancestor's, exactly where it ends
+      <ul><li><em>a<li>b</ul>   at </ul>, an ancestor's, and "b" was already
+                                reported: the <em> ended at the second <li>
+
+  A foreign end tag is where the element ended when an ancestor's end tag closed
+  it, and later than where it ended when a sibling's start tag did. Nothing in
+  the callback separates those, so anything accumulating - a converter closing an
+  emphasis, a counter measuring an extent - has to keep the stack of open
+  elements itself. `TestActingOnAForeignEndTagCanWrapTooMuch` shows the failure as
+  a rewrite: the naive version turns `<ul><li><em>a<li>b</ul>` into `*ab*`.
 - **The `# Cost` section gave a number for building a rewriter that nothing
   measured, and it was wrong.** It said "about five allocations per distinct
   selector, one fewer for a repeat". Measured with the options built beforehand,
