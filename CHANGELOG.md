@@ -1197,6 +1197,36 @@
   order they were written.
 
 ### Testing
+- **`properties/sanitiser_test.go`: an allow-list sanitiser as a property, over
+  documents built to break it.** Every other property in that package states
+  something about one call. This one states something about a composition -
+  selectors, removal, attribute iteration and decoding used together, which is what
+  a sanitiser is - and the generator produces what a sanitiser meets: `script`,
+  `iframe`, `svg`, `math`, `image`, `base`, event handlers, raw-text elements,
+  unclosed tags, duplicate attributes, and every spelling of a `javascript:` URL
+  that a browser decodes.
+
+  Three properties: nothing outside the allow-list survives, sanitising is
+  idempotent, and the result does not depend on the write size. The first one's
+  checker deliberately does not call the code under test - a checker that shares a
+  decoder with the sanitiser agrees with it by construction, including when both are
+  wrong - so it decodes the value itself and looks for the schemes that execute.
+
+  The generator was wrong first, and wrong in the way that makes a security property
+  decorative rather than false: it wrote attribute values through
+  `html.EscapeString`, which turns `&#106;avascript:` into `&amp;#106;avascript:` -
+  literal characters that no browser executes. The vectors never reached the
+  sanitiser in their dangerous form, and the property passed against a sanitiser
+  with the hole deliberately put back. Only the quote that would end the attribute is
+  escaped now, and with the hole put back the property fails in eight cases and
+  shrinks to `<a href="/one" href="&#106;avascript:alert(1)">x</a>` - which is also a
+  reminder that `AttributeList` sees a duplicate attribute that a selector does not
+  (B57).
+
+  A fourth test keeps the other side honest: it asserts that a quarter of the
+  generated documents need sanitising at all, so a generator that drifted into
+  producing harmless input would fail rather than pass quietly.
+
 - **`examples/gip/emailstrip`** removes what a mail client would reject and says
   what it removed and why, from an allow-list rather than a block-list - a
   block-list is a list of the things somebody thought of, and mail clients reject
