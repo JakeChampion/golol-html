@@ -143,6 +143,17 @@ func NewWriter(dst io.Writer, opts ...Option) (*Writer, error) {
 // every later Write and the Close return ErrPoisoned wrapped around that first
 // error - so errors.Is and errors.As still reach it, however late it is asked
 // for.
+//
+// Failing is not atomic. Everything before the token whose handler failed has
+// already reached the destination, at every write size and including a single
+// Write of the whole document, and what it holds is a whole number of tokens -
+// well-formed markup that a parser accepts. So a caller who returns an error to
+// refuse a document has already delivered a short version of it unless it held
+// the output itself: write into a buffer and forward only on success, which is
+// what examples/gip/mixed does. Measured in handlerfailure_test.go, along with
+// the two ends of the range - a handler that fails on the document's first
+// element delivers nothing, and one that fails in [OnDocumentEnd] has already
+// delivered all of it.
 func (w *Writer) Write(p []byte) (int, error) {
 	switch {
 	case w.closed:

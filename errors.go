@@ -60,6 +60,11 @@ var ErrClosed = errors.New("lolhtml: writer is closed")
 // was running, and the ordinary Go shape - write, then check Close - asks
 // afterwards. A handler panic is the exception: it poisons the Writer on its way
 // to the caller without leaving an error, and the sentinel then stands alone.
+//
+// What the destination already holds when this happens is not nothing: everything
+// before the token whose handler failed has been written to it, and it is
+// well-formed markup. Refusing a document therefore means buffering the output and
+// forwarding it only on success. Measured in handlerfailure_test.go.
 var ErrPoisoned = errors.New("lolhtml: writer is poisoned by an earlier error")
 
 // ErrIncompleteRune reports a UTF-8 sequence written into a [Sink] that never
