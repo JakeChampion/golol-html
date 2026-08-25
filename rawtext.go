@@ -60,7 +60,9 @@ import (
 //
 // A rename is the other way round this. [Element.SetTagName] can turn a script
 // into a div, and its text into markup, without inserting anything at all - so
-// there is nothing for this check to look at. See that method.
+// there is nothing for this check to look at. See that method, and
+// [Element.RemoveAndKeepContent], which does it by taking the tags away
+// altogether.
 //
 // The check is by tag name only, so it does not consider namespaces. In SVG and
 // MathML none of these elements is raw text, and the refusal there is
