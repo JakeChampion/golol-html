@@ -156,6 +156,11 @@ func (c *Comment) Remove() {
 }
 
 // IsRemoved reports whether the comment has been removed by a handler.
+//
+// This comment, and not the element it is in: a comment inside an element another
+// handler has removed reports false. [Element.IsRemoved] answers for an ancestor;
+// this does not. See [TextChunk.IsRemoved], which has the same rule for the same
+// reason.
 func (c *Comment) IsRemoved() bool {
 	p, err := c.live()
 	if err != nil {
