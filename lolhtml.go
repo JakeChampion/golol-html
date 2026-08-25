@@ -33,6 +33,87 @@
 // For a document already in memory, [Rewrite] and [RewriteString] wrap the same
 // machinery.
 //
+// # One rewriter per document, not one per fragment
+//
+// The guarantee above is about chunks of one stream, and it does not extend to
+// splitting the work. Rewriting two fragments with two rewriters and joining the
+// outputs is not the same as rewriting the whole, because a fragment that ends
+// inside a tag is invisible to every handler and is emitted verbatim.
+//
+// Measured on <p>a</p><script>alert(1)</script><p>b</p>, removing every script,
+// over all forty places the document can be cut in two:
+//
+//	one rewriter, whole document        saw p script p    <p>a</p><p>b</p>
+//	one rewriter, two writes, any cut   saw p script p    <p>a</p><p>b</p>
+//	two rewriters, cuts 9 to 15         saw p and p       the script, whole
+//	two rewriters, cut 16               saw p script, p   alert(1) as text
+//	two rewriters, any other cut        the script is removed
+//
+// The seven cuts are the ones strictly inside the eight bytes of <script>. The
+// first fragment ends mid-tag, so no element handler and no text handler runs for
+// it and the bytes pass through; the second begins mid-name, so its remainder is
+// text and passes through too; and the join reassembles an element that neither
+// pass inspected. Cut 16 is the boundary immediately after the complete start tag
+// and fails differently: the first pass does remove the script, but its content
+// was in the other fragment, so the payload survives as text beside a stray end
+// tag.
+//
+// Two different things are going on, and it is worth keeping them apart.
+//
+// The first is that a tag is the only thing a document can end inside and have
+// nothing report it. Measured, on inputs that end where they say:
+//
+//	<p    <p attr    <p attr="v    <p/    </p    <script
+//	                                     no handler of any kind
+//	<!-  <!--  <!-- x  <!  <?php  <![CDATA[x
+//	                                     a comment, with the text so far
+//	<!DOCTYPE                            a doctype
+//	<script>  <script>var a  <style>p{   the element, and its text if any
+//
+// So the blind spot is exactly the tag, and its bytes still reach the output. A
+// stray end tag - </div> with nothing open - is unreported too, and harmless: it
+// swallows nothing.
+//
+// The second is which unfinished constructs swallow what follows them, which is a
+// wider set and the one that decides whether a join is safe. Appending
+// <x-sentinel> to each of these and asking whether the element is still reported:
+//
+//	<p   <p attr   <p attr="v   </p         swallowed
+//	<!-- c   <!   <?php   <!DOCTYPE         swallowed
+//	<script>   <script>var a   <style>p{    swallowed
+//	<textarea>x   <title>t                  swallowed
+//	<ul><li>a   <p>a   </div>   a < b       reported: nothing is open that absorbs
+//
+// which is the same set the documentation for [DocumentEnd.Append] describes for
+// the same reason: an unfinished construct has no end until one arrives, and the
+// next thing written becomes part of it. An *element* left open is not one of
+// them - more content is simply more content.
+//
+// So a fragment is safe to join if nothing is unfinished at its end. An open
+// element is fine; an open tag, comment, doctype or raw-text element is not.
+//
+// No call errors in any of this, and the output looks like a document. For a
+// sanitiser that is a hole, for an inventory an undercount, and for a rewrite that
+// only adds things a corruption.
+//
+// So a document assembled from pieces should be fed to one rewriter as successive
+// writes - which the second row shows is correct at every boundary - and a rewrite
+// that must work on fragments has to be able to say where a fragment may be cut.
+// Element boundaries are safe; byte offsets are not. examples/gip/inventory
+// measures this and examples/gip/split cuts only at boundaries it chose.
+//
+// A caller who has to accept fragments from elsewhere can test one rather than
+// trust it, and without reimplementing the tokenizer: append a sentinel element to
+// the fragment, rewrite it, and see whether a handler for the sentinel runs. If it
+// does not, something at the end of that fragment swallowed it.
+//
+// Asking the same question by scanning for a "<" after the last ">" does not work,
+// and it fails in the direction that matters: over a fixed set of 4000 generated
+// fragments it says "safe" for 1007 that are not, and never the other way. It
+// cannot know that <!DOCTYPE does not begin with a letter, that an open <script>
+// has its last ">" behind it, or that a bare "</" at the end is an unfinished end
+// tag. Pinned in fragment_test.go.
+//
 // # An insertion can only go where the rewriter has not been yet
 //
 // The output is produced as the input is consumed, so a handler can insert
