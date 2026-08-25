@@ -1354,6 +1354,33 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Permissive mode is not silence, and both the README and `WithStrict` said it was.**
+  Turning strict mode off was described as leaving the content after an ambiguous tag
+  "treated as text, so no handler runs for it", with the document coming out "with no
+  error and no handler invocation". The first half is right and the second is not.
+
+  Measured on `<select><xmp><script>alert(1)</script></xmp></select><p>after</p>` with
+  strict off:
+
+      element handlers    select, xmp and p all fire; script does not
+      text handlers       the script's source arrives as text, in chunks
+      the output          identical to the input
+
+  So the ambiguous element itself is an element; the document after a *closed*
+  ambiguous tag is markup as usual, and an `<img src=x onerror=…>` after a `<title>`
+  in a `<select>` still fires an element handler; and what is missed is markup that
+  arrives as text.
+
+  That last part is the useful one, because it gives a rewrite that cannot use strict
+  mode something to do: a run of text holding `<script` is the signal, and returning an
+  error from a text handler stops the document. The chunking matters - the tokenizer
+  splits a text node around a `<` that does not begin a tag, so the check has to
+  accumulate to `IsLastInTextNode` rather than look at one chunk.
+
+  `WithStrict`, the README and `strict_test.go` all say this now, and
+  `examples/gip/strictmode` prints the difference between the two modes for a given
+  document. B161.
+
 - **The declared encoding changes what a document says and never what counts as
   markup.** `WithEncoding` described what each label does to the characters and said
   nothing about the property a caller accepting a label from a `Content-Type` header

@@ -322,3 +322,83 @@ func TestWhatEndsTheAmbiguousContextDiffersByContext(t *testing.T) {
 		t.Errorf("<noframes> did not end the frameset context: %v", err)
 	}
 }
+
+// TestLenientModeIsNotSilence, which is what "no handler is invoked" above could be
+// read to mean and is not the whole picture. The ambiguous element itself fires, the
+// elements after the region fire, and the region's content arrives as text - so a
+// rewrite that registers a text handler can see the bytes it is not being shown as
+// markup, and refuse the document on its own terms.
+func TestLenientModeIsNotSilence(t *testing.T) {
+	const payload = `<select><xmp><script>alert(1)</script></xmp></select><p>after</p>`
+
+	var els, texts []string
+	out, err := lolhtml.RewriteString(payload,
+		lolhtml.WithStrict(false),
+		lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+			els = append(els, e.TagName())
+			return nil
+		}),
+		lolhtml.OnDocumentText(func(c *lolhtml.TextChunk) error {
+			if s := strings.TrimSpace(c.Text()); s != "" {
+				texts = append(texts, s)
+			}
+			return nil
+		}))
+	if err != nil {
+		t.Fatalf("lenient mode should not fail: %v", err)
+	}
+	if out != payload {
+		t.Errorf("the document changed: %q", out)
+	}
+
+	// The select, the xmp and the paragraph after the region: three elements, and the
+	// script is not one of them because it is inside raw text.
+	if want := "select xmp p"; strings.Join(els, " ") != want {
+		t.Errorf("elements fired: %q, want %q", strings.Join(els, " "), want)
+	}
+	// The script's markup arrives as text, in pieces - the tokenizer splits a "<"
+	// that does not begin a tag into a chunk of its own - so what a sanitiser has to
+	// look for is a run of text, not an element.
+	joined := strings.Join(texts, "")
+	if !strings.Contains(joined, "script>alert(1)") {
+		t.Errorf("the text handler saw %q, want the script's source", texts)
+	}
+	if len(texts) < 2 {
+		t.Errorf("the region arrived as %d chunks, want it split around the \"<\"", len(texts))
+	}
+
+	// And a text handler is enough to refuse it, which is the practical answer for a
+	// rewrite that cannot use strict mode.
+	sentinel := errors.New("markup in text")
+	_, err = lolhtml.RewriteString(payload,
+		lolhtml.WithStrict(false),
+		lolhtml.OnDocumentText(func(c *lolhtml.TextChunk) error {
+			if strings.Contains(c.Text(), "script") {
+				return sentinel
+			}
+			return nil
+		}))
+	if !errors.Is(err, sentinel) {
+		t.Errorf("err = %v, want the handler's refusal", err)
+	}
+}
+
+// TestLenientModeCanSeeEverythingAfterAClosedAmbiguousTag, which is the difference
+// between a bypass and a hole: what is missed is the raw-text content, not the rest of
+// the document.
+func TestLenientModeCanSeeEverythingAfterAClosedAmbiguousTag(t *testing.T) {
+	// A title inside a select: the ambiguity is at the title, and everything after it
+	// - including an img with an event handler - is still markup to the rewrite.
+	var els []string
+	if _, err := lolhtml.RewriteString(`<select><title></title><img src=x onerror=alert(1)></select>`,
+		lolhtml.WithStrict(false),
+		lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+			els = append(els, e.TagName())
+			return nil
+		})); err != nil {
+		t.Fatal(err)
+	}
+	if want := "select title img"; strings.Join(els, " ") != want {
+		t.Errorf("elements fired: %q, want %q", strings.Join(els, " "), want)
+	}
+}

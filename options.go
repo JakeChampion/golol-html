@@ -859,15 +859,29 @@ func WithEncoding(label string) Option {
 // with a memory bail-out, so a caller has to discard the response rather than
 // serve what it has.
 //
-// With strict off, the rewrite succeeds and the content after the ambiguous tag
-// is treated as text, so no handler runs for it. For a rewriter that adds
-// attributes this means a missed region. For anything that removes content it
-// is a bypass: a sanitiser that strips every <script> does not strip this one,
+// With strict off, the rewrite succeeds and the ambiguous element is treated as a
+// raw-text element, so its content is text rather than markup. For a rewriter that
+// adds attributes this means a missed region. For anything that removes content it is
+// a bypass: a sanitiser that strips every <script> does not strip this one,
 //
 //	<select><xmp><script>alert(1)</script>
 //
-// and emits it verbatim, with no error and no handler invocation to notice.
-// Turning strict off to get past a failure hands that through.
+// and emits it verbatim. Turning strict off to get past a failure hands that through.
+//
+// What that region is, exactly, is worth knowing rather than guessing at, because it
+// is narrower than "everything after the tag" and not as quiet as "nothing is seen".
+// Measured on <select><xmp><script>alert(1)</script></xmp></select><p>after</p>:
+//
+//	element handlers    select, xmp and p all fire; script does not
+//	text handlers       the script's source arrives as text, in chunks
+//	the output          identical to the input
+//
+// So the ambiguous element itself is an element, the document after the region is
+// markup as usual - a closed ambiguous tag costs only its own content, and an <img>
+// after a <title> in a <select> still fires - and the missed markup is text that a
+// text handler is given. A rewrite that cannot use strict mode can therefore refuse
+// on its own terms: a run of text holding "<script" is the signal, and returning an
+// error from the text handler stops the document. Measured in strict_test.go.
 //
 // The unseen region runs from the ambiguous tag to its closing tag, or to the
 // end of the input if there is not one - and a document that trips this guard is
