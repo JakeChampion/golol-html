@@ -28,6 +28,62 @@ func TestPassthroughIsIdentity(t *testing.T) {
 	})
 }
 
+// TestAReadOnlyRewriteIsIdentity is the property a report-only tool rests on: a
+// rewrite whose handlers observe and change nothing has to give back the document
+// it was given.
+//
+// Stronger than TestPassthroughIsIdentity, which registers nothing at all. The
+// exception is deliberate and measured in the root package: a text handler decodes
+// and re-encodes, so a document holding bytes that are not valid UTF-8 comes out
+// different for having had one registered. The generator produces valid UTF-8, so
+// the text handler is in here too and the property holds for it - the exception is
+// about the document rather than about the handler.
+func TestAReadOnlyRewriteIsIdentity(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		doc := genDocument().Draw(t, "doc")
+
+		out, err := lolhtml.RewriteString(doc,
+			lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+				_ = e.TagName()
+				_ = e.AttributeList()
+				_ = e.SourceLocation()
+				_ = e.IsSelfClosing()
+				if !e.CanHaveContent() {
+					return nil
+				}
+				return e.OnEndTag(func(tag *lolhtml.EndTag) error {
+					_ = tag.Name()
+					_ = tag.SourceLocation()
+					return nil
+				})
+			}),
+			lolhtml.OnDocumentText(func(c *lolhtml.TextChunk) error {
+				_ = c.Text()
+				_ = c.IsLastInTextNode()
+				return nil
+			}),
+			lolhtml.OnDocumentComment(func(c *lolhtml.Comment) error {
+				_ = c.Text()
+				_ = c.SourceLocation()
+				return nil
+			}),
+			lolhtml.OnDoctype(func(d *lolhtml.Doctype) error {
+				_, _ = d.Name()
+				_, _ = d.PublicID()
+				_, _ = d.SystemID()
+				return nil
+			}),
+			lolhtml.OnDocumentEnd(func(*lolhtml.DocumentEnd) error { return nil }),
+		)
+		if err != nil {
+			t.Fatalf("rewrite: %v", err)
+		}
+		if out != doc {
+			t.Fatalf("a read-only rewrite changed the document\n in: %q\nout: %q", doc, out)
+		}
+	})
+}
+
 // TestRewriteIsIdempotent: rewriting an already-rewritten document must not
 // keep changing it. A rewrite that is not idempotent is usually one that
 // double-escapes.
