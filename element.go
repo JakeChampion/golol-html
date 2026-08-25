@@ -93,6 +93,22 @@ func (e *Element) TagNamePreserveCase() string {
 // name and the new one. Where you do not know the content, replace the element
 // instead - [Element.Replace] with content you built - or read the content and
 // decide at the end tag. Pinned in settagname_test.go.
+//
+// The second thing a rename writes is the closing tag, and where the source left
+// the element's end tag out, what it writes over belongs to an enclosing element:
+//
+//	<h1>a <em>b</h1>          SetTagName("i")  ->  <h1>a <i>b</i>
+//
+// The </h1> is gone and an </i> stands in its place, so the heading never closes.
+// Where a sibling's start tag closed the element, the new tag lands at the end of
+// the enclosing element rather than where the element ended:
+//
+//	<ul><li><em>a<li>b</ul>   SetTagName("i")  ->  <ul><li><i>a<li>b</i>
+//
+// and "b", which was not emphasised, now is. Both are the general rule that an
+// end tag is a token and not a fact about the element; see the package
+// documentation, and [Element.OnEndTag] for the name guard that detects it.
+// Measured in removeimplied_test.go.
 func (e *Element) SetTagName(name string) error {
 	p, err := e.live()
 	if err != nil {
@@ -657,6 +673,43 @@ func (e *Element) Remove() {
 // This is the same hazard as [ErrRawTextBreakout] and [Element.SetTagName],
 // reached a third way: nothing is inserted and nothing is renamed, and the
 // content is reinterpreted all the same. Pinned in settagname_test.go.
+//
+// The other thing this removes is the token that closed the element, and that is
+// not always the element's own end tag. Where the source left the end tag out,
+// the token that closed it belongs to an enclosing element, and it goes too:
+//
+//	<h1>a <em>b</h1><p>after</p>
+//	em.RemoveAndKeepContent()
+//	<h1>a b<p>after</p>
+//
+// The heading never closes, so the paragraph is now inside it. All the content is
+// still there and nothing reports anything: the change is to the shape of the
+// document rather than to what it says. The element that loses its tag need not
+// be one the call named or an ancestor the caller was thinking about:
+//
+//	<h1><span>a <em>b</span> c</h1>
+//	em.RemoveAndKeepContent()
+//	<h1><span>a b c</h1>
+//
+// [Element.Remove] and [Element.Replace] have the same cause and the opposite
+// symptom - they take the content up to that token with them, which is what
+// those methods describe. Here the content survives and the nesting does not.
+//
+// The name guard on [Element.OnEndTag] detects it. Register the handler before
+// removing, and a callback whose [EndTag.Name] is not this element's name is
+// standing on the token that has just been deleted, so writing it back there
+// repairs the document:
+//
+//	name := e.TagName()
+//	e.OnEndTag(func(t *lolhtml.EndTag) error {
+//		if t.Name() == name {
+//			return nil // its own end tag; nothing borrowed
+//		}
+//		return t.Before("</"+t.Name()+">", lolhtml.HTML)
+//	})
+//	e.RemoveAndKeepContent()
+//
+// Measured in removeimplied_test.go, along with what happens without it.
 //
 // Appending after this is well defined, and puts the content after the children
 // that were kept.

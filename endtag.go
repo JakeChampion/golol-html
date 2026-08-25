@@ -95,6 +95,20 @@ func (t *EndTag) content(content string, ct ContentType, op string, fn contentOp
 }
 
 // Remove removes the end tag, leaving the element's content in place.
+//
+// The token being removed is not always the element's own end tag. Where the
+// source left the end tag out, the callback runs against the token that closed
+// the element, which belongs to an enclosing element - so this removes that
+// element's closing tag and it never closes:
+//
+//	<h1>a <em>b</h1><p>after</p>
+//	// in the em's end tag handler
+//	t.Remove()
+//	<h1>a <em>b<p>after</p>
+//
+// [EndTag.Name] is the test: a name that is not this element's is a token that
+// belongs to something else, and removing it is almost never what the handler
+// meant. See [Element.OnEndTag], and removeimplied_test.go for the measurement.
 func (t *EndTag) Remove() {
 	if p, err := t.live(); err == nil {
 		C.lol_html_end_tag_remove(p)

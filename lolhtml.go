@@ -137,6 +137,14 @@
 // the same as everywhere else evidence arrives too late: read the document
 // twice, and let the first pass find out which elements have their own end tags.
 //
+// Writing is not the only thing that acts on that token. Removing an element
+// removes it - [Element.Remove] and [Element.Replace] take the content up to it
+// as well, and [Element.RemoveAndKeepContent] takes the token alone, so the
+// element it belonged to never closes. Renaming an element writes over it, so
+// <h1>a <em>b</h1> renamed to i becomes <h1>a <i>b</i>, with the heading left
+// open. Each of those methods says so; the general rule is this one, and the name
+// guard above is what detects it in all of them.
+//
 // A handler that only wants to know the element is over, rather than to write at
 // its position, needs a finer distinction than the name gives. A foreign end tag
 // is where the element ended when an ancestor's end tag closed it, and later than

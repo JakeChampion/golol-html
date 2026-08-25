@@ -523,6 +523,35 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Removing or renaming an element acts on the token that closed it, which is
+  not always its own end tag.** `Remove` and `Replace` already said so - they
+  take the content up to that token with them, which is why removing the first
+  item of `<ul><li>a<li>b<li>c</ul>` removes all three. Three other methods act on
+  the same token and said nothing:
+
+      <h1>a <em>b</h1><p>after</p>   em.RemoveAndKeepContent()
+      <h1>a b<p>after</p>            // the </h1> is gone
+
+      <h1>a <em>b</h1>               em.SetTagName("i")
+      <h1>a <i>b</i>                 // written over the </h1>
+
+      <ul><li><em>a<li>b</ul>        em.SetTagName("i")
+      <ul><li><i>a<li>b</i>          // "b" is emphasised now
+
+  `RemoveAndKeepContent` is the quiet one: every character of content survives and
+  the shape of the document does not, so the paragraph ends up inside the heading.
+  The element that loses its tag need not be one the selector named -
+  `<h1><span>a <em>b</span> c</h1>` unwrapping the `em` loses the `</span>`.
+
+  All three now document it, with the repair the name guard makes possible: register
+  `OnEndTag` before removing, and write the token back when `EndTag.Name` is not
+  this element's name. `EndTag.Remove` had a one-line doc and now says whose tag it
+  may be removing. The package documentation's end-tag section says the general
+  rule once, since this is the fourth thing that follows from it.
+
+  `removeimplied_test.go` measures the whole matrix - four documents by six
+  operations - so the examples in those comments cannot drift, and includes the
+  well-formed document where none of this happens, which is why it is easy to ship.
 - **"Independent `Writer`s on separate goroutines are fine" is a statement about
   the `Writer`.** An `Option` holds no state and can be passed to as many
   `Writer`s as you like - and the function inside it is shared with all of them,
