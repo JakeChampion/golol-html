@@ -15,8 +15,35 @@ import (
 // instead of returning it.
 //
 // Use it when the content is large or generated incrementally: nothing has to be
-// assembled in memory first. Returning an error aborts the rewrite, and the
-// error surfaces from Write or Close.
+// assembled in memory first - each write reaches the destination as it is made,
+// measured in streamcommit_test.go.
+//
+// Returning an error aborts the rewrite, and the error surfaces from Write or
+// Close - but what the function has already written stays written, which is the
+// one place where failing costs something. A handler that fails discards its
+// insertion:
+//
+//	e.Before("<div>partial", lolhtml.HTML)
+//	return err
+//	// the destination gets nothing: the insertion goes with the rewrite
+//
+// A StreamFunc that fails does not, because the point of it is that the content
+// was already on its way:
+//
+//	e.StreamBefore(func(s *lolhtml.Sink) error {
+//		if err := s.WriteString("<div>partial", lolhtml.HTML); err != nil {
+//			return err
+//		}
+//		return err // a fetch that failed halfway, say
+//	})
+//	// the destination already has "<div>partial", unclosed <div> and all
+//
+// So the first byte written to the sink is a commitment: after it there is no
+// error path that leaves a usable document, only a truncated one. Whatever has to
+// be true before committing - the file opened, the request returned 200, the
+// template parsed - has to be established in the handler, where returning an
+// error still costs nothing, and the sink used only for content that is already
+// known to exist. examples/gip/include is built that way round.
 //
 // "On demand" means when the content is emitted, which is neither immediately
 // nor at the end, and two things follow from that.
@@ -96,6 +123,10 @@ type Sink struct {
 // Nil means nothing has failed yet, not that anything has succeeded. There is no
 // point at which the destination is known to have taken the content, because the
 // rewriter may still be holding it.
+//
+// This is the destination failing under a StreamFunc that is still going. The
+// other direction - the StreamFunc failing after the destination has taken
+// something - is not recoverable at all; see [StreamFunc].
 func (s *Sink) Err() error {
 	if s.c == nil {
 		return ErrDetached

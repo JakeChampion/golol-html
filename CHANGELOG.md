@@ -523,6 +523,35 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **The first byte written to a `Sink` is a commitment, and `StreamFunc` did not
+  say so.** It said "returning an error aborts the rewrite, and the error surfaces
+  from Write or Close", which reads like the insertion is abandoned the way a
+  failing handler's is. It is not, and the difference is the whole point of the
+  feature: a sink write reaches the destination as it is made.
+
+      e.Before("<div>partial", lolhtml.HTML); return err
+      // destination: "<p>a</p>"                     -- the insertion went with the rewrite
+
+      e.StreamBefore(func(s *lolhtml.Sink) error {
+          s.WriteString("<div>partial", lolhtml.HTML)
+          return err
+      })
+      // destination: "<p>a</p><div>partial"         -- and an unclosed <div> with it
+
+  Measured, along with the streaming itself: from inside a `StreamFunc`, the
+  destination's write count goes up after each sink write, so nothing is held.
+  That is what makes a large insertion cheap and what makes failing halfway
+  unrecoverable - the response has left, and the committed prefix need not be well
+  formed.
+
+  So whatever has to be true before committing - the file opened, the request
+  returned 200, the template parsed - has to be established in the handler, where
+  returning an error still costs nothing, and the sink given only content already
+  known to exist. `StreamFunc` now says that with both shapes; `Sink.Err`, which
+  is the same problem in the other direction, points at it.
+  `streamcommit_test.go` measures all of it, including that the error is a
+  `HandlerError` of kind "streaming" so a log can tell the unrecoverable case from
+  a handler that failed before writing.
 - **A stream can tell a comment from a bogus comment, and the documentation said
   it could not.** "What counts as a comment" has always said that four pieces of
   syntax arrive as comment tokens - a comment, a bogus comment, a processing
