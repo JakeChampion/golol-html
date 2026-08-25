@@ -1347,6 +1347,29 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Failing a rewrite from a handler is not atomic, and nothing said what the
+  destination already holds.** `Write` and `ErrPoisoned` documented that a handler
+  error stops the rewrite and poisons the Writer. What has gone out by then is the
+  part a caller refusing a document needs to know, and it is not nothing:
+
+      <p>a</p><p>b</p><p>c</p><img src="http://insecure/x.png"><p>d</p><p>e</p>
+
+      the destination holds   <p>a</p><p>b</p><p>c</p>
+
+  Identical at one Write of the whole document and at 64-, 16-, 4- and 1-byte
+  writes. The prefix is a whole number of tokens - measured over an open tag, text,
+  a list, a comment and a doctype - so it is well-formed markup, and a client
+  reading it sees a short page rather than a failure.
+
+  The two ends of the range are worth knowing too: a handler that fails on the
+  document's first element delivers nothing at all, and one that fails in
+  `OnDocumentEnd` has already delivered every byte, with the error surfacing only
+  from `Close`. So a rewrite that must refuse a document decides as early as it can
+  *and* holds its own output, forwarding only on success.
+
+  `Writer.Write`, `ErrPoisoned` and the README's "two things to know" say this now,
+  and `handlerfailure_test.go` gates it. B154.
+
 - **Registration cost is per handler, not per selector clause.** The Cost section had
   the per-handler figure - about seven allocations per distinct selector - and said
   nothing about what a selector *list* costs, which is the shape a tool with a list of
