@@ -270,3 +270,116 @@ func TestTheStandardFixWorks(t *testing.T) {
 		t.Errorf("output is still invalid: %q", out)
 	}
 }
+
+// TestOnlyTextLosesTheBytes, which is the other half of the asymmetry above: every
+// unit kind reports U+FFFD to a handler that reads it, and only text is re-emitted
+// through that reading - an attribute, a comment and a tag name come back out of the
+// source with their bytes intact.
+//
+// It decides the shape of anything diagnosing a mis-declared document: reading text is
+// enough to change it, so the diagnosis and the copy cannot be the same pass. See
+// examples/gip/mojibake.
+func TestOnlyTextLosesTheBytes(t *testing.T) {
+	const bad = "\x92" // a windows-1252 right single quote: invalid UTF-8
+
+	for _, tc := range []struct {
+		what      string
+		doc       string
+		opts      func(*[]string) []lolhtml.Option
+		preserved bool
+	}{
+		{
+			what: "text, with a text handler",
+			doc:  "<p>it" + bad + "s</p>",
+			opts: func(seen *[]string) []lolhtml.Option {
+				return []lolhtml.Option{lolhtml.OnDocumentText(func(c *lolhtml.TextChunk) error {
+					if s := c.Text(); s != "" {
+						*seen = append(*seen, s)
+					}
+					return nil
+				})}
+			},
+			preserved: false,
+		},
+		{
+			what: "raw text, with a text handler",
+			doc:  "<script>it" + bad + "s</script>",
+			opts: func(seen *[]string) []lolhtml.Option {
+				return []lolhtml.Option{lolhtml.OnDocumentText(func(c *lolhtml.TextChunk) error {
+					if s := c.Text(); s != "" {
+						*seen = append(*seen, s)
+					}
+					return nil
+				})}
+			},
+			preserved: false,
+		},
+		{
+			what: "an attribute, read by an element handler",
+			doc:  `<p title="it` + bad + `s">x</p>`,
+			opts: func(seen *[]string) []lolhtml.Option {
+				return []lolhtml.Option{lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+					v, _ := e.Attribute("title")
+					*seen = append(*seen, v)
+					return nil
+				})}
+			},
+			preserved: true,
+		},
+		{
+			what: "a comment, read by a comment handler",
+			doc:  "<!--it" + bad + "s-->",
+			opts: func(seen *[]string) []lolhtml.Option {
+				return []lolhtml.Option{lolhtml.OnDocumentComment(func(c *lolhtml.Comment) error {
+					*seen = append(*seen, c.Text())
+					return nil
+				})}
+			},
+			preserved: true,
+		},
+		{
+			what: "a tag name, read by an element handler",
+			doc:  "<p" + bad + ">x</p" + bad + ">",
+			opts: func(seen *[]string) []lolhtml.Option {
+				return []lolhtml.Option{lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+					*seen = append(*seen, e.TagName())
+					return nil
+				})}
+			},
+			preserved: true,
+		},
+	} {
+		var seen []string
+		out, err := lolhtml.RewriteString(tc.doc, tc.opts(&seen)...)
+		if err != nil {
+			t.Errorf("%s: %v", tc.what, err)
+			continue
+		}
+		// Every one of them reports the replacement character rather than the byte,
+		// so no handler can see what the document actually held.
+		if len(seen) == 0 {
+			t.Errorf("%s: the handler saw nothing", tc.what)
+			continue
+		}
+		if !strings.Contains(strings.Join(seen, ""), "�") {
+			t.Errorf("%s: the handler saw %q, want U+FFFD", tc.what, seen)
+		}
+		if got := out == tc.doc; got != tc.preserved {
+			t.Errorf("%s: bytes preserved = %v, want %v (output %q)", tc.what, got, tc.preserved, out)
+		}
+	}
+
+	// And reading something else on the same document does not lose the text: it is
+	// the text handler that costs the bytes, not reading in general.
+	doc := "<p title=\"t\">it" + bad + "s</p>"
+	out, err := lolhtml.RewriteString(doc, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+		_, _ = e.Attribute("title")
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != doc {
+		t.Errorf("an element handler changed the text: %q", out)
+	}
+}

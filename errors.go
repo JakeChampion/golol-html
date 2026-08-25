@@ -164,6 +164,14 @@ var ErrAmbiguousTag = errors.New("lolhtml: strict mode refused an ambiguous tag"
 // The classification is made here rather than read off lol-html's message: when a
 // write fails, the content it was given is checked, so a reword upstream cannot
 // turn the guard off.
+//
+// Reading is lossy for those bytes whatever the unit: a handler is handed U+FFFD and
+// never the byte, so no rewrite can see what the document held. Writing is lossy for
+// text alone. Measured: with a text handler registered, invalid bytes in text or raw
+// text come back as U+FFFD in the output, while an attribute value, a comment and a
+// tag name read the same way keep their bytes, because those are re-emitted from the
+// source. So a tool diagnosing a mis-declared document cannot also be the pass that
+// copies it. See invalidutf8_test.go and examples/gip/mojibake.
 var ErrInvalidUTF8 = errors.New("lolhtml: content is not valid UTF-8")
 
 // Is lets errors.Is reach the conditions a caller branches on. Any other
