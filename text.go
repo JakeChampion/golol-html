@@ -184,6 +184,13 @@ func (t *TextChunk) Remove() {
 }
 
 // IsRemoved reports whether the chunk has been removed by a handler.
+//
+// This chunk, and not the element it is in: text inside an element another handler
+// has removed reports false, because nothing has been done to the chunk itself.
+// [Element.IsRemoved] does answer for an ancestor, so a text handler that needs to
+// know - anything accumulating, since the text it is being handed may be on its way
+// out - has to be told by an element handler. See the package documentation on
+// removal. Measured in removedsubtree_test.go.
 func (t *TextChunk) IsRemoved() bool {
 	p, err := t.live()
 	if err != nil {

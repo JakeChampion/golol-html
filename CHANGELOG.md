@@ -1297,6 +1297,36 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Whether a handler can tell it is inside a removed element depends on which
+  handler it is.** The removal section said that handlers keep running over
+  removed content and that "a handler that accumulates ... has to notice for itself
+  that the content it is looking at is on its way to being dropped.
+  `Element.IsRemoved` is how an element handler checks" - and stopped there,
+  leaving the two things a caller needs unsaid.
+
+  Measured, both of them:
+
+      an element handler   IsRemoved is TRUE for a descendant of an element
+                           removed with Remove or Replace - no depth counter needed
+      a text handler       TextChunk.IsRemoved is FALSE: it reports the chunk's
+                           own removal and nothing else
+      a comment handler    the same
+
+  So the good news is better than the documentation implied - an element does not
+  have to track anything, and `RemoveAndKeepContent` correctly reports false
+  because the content is being kept - and the gap is real: the handler that most
+  often accumulates is the one that cannot ask. The package documentation now
+  carries both, with the depth-counter recipe a text handler needs, which works
+  because an end-tag handler still runs for an element inside a removed one.
+
+  Also measured and now stated: an insertion made anywhere inside a removed
+  subtree is discarded - every position, from a grandchild, and from a text
+  handler - so the documented "insert first, remove last" hazard is about one
+  element and its own handlers rather than about a subtree.
+
+  `Element.IsRemoved`, `TextChunk.IsRemoved` and `Comment.IsRemoved` each say what
+  they answer for. `removedsubtree_test.go` measures all of it, including the
+  recipe on a document whose removed element has no end tag of its own.
 - **Chunk boundaries do not only follow the writes.** `TextChunk.Text` said "where
   the chunk boundaries fall is not a caller's choice - they follow the writes,
   which follow whatever reader is upstream", which reads as a promise that

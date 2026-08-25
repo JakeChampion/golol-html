@@ -763,6 +763,21 @@ func (e *Element) RemoveAndKeepContent() {
 // by Remove or by RemoveAndKeepContent. It does not distinguish them, so it
 // cannot be used to decide whether inserting inside the element is safe - only
 // whether the element itself will be emitted.
+//
+// It also answers for an ancestor. An element inside one that a handler has
+// already removed with [Element.Remove] or [Element.Replace] reports true,
+// because it is on its way out with everything else in there - so a handler
+// accumulating over a document does not have to keep a depth counter to know that
+// what it is looking at will not be in the output. [Element.RemoveAndKeepContent]
+// is the exception, and the right one: the content is being kept, so a descendant
+// reports false.
+//
+// The other units do not work this way. [TextChunk.IsRemoved] and
+// [Comment.IsRemoved] report only whether that chunk or comment has itself been
+// removed, so a text handler inside a removed element sees false and has to learn
+// it some other way - an element handler tracking removed ancestors, which is what
+// the package documentation on removal describes. Measured in
+// removedsubtree_test.go.
 func (e *Element) IsRemoved() bool {
 	p, err := e.live()
 	if err != nil {

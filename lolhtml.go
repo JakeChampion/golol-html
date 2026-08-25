@@ -778,6 +778,43 @@
 // [Element.Before], [Element.After] and [Element.Replace] position content
 // outside the element, and surviving its removal is what they are for.
 //
+// Whether a handler can tell that it is inside a removed element depends on which
+// handler it is, and the answer is not uniform:
+//
+//	an element handler   [Element.IsRemoved] is true for a descendant of a
+//	                     removed element, so nothing has to be tracked
+//	a text handler       [TextChunk.IsRemoved] is false: it reports only the
+//	                     chunk's own removal
+//	a comment handler    the same
+//
+// An insertion made by a descendant's handler is discarded along with the rest of
+// the subtree - measured for every position - so the "insert first, remove last"
+// hazard above is about one element and its own handlers rather than about a
+// subtree. What a text handler cannot do is count: it is handed the text of a
+// removed element with nothing to say so, so anything accumulating needs an
+// element handler to tell it:
+//
+//	depth := 0
+//	opts := []lolhtml.Option{
+//		lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+//			if !e.IsRemoved() || !e.CanHaveContent() {
+//				return nil
+//			}
+//			depth++
+//			return e.OnEndTag(func(*lolhtml.EndTag) error { depth--; return nil })
+//		}),
+//		lolhtml.OnDocumentText(func(t *lolhtml.TextChunk) error {
+//			if depth > 0 {
+//				return nil // on its way out; not this document's text
+//			}
+//			// count it
+//			return nil
+//		}),
+//	}
+//
+// which works because an end-tag handler still runs for an element inside a
+// removed one. Measured in removedsubtree_test.go.
+//
 // # What counts as a comment
 //
 // A comment handler fires for what an HTML parser calls a comment, which is more
