@@ -701,6 +701,12 @@ func (e *Element) Prepend(content string, ct ContentType) error {
 // paragraph - ends here at the enclosing element's end tag instead, so this
 // writes somewhere else: see the package documentation on end tags being tokens.
 //
+// It also loses insertions there, where [EndTag.Before] does not. Applied to
+// every item of <ul><li>a<li>b<li>c</ul>, this keeps one of the three and
+// EndTag.Before keeps all three; neither position is the item's own end, which
+// the source does not have. Where either would do, prefer the one that does not
+// drop content silently.
+//
 // Calling this after Remove still emits the content, without the element's tags
 // around it; see the package documentation on removal.
 func (e *Element) Append(content string, ct ContentType) error {

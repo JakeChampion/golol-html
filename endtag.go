@@ -67,6 +67,13 @@ func (t *EndTag) SourceLocation() SourceLocation {
 
 // Before inserts content immediately before the end tag, making it the last
 // content inside the element.
+//
+// This is the insertion to reach for where [Element.Append] would also do, because
+// the two differ when the source omits an end tag. Applied to every item of
+// <ul><li>a<li>b<li>c</ul>, where all three handlers run at the single </ul>,
+// this keeps all three insertions - innermost first - and Append keeps one.
+// Neither lands at the item's own end, which the source does not have, but only
+// one of them loses content, and neither reports anything.
 func (t *EndTag) Before(content string, ct ContentType) error {
 	return t.content(content, ct, "end_tag_before", cfEndTagBefore)
 }

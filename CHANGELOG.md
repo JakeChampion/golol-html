@@ -1266,6 +1266,34 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/shadow`: give every custom element a declarative shadow root,
+  and give it exactly once.** A page can go through twice without gaining two,
+  which is the property the whole design is for.
+
+  Both design decisions are measurements rather than preferences. The insertion
+  goes at the host's end tag, not its start tag, because a host that already has a
+  shadow root must be left alone and whether it has one is only known once its
+  children have gone past - by which time the start tag is behind the rewriter.
+  The detecting selector is `my-card > template[shadowrootmode]` rather than
+  `template[shadowrootmode]`, because a declarative shadow root is a child of its
+  host and a template deeper inside is an ordinary template: on
+  `<my-card><div><template shadowrootmode="open">…</template></div></my-card>` the
+  first matches 0 and the second matches 1.
+
+  The second reason for the end tag is B176. And what the program cannot do is a
+  host whose end tag never arrives: `<my-card/>` is the case that costs someone an
+  afternoon, since HTML ignores the slash on an element that is neither void nor
+  foreign, so the host opens and runs to the end of the document while
+  `IsSelfClosing` reports true and `CanHaveContent` also reports true. Neither is
+  a test for it, so the report counts hosts that never closed rather than
+  pretending they were done.
+
+  Nine tests. `TestTwiceIsTheSameAsOnce` is the property, over documents one to
+  four hosts deep and one to three wide - inserting at the start tag instead fails
+  it. `TestAppendAndEndTagBeforeDoNotAgreeWhenTheEndTagIsOmitted` is the
+  measurement behind B176, with the closed-end-tag case asserted alongside so the
+  difference is shown to be about the omission and nothing else.
+
 - **`examples/gip/islands`: annotate the interactive regions of a page for
   partial hydration - which ones there are, which are inside which, and what each
   needs.** Three attributes per island and a manifest a bundler can read.
@@ -2216,6 +2244,27 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`EndTag.Before` does not lose insertions where `Append` does.** The end-tag
+  section documents what happens to every end-of-element operation when the source
+  omits an end tag - `Append` and `After` keep one insertion of three,
+  `SetInnerContent` and `Replace` delete content - and it did not mention the one
+  operation that keeps all of them. Applied to every item of
+  `<ul><li>a<li>b<li>c</ul>`:
+
+      Append         <ul><li>a<li>b<li>c[1]</ul>
+      EndTag.Before  <ul><li>a<li>b<li>c[3][2][1]</ul>
+
+  All three handlers run at the single `</ul>`, innermost first, so all three
+  insertions survive. The position is no more correct than `Append`'s - the content
+  belongs at each item's own end and the source has no such position - but one of
+  them drops content silently and the other does not. With the end tags spelled
+  out the two are identical and per-item, so the difference is about the omission
+  and nothing else.
+
+  The package section now carries the row, and `Element.Append` and
+  `EndTag.Before` each point at the other, because the choice between them is
+  usually made without knowing there is one. B176 records it.
+
 - **The rule for which selectors are supported does not predict `:not(div p)`.**
   The documentation gives one rule - a selector works if the rewriter can decide
   it when it sees the start tag - and it covers almost everything. It does not
