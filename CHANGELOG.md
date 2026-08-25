@@ -1318,6 +1318,34 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`MaxMemory` is bounded by the biggest token a handler is given, not by the
+  document.** The option already said that how much a document needs depends on how
+  it is written, with one page needing 1024 in a single Write and 8192 in 256-byte
+  writes. The rule underneath that was not written down, and it is simple: a token
+  has to be copied when it straddles two writes, and only a token a handler is given
+  is copied.
+
+      one Write   256 B writes   64 B writes
+      one 2012-byte tag, matched          5           2012          2012
+      one 2012-byte tag, unmatched        5            260            68
+      200 short tags (2800 B), matched    5            268            76
+
+  So a document delivered in one Write needs almost nothing however long it is; an
+  unmatched token costs nothing beyond the write size; a matched tag costs its whole
+  length, exactly, at every write size small enough to split it. Text costs nothing
+  at all, because it arrives in chunks - while a comment, which arrives whole, costs
+  its length like a matched tag. And what the rewrite writes does not count: growing
+  an attribute 64 times does not move the floor by a byte.
+
+  The consequence is worth stating plainly, because it turns up as a bail-out in
+  production rather than in a test: adding a handler can raise the limit the same
+  pipeline needed before, with no change to the document. A rewrite matching the
+  elements that carry `srcset` - the longest tags on most pages - is the usual way to
+  meet it.
+
+  `MemorySettings.MaxMemory` carries the table, `memoryfloor_test.go` gates every
+  row, and it is B149.
+
 - **An HTML tag name inside an `<svg>` ends the svg, and the library's two views of
   that disagree.** Foreign content is not a container the way an element is: the
   parser breaks out of SVG when it meets an HTML tag name, and everything after that
