@@ -469,3 +469,58 @@ func TestSelectorRegistrationCost(t *testing.T) {
 			"reused, which should make a repeat cheaper", perRepeat, perDistinct)
 	}
 }
+
+// TestASecondPassCostsTwice pins the ratio in the two-passes section, which
+// nothing measured. The section used to explain the ratio by saying almost all
+// of the cost is building the rewriter; at 800 elements one pass costs 425
+// allocations, so it plainly is not - the second pass simply does everything
+// again.
+//
+// A ratio rather than a count, because the counts move with the toolchain and
+// the doubling does not.
+func TestASecondPassCostsTwice(t *testing.T) {
+	requireRealAllocationCounts(t)
+
+	opt := func() lolhtml.Option {
+		return lolhtml.OnElement("a[href]", func(*lolhtml.Element) error { return nil })
+	}
+	pass := func(dst io.Writer, doc string) string {
+		var buf strings.Builder
+		out := dst
+		if dst == nil {
+			out = &buf
+		}
+		w, err := lolhtml.NewWriter(out, opt())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(w, doc); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.String()
+	}
+
+	for _, elements := range []int{2, 40, 400} {
+		doc := strings.Repeat(`<p>text</p><a href="/x">l</a>`, elements/2)
+		one := testing.AllocsPerRun(30, func() { pass(io.Discard, doc) })
+		two := testing.AllocsPerRun(30, func() { pass(io.Discard, pass(nil, doc)) })
+
+		// One and a half to three: wide enough for the buffer growth that the
+		// second pass's destination adds, narrow enough to notice a change in
+		// kind - a second pass becoming free, or costing four times.
+		if ratio := two / one; ratio < 1.5 || ratio > 3 {
+			t.Errorf("%d elements: one pass %.0f allocations, two %.0f, ratio %.2f; "+
+				"the documented ratio is about two", elements, one, two, ratio)
+		}
+		// And the per-element cost really does dominate at the top end, which is
+		// the part the old explanation had backwards.
+		if elements == 400 && one < 100 {
+			t.Errorf("400 elements cost only %.0f allocations in one pass; the "+
+				"documentation's table says the per-element cost dominates by "+
+				"this size", one)
+		}
+	}
+}

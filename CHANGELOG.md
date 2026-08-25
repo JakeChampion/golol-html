@@ -505,6 +505,19 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **The `# Cost` section explained the two-pass ratio with a reason that points
+  the wrong way.** It said a second pass roughly doubles the allocation count,
+  "a ratio that does not grow with document size, since almost all of it is
+  building the rewriter". The ratio does hold - measured 24/52 at 2 elements,
+  45/98 at 40, 425/866 at 800 - and the reason is not that. At 800 elements one
+  pass costs 425 allocations, so the per-element work dominates by a long way; the
+  ratio holds because the second pass re-parses the document and runs every
+  handler again.
+
+  That matters because the old reason invites the conclusion that two passes are
+  cheap on a large document, which is the opposite of the truth. The section now
+  carries the table and says so, and `TestASecondPassCostsTwice` gates the ratio -
+  the counts move with the toolchain and the doubling does not.
 - **`ErrDetached` claimed more than it does.** It said it is returned by "any
   method on a rewritable unit ... called after its handler has returned". Only
   mutators return it. A getter has nowhere to put an error without a second
