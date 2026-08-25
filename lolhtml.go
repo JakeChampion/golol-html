@@ -695,6 +695,14 @@
 // buffering an unclosed tag, because each write rescans the pending buffer.
 // Network-sized reads are far from this; writing a byte at a time is not.
 //
+// The destination has a cost of its own, and it is not the one a reader of the
+// above would guess. The number of writes it receives is decided by what the
+// rewrite does rather than by how the document arrives: a start tag that a
+// handler mutated is re-serialised piece by piece, so one attribute set turns
+// one write into twelve on a single element, and 2000 elements turn one 132 KB
+// write into 22,001 writes of median size one byte. Wrap an unbuffered
+// destination in a bufio.Writer; see [NewWriter].
+//
 // # Errors
 //
 // A handler returning a non-nil error stops the rewrite; the error surfaces

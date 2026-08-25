@@ -476,6 +476,15 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Nothing said how many times the destination is written to, and it is not what
+  a reader would guess.** It is decided by what the rewrite does rather than by
+  the document: a start tag a handler mutated is re-serialised piece by piece, so
+  one `SetAttribute` turns one write into twelve on a single element, and 2000 of
+  them turn one 132 KB write into 22,001 writes with a median size of one byte -
+  22,001 system calls on an unbuffered socket, for 162 KB. Passthrough of the same
+  document in one `Write` is one write. `NewWriter` now says so and says to wrap
+  an unbuffered destination in a `bufio.Writer`, and `writecount_test.go` pins
+  every number in that table.
 - **`OnText` said less than it needed to, in two directions.** It did not point
   at `OnDocumentText` the way `OnComment` points at `OnDocumentComment`, and
   nothing said that no selector reaches text outside every element - so

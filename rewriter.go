@@ -69,6 +69,26 @@ type native struct {
 // Options register handlers (see OnElement and friends) and tune the rewriter
 // (see WithEncoding, WithMemorySettings, WithStrict). At least one handler is
 // usually wanted; with none, the output is the input re-serialised.
+//
+// Put a bufio.Writer in front of dst unless it is already buffered. How many
+// times dst is written to is decided by what the rewrite does, not by how the
+// document is written, and a mutation makes it much larger. Measured on
+// <div class="row"><a href="/p">link</a></div>, written in one call:
+//
+//	passthrough                      1 write
+//	a handler that matches           3 writes
+//	the handler reads an attribute   3 writes
+//	the handler removes an attribute 5 writes
+//	the handler sets an attribute   12 writes
+//
+// because a mutated start tag is re-serialised piece by piece: "<", "a", " ",
+// `href="/p"`, " ", "rel", `="`, "noopener", `"`, ">". Over 2000 such elements
+// that is one 132 KB write becoming 22,001 writes with a median size of one
+// byte, which on a socket or a file is 22,001 system calls for 162 KB.
+//
+// Nothing is buffered here on purpose: a caller streaming to a client wants the
+// bytes as they are produced, and a buffer belongs where that caller can flush
+// it. Pinned in writecount_test.go.
 func NewWriter(dst io.Writer, opts ...Option) (*Writer, error) {
 	if dst == nil {
 		return nil, errNilDst
