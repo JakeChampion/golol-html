@@ -1168,6 +1168,31 @@
   order they were written.
 
 ### Testing
+- **`differential/preserving_test.go`, the two halves of "does this rewrite preserve
+  meaning".** Six rewrites that should leave the tree exactly as it was - setting an
+  attribute, adding a class, renaming `b` to `strong`, inserting a comment before an
+  element, inserting one after it with the end-tag name check, and reading everything and
+  changing nothing - are run over fourteen documents chosen because each is a place a
+  streaming rewrite can go wrong: implied end tags, foster parenting, a template's own
+  parse rules, foreign content, a form in a table. The comparison is the x/net/html tree
+  with the intended change subtracted, node for node. All six preserve all fourteen.
+
+  The other half asserts that the documented hazards still are ones: a div wrapper inside
+  a paragraph, prepending an element into a template holding rows, renaming a div to a
+  table, appending to a list item whose end tag was omitted, prepending into a table. If
+  any of those stopped changing the tree, the documentation about it would be wrong, and
+  the test says so. One pair makes the difference explicit: the same insertion at an
+  element's end changes nothing with the end-tag name guard and changes the tree without
+  it.
+
+  `examples/gip/preserve` is the part that can run against a live document without a
+  parser dependency: it compares the token stream the rewriter itself reports, and its
+  own documentation is clear about what that cannot see - foster parenting, a content
+  model that deletes nodes, and any wrapper, since "put this around that" has no
+  expression in a token sequence. Its hazard is one the token stream *can* see: replacing
+  a list item's content, which on a list with implied end tags deletes the items after it,
+  and on a closed list does exactly what it says.
+
 - **`examples/gip/streamvsmemory`, which runs a rewrite both ways and says what differs.**
   The in-memory shape is the one people test with - `RewriteString` is the shortest way to
   try a rewrite - and three of the differences it hides are worth having a tool for:
