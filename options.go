@@ -8,6 +8,7 @@ import "C"
 import (
 	"errors"
 	"runtime"
+	"strings"
 )
 
 var errNilDst = errors.New("lolhtml: destination writer is nil")
@@ -328,11 +329,105 @@ func (e *SelectorError) Error() string {
 // and it is worded as a question rather than a diagnosis, because a colon may
 // well have been meant as a pseudo-class that is genuinely unsupported.
 func selectorHint(sel string) string {
+	if sigil, name, ok := identStartingWithADigit(sel); ok {
+		// The suggestions are written plainly rather than quoted with %q, because a
+		// reader is going to copy them: %q would double the backslash in the
+		// escape and escape the quotes in the attribute form.
+		return "(" + map[byte]string{'#': "an id", '.': "a class"}[sigil] +
+			` that starts with a digit cannot be written after "` + string(sigil) +
+			`" - it needs a hex escape, as in "` + string(sigil) + hexEscapeFirstDigit(name) +
+			`", or an attribute selector, as in "` + attributeForm(sigil, unescapeCSS(name)) + `")`
+	}
 	if !hasUnescapedColon(sel) {
 		return ""
 	}
 	return `(if the ":" is part of a tag or attribute name it must be escaped, ` +
 		`as in "esi\:include" or "[xlink\:href]")`
+}
+
+// identStartingWithADigit finds a "#name" or ".name" whose name begins with a
+// digit, which CSS cannot express literally: lol-html reports it as "The selector
+// is empty", which describes what its parser had left rather than what the caller
+// wrote.
+//
+// An optional leading hyphen is part of the name, because "-1a" is invalid for the
+// same reason and needs the same escape.
+func identStartingWithADigit(sel string) (sigil byte, name string, ok bool) {
+	for i := 0; i < len(sel); i++ {
+		switch sel[i] {
+		case '\\':
+			i++ // an escape, whatever it is
+			continue
+		case '#', '.':
+		default:
+			continue
+		}
+		j := i + 1
+		if j < len(sel) && sel[j] == '-' {
+			j++
+		}
+		if j >= len(sel) || sel[j] < '0' || sel[j] > '9' {
+			continue
+		}
+		// The name runs to the next unescaped character that cannot be in one.
+		end := j
+		for end < len(sel) {
+			if sel[end] == '\\' {
+				end += 2
+				continue
+			}
+			if strings.ContainsRune(" \t\r\n>+~,:[]()#.", rune(sel[end])) {
+				break
+			}
+			end++
+		}
+		if end > len(sel) {
+			end = len(sel)
+		}
+		return sel[i], sel[i+1 : end], true
+	}
+	return 0, "", false
+}
+
+// hexEscapeFirstDigit rewrites the leading digit of a name as the CSS hex escape
+// for it, with the space that ends the escape. The space matters: "\31a" is the
+// single character U+031A, not a "1" followed by an "a".
+func hexEscapeFirstDigit(name string) string {
+	for i := 0; i < len(name); i++ {
+		if name[i] >= '0' && name[i] <= '9' {
+			return name[:i] + "\\3" + string(name[i]) + " " + name[i+1:]
+		}
+	}
+	return name
+}
+
+// attributeForm is the same match written as an attribute selector, which needs no
+// escaping at all because the value is quoted.
+func attributeForm(sigil byte, name string) string {
+	if sigil == '.' {
+		return "[class~=" + quote(name) + "]"
+	}
+	return "[id=" + quote(name) + "]"
+}
+
+// unescapeCSS drops the backslashes from a name, which is what the value inside an
+// attribute selector's quotes has to be. Only the single-character escapes are
+// undone: a name holding a hex escape is already spelled in a way CSS accepts, so
+// it never reaches here.
+func unescapeCSS(name string) string {
+	if !strings.Contains(name, "\\") {
+		return name
+	}
+	var b strings.Builder
+	for i := 0; i < len(name); i++ {
+		if name[i] == '\\' && i+1 < len(name) {
+			i++
+			b.WriteByte(name[i])
+			continue
+		}
+		b.WriteByte(name[i])
+	}
+	return b.String()
 }
 
 func hasUnescapedColon(sel string) bool {

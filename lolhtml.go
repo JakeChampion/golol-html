@@ -310,7 +310,7 @@
 // An unsupported selector is rejected by [NewWriter], not silently ignored, with
 // a [SelectorError] naming it and saying which part it could not use.
 //
-// # A colon or a dot in a name has to be escaped
+// # A colon, a dot or a leading digit in a name has to be escaped
 //
 // A selector is CSS, so a punctuation character in a tag or attribute name is
 // read as CSS punctuation unless it is escaped with a backslash. The two that
@@ -331,6 +331,27 @@
 // selector it rejected contains an unescaped colon. The dot has no such help: it
 // parses, so nothing fails - the handler simply never runs, which is the quietest
 // failure in this list.
+//
+// A digit is a third case, with a rule of its own: a CSS identifier cannot begin
+// with one, so a class or id that does cannot be written after "#" or "." at all.
+// Generated ids and utility class names land here regularly, and the message is no
+// help either - lol-html reports "The selector is empty", which describes what its
+// parser had left rather than what the caller wrote:
+//
+//	#1a                     The selector is empty
+//	#\31 a                  matches id="1a"
+//	#\31a                   parses, matches nothing: \31a is U+031A, one character
+//	#\000031a               matches: six hex digits need no terminator
+//	[id="1a"]               matches, and needs no escaping at all
+//	.2xl\:hidden            The selector is empty: a digit and a colon at once
+//	[class~="2xl:hidden"]   matches that one
+//
+// The space after "\31" is what ends the escape, and leaving it out is the quiet
+// version of this mistake rather than a syntax error. [SelectorError] carries both
+// answers for a rejected selector whose class or id starts with a digit, written so
+// they can be copied; the attribute-selector form is the one to reach for, since it
+// needs no escaping at all. Measured in digitident_test.go, including that both
+// suggestions match the element they are suggested for.
 //
 // Everything else about matching is case-insensitive as usual, so
 // `ESI\:INCLUDE` matches too.
