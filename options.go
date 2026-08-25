@@ -327,6 +327,14 @@ func OnComment(selector string, fn func(*Comment) error) Option {
 // be reported as several chunks, and only the last has IsLastInTextNode set.
 // Accumulate across chunks if you need whole text nodes.
 //
+// The boundaries follow the writes, so a caller does not choose them. What they
+// do not do is split a character; see [TextChunk.Text]. Everything about a
+// document that a handler can observe is invariant across write patterns except
+// this - element, comment and doctype calls, their order, tag names, attributes,
+// source locations, end tags, and the text of each node are all the same however
+// the input arrived - measured over 22 documents and seven write patterns in
+// examples/gip/chunkinvariance.
+//
 // The last chunk of a node is its own call and carries no bytes, in every shape
 // measured - see [TextChunk.IsLastInTextNode] - so this handler runs at least
 // twice per text node and about half its calls on a document of prose are handed

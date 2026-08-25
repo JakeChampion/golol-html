@@ -493,6 +493,24 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **What survives a write boundary, and what a boundary can fall inside.** The
+  chunking of text was documented as having "no guaranteed boundaries", which is
+  true and reads as weaker than it is: a chunk never contains part of a
+  character. Measured at one byte per write over two-, three- and four-byte
+  runes, in text, in a comment and in an attribute value. Content going the other
+  way has the opposite rule - `Sink.WriteChunk` takes a partial sequence and
+  joins it to the next write - so the two are worth stating together.
+
+  The consequence is the useful part: a transform applied per chunk is safe per
+  character and wrong per pattern. `strings.ToUpper` on a chunk is correct
+  however the document arrived; a regular expression looking for a word is not,
+  because the word can straddle two chunks.
+
+  And the rest of it is invariant. Element, comment and doctype calls and their
+  order, tag names, attributes, source locations, end tags, and the text of each
+  node are identical however the input arrived - 22 documents against seven write
+  patterns, in `examples/gip/chunkinvariance`, where the text handler's call
+  count moves by up to 500x on the same document and nothing else moves at all.
 - **The worked example for reading an element's whole text corrupted character
   references.** It accumulated `TextChunk.Text`, which is source, and wrote the
   result back as `Text`, which escapes it again. On the `<a href="/x">click

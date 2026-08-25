@@ -25,6 +25,21 @@ type TextChunk struct {
 // character references left encoded: the text of <p>caf&eacute;</p> is
 // "caf&eacute;", not "café".
 //
+// A chunk never contains part of a character. Where the chunk boundaries fall is
+// not a caller's choice - they follow the writes, which follow whatever reader is
+// upstream - but they always fall between characters, measured at one byte per
+// write over two-, three- and four-byte runes, in text, in a comment and in an
+// attribute value. Content going the other way has the opposite rule:
+// [Sink.WriteChunk] takes a partial sequence and joins it to the next write.
+//
+// What a boundary does split is everything larger than a character. So a
+// transform applied per chunk is safe per character and wrong per pattern:
+// strings.ToUpper on a chunk is correct however the document arrived, a regular
+// expression looking for a word is not, because the word can straddle two
+// chunks. Accumulate to [TextChunk.IsLastInTextNode] for anything that spans
+// more than one character, and see the package documentation on reading an
+// element's whole text for why that is still not the element's text.
+//
 // This is deliberate on lol-html's part - a rewriter has to be able to re-emit
 // what it read - but it is easy to trip over when comparing against a plain Go
 // string. Use html.UnescapeString from the standard library when you need the
