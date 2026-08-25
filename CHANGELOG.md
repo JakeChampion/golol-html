@@ -1318,6 +1318,30 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A graceful bail-out serves unrewritten input, and its rewritten prefix can be
+  empty.** `MemorySettings.GracefulBailOut` said that the rewriter flushes what it
+  has instead of discarding it, which sounds like a strictly better failure. It is
+  not, and the reason is in the numbers. On a 2.6 KB document of 201 paragraphs fed
+  in 64-byte writes, with a handler setting an attribute on each:
+
+      MaxMemory 560     0 bytes    0 rewritten   default: nothing served
+      MaxMemory 560    64 bytes    0 rewritten   graceful: one write, verbatim
+      MaxMemory 900   5425 bytes 201 rewritten   no bail-out
+
+  So at the limit that bails out on the first write, "flush what it has" is the
+  input, unchanged - not a partly-rewritten document but a document the rewrite
+  never touched, and the error that says so is returned either way.
+
+  That decides the option by what the rewrite is for. A rewrite that adds
+  something - a class, an analytics tag, a lazy-loading attribute - loses a feature
+  when it bails out, and serving the input is the better failure. A rewrite that
+  removes or neutralises something - a sanitiser, a CSRF token check, an `autoplay`
+  attribute - is serving exactly the thing it existed to stop, to a client that has
+  no way to know, and the truncated response is the safer failure.
+  `GracefulBailOut` now carries the table and that decision; `gracefulbailout_test.go`
+  gates it, including that a removing rewrite's flushed bytes still contain the
+  `onclick` it was stripping.
+
 - **An end-tag registration is held until the rewrite ends, and `MaxMemory` does
   not bound it.** `Element.OnEndTag` said what it does and nothing about what it
   costs. Measured: the live handle count climbs through five *closed* siblings -
