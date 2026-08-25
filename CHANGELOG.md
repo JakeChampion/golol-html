@@ -1168,6 +1168,43 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/corpus`, which says which of the documented hazards a document actually
+  has.** Twelve constructs, each one a place where a streaming rewrite and a browser see
+  different documents, counted with the first offset and what each costs. Run over the three
+  real pages vendored in lol-html's own benchmarks:
+
+      cloudflare.com.html      119237 bytes
+        implied end tag                   1     at 98980
+      ecma402-spec.html        391568 bytes
+        none of the documented constructs
+      html-parsing-spec.html   713903 bytes
+        implied end tag                3247     at 7829
+        element nothing closes            5     at 16
+        p containing a block element    194     at 245839
+
+  None of these is a defect in a page - they are ordinary HTML. The point is that the answer
+  is per corpus, and the three documents say so: one page has a single implied end tag near
+  its end, one has none of the twelve, and one has thousands. A rewrite that positions
+  content at an element's end is safe on the second and wrong on the third, and which of
+  those a site produces is a fact about its templates rather than about HTML.
+
+  The element nothing closes at offset 16 of the parsing specification is its `<html>`; the
+  other four are `<body>` and three paragraphs. Reporting them where they open rather than
+  at the document end is the difference between a position a reader can look at and the
+  moment the scan found out.
+
+  Every detector uses the rewriter alone, with no parser to compare against: an implied end
+  tag is an end-tag callback whose name is not the element's, fostered content is text
+  arriving while a table is open and no cell is, a self-closing HTML tag is `IsSelfClosing`
+  on an element that can have content. The scan runs with strict mode off so it survives the
+  documents it reports on, and says that a document containing a raw-text tag inside a
+  select is one it has not fully seen - the count is a floor rather than a total.
+
+  Its tests find each of the twelve in a document that has it, check that a tidy document
+  reports none, and pin the distinctions that make the counts meaningful: a base before the
+  URLs is not the construct, a closed list has no implied end tags, text in a cell is not
+  fostered, and a self-closing *void* element is not the self-closing hazard.
+
 - **`differential/surgery_test.go`, the same edit done two ways.** A streaming rewrite and
   tree surgery are different machines, and most people think about editing HTML as the
   second one. This compares them directly: four edits - adding a class to every div,
