@@ -112,6 +112,20 @@ type MemorySettings struct {
 	// against the write pattern the caller will actually use, or a value that
 	// passed a test will bail out under io.Copy.
 	//
+	// It is not a formula, either. The floor depends on where the write boundaries
+	// fall relative to the tokens, so it is not a function of the write size: measured
+	// on two 14 KB documents of paragraphs with a handler on each, one needed 4930
+	// bytes at both 4095-byte and 4096-byte writes, and the other needed 4928 at 4095
+	// and 832 at 4096. A larger write can want a smaller limit. Measure the floor with
+	// the write pattern that will be used - examples/gip/bailout does that with -floor
+	// - rather than deriving it.
+	//
+	// What the handlers are costs something too, and it is the matching rather than
+	// the editing. Measured in one Write over 400 paragraphs: no handler and a text
+	// handler both complete at 5 bytes, while an element handler needs 832 whether it
+	// reads an attribute or sets one. So the fixed part of the floor is "an element
+	// handler exists", not "the rewrite changes something".
+	//
 	// The rule underneath that is the largest single token a handler is given, and
 	// only where the token straddles two writes. Measured on a 2012-byte <img> tag
 	// and on 2800 bytes of 14-byte tags:
