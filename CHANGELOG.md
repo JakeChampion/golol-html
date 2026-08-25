@@ -1354,6 +1354,29 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **The declared encoding changes what a document says and never what counts as
+  markup.** `WithEncoding` described what each label does to the characters and said
+  nothing about the property a caller accepting a label from a `Content-Type` header
+  actually needs.
+
+  In a browser, a legacy multi-byte encoding can hide a markup character: a lead byte
+  takes the byte after it, so a quote or a `>` can vanish into a character and a filter
+  reading bytes disagrees with a browser reading characters about where the tag ended.
+  That is a whole class of cross-site scripting.
+
+  Measured over all 36 accepted encodings, against a corpus that puts every markup
+  character after nine different lead bytes: the byte spans of the elements, their
+  names, their attribute names, and the spans of the text and comments are identical in
+  every one of them - and identical to `x-user-defined`, which is single-byte and maps
+  every high byte to a character of its own, so it cannot combine bytes even in
+  principle. The same three bytes read as at least ten different strings across those
+  encodings, so the readings differ everywhere and the structure differs nowhere.
+
+  `WithEncoding` says this now, `encodingstructure_test.go` gates it - along with the
+  fact that makes the comparison possible, that source locations are byte offsets
+  whatever the encoding - and `examples/gip/encodingmatrix` runs the same comparison
+  over a caller's own corpus. B160.
+
 - **A rewrite cannot convert a document's encoding, and a lost byte has two shapes.**
   `WithEncoding` said the output is in the document's encoding throughout, and left the
   consequence for a caller to work out. It is worth stating: there is no

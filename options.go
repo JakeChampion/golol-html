@@ -757,6 +757,20 @@ func OnDocumentEnd(fn func(*DocumentEnd) error) Option {
 // after escaping. See the package documentation on inserting into a script or a
 // style.
 //
+// What the label cannot do is change which bytes are markup. In a browser a legacy
+// multi-byte encoding can hide a markup character - a lead byte takes the byte after
+// it, and if that byte is a quote or a ">" then a filter reading bytes and a browser
+// reading characters disagree about where the tag ended, which is a whole class of
+// cross-site scripting. Measured here over all 36 accepted encodings against a corpus
+// that puts every markup character after nine different lead bytes: the byte spans of
+// the elements, their names, their attribute names and the spans of the text and
+// comments are identical in every one of them, and identical to x-user-defined, which
+// is single-byte and cannot combine bytes even in principle. The characters differ in
+// almost every encoding; the structure does not differ in any. So a label taken from a
+// header changes what a document says and not what a rewrite treats as a tag. Gated in
+// encodingstructure_test.go, and examples/gip/encodingmatrix runs the comparison over a
+// caller's own corpus.
+//
 // Two things about the labels are worth knowing, because both come from the
 // standard rather than from this package and both have surprised people:
 //
