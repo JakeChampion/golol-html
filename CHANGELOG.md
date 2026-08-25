@@ -1354,6 +1354,31 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`MaxMemory` does not bound the document, and its floor is not a function of the
+  write size.** The option said to size the limit with the writes that will actually be
+  made, and gave one example. Three measurements sharpen that into something a caller
+  can act on.
+
+  A megabyte of small paragraphs completes under a **1 KiB** limit when it arrives in
+  one `Write`, and 10 KiB of the same paragraphs in 4 KiB writes does not. So the
+  option is not a defence against a large body - only bounding the input is that - and
+  a limit chosen with `RewriteString` can be wrong under `io.Copy`.
+
+  The floor is not derivable from the write size, because what decides it is where the
+  boundaries fall relative to the tokens. Measured on two 14 KB documents of paragraphs
+  with a handler on each: one needed 4930 bytes at both 4095-byte and 4096-byte writes,
+  and the other needed 4928 at 4095 and **832 at 4096**. A larger write can want a
+  smaller limit.
+
+  And the fixed part of the floor is "an element handler exists", not "the rewrite
+  changes something": in one Write over 400 paragraphs, no handler and a text handler
+  both complete at 5 bytes while an element handler needs 832, whether it reads an
+  attribute or sets one.
+
+  `MemorySettings.MaxMemory` carries all three, `memoryinput_test.go` gates them, and
+  `examples/gip/bailout` measures the floor for a caller's own document and write size.
+  B162.
+
 - **Permissive mode is not silence, and both the README and `WithStrict` said it was.**
   Turning strict mode off was described as leaving the content after an ambiguous tag
   "treated as text, so no handler runs for it", with the document coming out "with no
