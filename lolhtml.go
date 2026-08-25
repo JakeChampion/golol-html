@@ -907,6 +907,13 @@
 // unwind through Rust: the panic is caught at the boundary and re-raised on the
 // goroutine that called Write or Close.
 //
+// A value from outside the program can fail an insertion on its own: every path
+// that takes content or a name refuses bytes that are not valid UTF-8, and that
+// fails the rewrite rather than the insertion. The document path does not refuse
+// them - they pass through, or become U+FFFD if a text handler is registered - so
+// a rewrite can carry bytes it cannot write. [ErrInvalidUTF8] is the match, and
+// says what to do about it.
+//
 // lol-html cannot resume after an error, so a Writer that has failed is
 // poisoned and every later Write returns [ErrPoisoned]. A Writer that panics
 // releases its native resources on the way out, so a caller who recovers does

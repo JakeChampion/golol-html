@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // ErrDetached is returned by a method that mutates a rewritable unit (Element,
@@ -83,6 +84,11 @@ var ErrIncompleteRune = errors.New("lolhtml: streamed content has an unfinished 
 type NativeError struct {
 	Op      string // the operation that failed, e.g. "set_attribute"
 	Message string // lol-html's own message
+
+	// invalidUTF8 is set when the content or name this call was given is not
+	// valid UTF-8, which is checked on failure rather than parsed out of
+	// Message. See ErrInvalidUTF8.
+	invalidUTF8 bool
 }
 
 func (e *NativeError) Error() string {
@@ -120,7 +126,42 @@ var ErrMemoryLimitExceeded = errors.New("lolhtml: the memory limit has been exce
 // with strings.Contains(ne.Message, "ambiguous").
 var ErrAmbiguousTag = errors.New("lolhtml: strict mode refused an ambiguous tag")
 
-// Is lets errors.Is reach the two conditions a caller branches on. Any other
+// ErrInvalidUTF8 matches the error every write path returns when the content it
+// was given is not valid UTF-8:
+//
+//	if err := e.SetInnerContent(name, lolhtml.Text); errors.Is(err, lolhtml.ErrInvalidUTF8) {
+//		// name came from outside; fix it rather than failing the page
+//	}
+//
+// Any value from outside the program can be invalid UTF-8 - a request header, a
+// query parameter, a filename, a column written by something that was not
+// checking. Inserting one fails the whole rewrite rather than that one insertion,
+// so a page personalised from a header is one Latin-1 name away from not being
+// served at all.
+//
+// The document path is the other way round, which is why this is easy to miss
+// while testing: bytes arriving in the document are not refused. With no text
+// handler they pass through untouched; with one they come back as U+FFFD, because
+// a text handler decodes and re-encodes. So the same bytes are fine to carry and
+// not fine to write.
+//
+// The fix is on the caller's side, and there is a standard one:
+// [strings.ToValidUTF8] replaces the bad bytes, and [utf8.ValidString] says
+// whether to reject the value instead. Which of those is right is the caller's
+// decision, which is why this is an error rather than a silent replacement.
+//
+// Measured for every path that takes content or a name: the [ContentType]
+// insertions, [Element.SetAttribute] for both name and value, [Element.SetTagName],
+// [Comment.SetText], and both sink writes. A trailing partial sequence in
+// [Sink.WriteChunk] is not this error - that is the case WriteChunk exists for -
+// and one still open when the [StreamFunc] returns is [ErrIncompleteRune].
+//
+// The classification is made here rather than read off lol-html's message: when a
+// write fails, the content it was given is checked, so a reword upstream cannot
+// turn the guard off.
+var ErrInvalidUTF8 = errors.New("lolhtml: content is not valid UTF-8")
+
+// Is lets errors.Is reach the conditions a caller branches on. Any other
 // target is not something this error can claim to be, so the answer is no and
 // errors.Is falls back to its own comparison.
 func (e *NativeError) Is(target error) bool {
@@ -129,6 +170,8 @@ func (e *NativeError) Is(target error) bool {
 		return e.Message == memoryLimitExceededMessage
 	case ErrAmbiguousTag:
 		return strings.HasPrefix(e.Message, ambiguousTagPrefix)
+	case ErrInvalidUTF8:
+		return e.invalidUTF8
 	}
 	return false
 }
@@ -161,6 +204,46 @@ const ambiguousTagPrefix = "The parser has encountered a text content tag ("
 // failure; err.data is NULL when lol-html had nothing to say.
 func nativeErr(op string, cerr C.lol_html_str_t) error {
 	return &NativeError{Op: op, Message: takeStr(cerr)}
+}
+
+// nativeErrFor is nativeErr for a call that was given content or a name: on
+// failure the argument is checked, so errors.Is can answer ErrInvalidUTF8 without
+// anyone parsing lol-html's wording. Only the failure path pays for the scan.
+func nativeErrFor(op string, cerr C.lol_html_str_t, content string) error {
+	return &NativeError{
+		Op:          op,
+		Message:     takeStr(cerr),
+		invalidUTF8: !utf8.ValidString(content),
+	}
+}
+
+// nativeErrForChunk is nativeErrFor for Sink.WriteChunk, where the content is
+// allowed to begin in the middle of a sequence held from an earlier chunk and to
+// end in the middle of one. Only what is between them has to be valid.
+func nativeErrForChunk(op string, cerr C.lol_html_str_t, tail, b []byte) error {
+	joined := make([]byte, 0, len(tail)+len(b))
+	joined = append(joined, tail...)
+	joined = append(joined, b...)
+	return &NativeError{
+		Op:          op,
+		Message:     takeStr(cerr),
+		invalidUTF8: !utf8.Valid(withoutTrailingPartial(joined)),
+	}
+}
+
+// withoutTrailingPartial drops a final sequence that has not arrived in full,
+// which is the one thing WriteChunk is allowed to end with.
+func withoutTrailingPartial(b []byte) []byte {
+	for i := len(b) - 1; i >= 0 && i >= len(b)-4; i-- {
+		if b[i]&0xC0 == 0x80 {
+			continue // a continuation byte; keep walking back to the lead
+		}
+		if have, want := len(b)-i, runeLen(b[i]); have < want {
+			return b[:i]
+		}
+		return b
+	}
+	return b
 }
 
 // A HandlerError wraps an error returned by one of your own handlers, so that

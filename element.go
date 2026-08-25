@@ -477,7 +477,10 @@ func (e *Element) SetAttribute(name, value string) error {
 	runtime.KeepAlive(name)
 	runtime.KeepAlive(value)
 	if rc != 0 {
-		return nativeErr("element_set_attribute", cerr)
+		// The name and the value are both content this call was given, so either
+		// could be the invalid one; the classification says only that one of them
+		// is. See ErrInvalidUTF8.
+		return nativeErrFor("element_set_attribute", cerr, name+value)
 	}
 	return nil
 }
@@ -499,7 +502,7 @@ func (e *Element) RemoveAttribute(name string) error {
 	rc := C.golol_element_remove_attribute(p, np, nl, &cerr)
 	runtime.KeepAlive(name)
 	if rc != 0 {
-		return nativeErr("element_remove_attribute", cerr)
+		return nativeErrFor("element_remove_attribute", cerr, name)
 	}
 	return nil
 }

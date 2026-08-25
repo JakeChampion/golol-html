@@ -169,7 +169,11 @@ func TestTheSurfaceIsNotAccidentallyGrowing(t *testing.T) {
 	// already had the list and used it for ErrRawTextBreakout; the two hazards it
 	// does not cover - SetTagName and RemoveAndKeepContent - are the caller's, and
 	// were the caller's without an answer.
-	const want = 139
+	// 140: ErrInvalidUTF8, so a caller can tell "the value came from outside and
+	// is not UTF-8" from the other reasons an insertion fails. Every write path
+	// refuses such a value, and the document path does not refuse the same bytes,
+	// so a rewrite can carry what it cannot write.
+	const want = 140
 
 	names := exportedNames(t)
 	if len(names) != want {
