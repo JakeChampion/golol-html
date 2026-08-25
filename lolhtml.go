@@ -715,6 +715,52 @@
 // JavaScript, "\65e5" for CSS - or serve the document as UTF-8, where the
 // question does not arise. Pinned in encoding_test.go.
 //
+// # A wrapper is two insertions and the parser decides whether they wrap
+//
+// Putting a container around an element is [Element.Before] with an opening tag and
+// a closing tag at the element's end. Both insertions succeed, the output looks
+// exactly as intended, and whether the result is a container around the element is
+// decided afterwards by whoever parses it. Inside a paragraph it often is not:
+//
+//	<p>text <iframe src="a"></iframe> more</p>
+//
+//	wrapped in a div     p > "text", div > iframe, "more", p
+//	wrapped in a span    p > "text", span > iframe, "more"
+//
+// A div closes an open paragraph, so it takes the element out of the paragraph,
+// leaves the text that followed it outside as well, and turns the source's </p>
+// into a second, empty paragraph. Three changes to the tree from an edit that only
+// meant to add a container, and nothing in the bytes looks wrong.
+//
+// A span does not close a paragraph - and cannot hold an element that does:
+//
+//	<p>text<pre>code</pre></p>
+//
+//	wrapped in a span    p > "text", span, then pre outside it: the span is empty
+//	wrapped in a div     p > "text", div > pre, p
+//
+// So the question is not whether the wrapper is a block or an inline element, it is
+// whether the wrapped element closes a paragraph by starting. Where it does, the div
+// is right, because it leaves the paragraph with the element - which the element was
+// doing anyway. Where it does not, the span is the only one that wraps.
+//
+// For a <table> the answer depends on the doctype, because a table closes a
+// paragraph only outside quirks mode:
+//
+//	<p>text<table>…</table></p>          span holds the table, div moves it
+//	<!DOCTYPE html> the same document    div holds the table, span comes out empty
+//
+// The doctype arrives before any element, so a rewrite can read it with [OnDoctype]
+// and decide, which is what examples/gip/scrollwrap does.
+//
+// A wrapper around a table-internal element wraps nothing at all: it is fostered out
+// to just before the table while the cell stays where it was. Measured, along with
+// everything above, in differential/wrap_test.go.
+//
+// The closing half has the end-tag rule on top of all this: the position only
+// belongs to the element when the end tag is the element's own, and an element
+// nothing closes has no position at all. See [Element.OnEndTag].
+//
 // # Building markup yourself makes you the serialiser
 //
 // Every path that writes a value for you escapes it. [Element.SetAttribute]

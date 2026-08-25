@@ -591,6 +591,12 @@ func (e *Element) AttributeList() []Attribute {
 // Content --------------------------------------------------------------------
 
 // Before inserts content immediately before the element's start tag.
+//
+// Used with a closing tag at the element's end to wrap it, what comes out is a
+// container around the element only if the two tags nest where they were put: a
+// block-level wrapper inside a paragraph takes the element out of the paragraph, and
+// an inline one cannot hold an element that closes a paragraph by starting. See the
+// package documentation on wrappers.
 func (e *Element) Before(content string, ct ContentType) error {
 	return e.content(content, ct, "element_before", cfElementBefore)
 }
