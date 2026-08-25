@@ -144,9 +144,17 @@ func nativeErr(op string, cerr C.lol_html_str_t) error {
 // the error surfacing from Write or Close is traceable back to the handler that
 // produced it. Unwrap returns the original error.
 type HandlerError struct {
-	Selector string // the selector the handler was registered for, if any
-	Kind     string // "element", "comment", "text", "doctype", "document-end", "end-tag"
-	Err      error
+	// Selector is the selector the handler was registered for, empty for a
+	// document-level one. An end-tag or streaming handler inherits it from the
+	// handler that registered it, so a failure in one says which selector it
+	// belongs to rather than only which kind it was.
+	Selector string
+	// Kind is one of "element", "comment", "text", "doctype", "document-end",
+	// "end-tag" and "streaming". The last is the output of a [StreamFunc], which
+	// runs later than the handler that registered it and is reported separately
+	// for that reason.
+	Kind string
+	Err  error
 }
 
 func (e *HandlerError) Error() string {

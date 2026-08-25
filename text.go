@@ -19,6 +19,10 @@ import "unsafe"
 // see the package documentation on handler lifetime.
 type TextChunk struct {
 	unit[*C.lol_html_text_chunk_t]
+
+	// selector is the selector whose handler was given this chunk; see the same
+	// field on Element.
+	selector string
 }
 
 // Text returns the chunk's text exactly as it appeared in the source, with

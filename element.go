@@ -17,6 +17,12 @@ import (
 // package documentation on handler lifetime.
 type Element struct {
 	unit[*C.lol_html_element_t]
+
+	// selector is the selector whose handler was given this element, carried so
+	// that an end-tag or streaming handler registered from here can say which
+	// handler it belongs to when it fails. Empty for a document-level handler,
+	// which has no selector.
+	selector string
 }
 
 // TagName returns the tag name, lowercased. Use TagNamePreserveCase for the
@@ -650,7 +656,7 @@ func (e *Element) OnEndTag(fn func(*EndTag) error) error {
 
 	// The C API offers no drop callback for end-tag handlers, so the handle
 	// lives on the rewriter and is released with it.
-	h := e.c.nt.newHandle(&endTagCB{c: e.c, fn: fn})
+	h := e.c.nt.newHandle(&endTagCB{c: e.c, selector: e.selector, fn: fn})
 
 	var cerr C.lol_html_str_t
 	if C.golol_element_add_end_tag_handler(p, C.uintptr_t(h), &cerr) != 0 {

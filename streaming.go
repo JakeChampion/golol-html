@@ -288,8 +288,9 @@ func (w sinkWriter) Write(p []byte) (int, error) {
 // these are released by lol-html's drop callback rather than with the rewriter,
 // because each insertion creates its own.
 type streamingCB struct {
-	c  *core
-	fn StreamFunc
+	c        *core
+	selector string
+	fn       StreamFunc
 }
 
 func (cb *streamingCB) call(s *Sink) error { return cb.fn(s) }
@@ -297,7 +298,7 @@ func (cb *streamingCB) call(s *Sink) error { return cb.fn(s) }
 // streamOp is the shape shared by every streaming insertion shim.
 type streamOp[P comparable] func(P, C.uintptr_t, *C.lol_html_str_t) C.int
 
-func withStream[P comparable](u *unit[P], fn StreamFunc, op string, call streamOp[P]) error {
+func withStream[P comparable](u *unit[P], selector string, fn StreamFunc, op string, call streamOp[P]) error {
 	p, err := u.live()
 	if err != nil {
 		return err
@@ -308,7 +309,7 @@ func withStream[P comparable](u *unit[P], fn StreamFunc, op string, call streamO
 
 	// Released by golol_streaming_drop_cb, which lol-html calls exactly once
 	// after the last use of the handler.
-	h := newHandle(&streamingCB{c: u.c, fn: fn})
+	h := newHandle(&streamingCB{c: u.c, selector: selector, fn: fn})
 
 	var cerr C.lol_html_str_t
 	if call(p, C.uintptr_t(h), &cerr) != 0 {
@@ -324,70 +325,70 @@ func withStream[P comparable](u *unit[P], fn StreamFunc, op string, call streamO
 // StreamBefore inserts content before the element's start tag, produced on
 // demand by fn.
 func (e *Element) StreamBefore(fn StreamFunc) error {
-	return withStream(&e.unit, fn, "element_streaming_before", cfElementStreamBefore)
+	return withStream(&e.unit, e.selector, fn, "element_streaming_before", cfElementStreamBefore)
 }
 
 // StreamAfter inserts content after the element's end tag, produced on demand
 // by fn.
 func (e *Element) StreamAfter(fn StreamFunc) error {
-	return withStream(&e.unit, fn, "element_streaming_after", cfElementStreamAfter)
+	return withStream(&e.unit, e.selector, fn, "element_streaming_after", cfElementStreamAfter)
 }
 
 // StreamPrepend inserts content as the element's first child, produced on
 // demand by fn.
 func (e *Element) StreamPrepend(fn StreamFunc) error {
-	return withStream(&e.unit, fn, "element_streaming_prepend", cfElementStreamPrepend)
+	return withStream(&e.unit, e.selector, fn, "element_streaming_prepend", cfElementStreamPrepend)
 }
 
 // StreamAppend inserts content as the element's last child, produced on demand
 // by fn.
 func (e *Element) StreamAppend(fn StreamFunc) error {
-	return withStream(&e.unit, fn, "element_streaming_append", cfElementStreamAppend)
+	return withStream(&e.unit, e.selector, fn, "element_streaming_append", cfElementStreamAppend)
 }
 
 // StreamSetInnerContent replaces the element's content with output produced on
 // demand by fn.
 func (e *Element) StreamSetInnerContent(fn StreamFunc) error {
-	return withStream(&e.unit, fn, "element_streaming_set_inner_content",
+	return withStream(&e.unit, e.selector, fn, "element_streaming_set_inner_content",
 		cfElementStreamSetInnerContent)
 }
 
 // StreamReplace replaces the element, tags included, with output produced on
 // demand by fn.
 func (e *Element) StreamReplace(fn StreamFunc) error {
-	return withStream(&e.unit, fn, "element_streaming_replace", cfElementStreamReplace)
+	return withStream(&e.unit, e.selector, fn, "element_streaming_replace", cfElementStreamReplace)
 }
 
 // EndTag streaming insertions -------------------------------------------------
 
 // StreamBefore inserts content just inside the end tag, produced on demand by fn.
 func (t *EndTag) StreamBefore(fn StreamFunc) error {
-	return withStream(&t.unit, fn, "end_tag_streaming_before", cfEndTagStreamBefore)
+	return withStream(&t.unit, t.selector, fn, "end_tag_streaming_before", cfEndTagStreamBefore)
 }
 
 // StreamAfter inserts content just after the end tag, produced on demand by fn.
 func (t *EndTag) StreamAfter(fn StreamFunc) error {
-	return withStream(&t.unit, fn, "end_tag_streaming_after", cfEndTagStreamAfter)
+	return withStream(&t.unit, t.selector, fn, "end_tag_streaming_after", cfEndTagStreamAfter)
 }
 
 // StreamReplace replaces the end tag with output produced on demand by fn.
 func (t *EndTag) StreamReplace(fn StreamFunc) error {
-	return withStream(&t.unit, fn, "end_tag_streaming_replace", cfEndTagStreamReplace)
+	return withStream(&t.unit, t.selector, fn, "end_tag_streaming_replace", cfEndTagStreamReplace)
 }
 
 // TextChunk streaming insertions ----------------------------------------------
 
 // StreamBefore inserts content before the chunk, produced on demand by fn.
 func (t *TextChunk) StreamBefore(fn StreamFunc) error {
-	return withStream(&t.unit, fn, "text_chunk_streaming_before", cfTextChunkStreamBefore)
+	return withStream(&t.unit, t.selector, fn, "text_chunk_streaming_before", cfTextChunkStreamBefore)
 }
 
 // StreamAfter inserts content after the chunk, produced on demand by fn.
 func (t *TextChunk) StreamAfter(fn StreamFunc) error {
-	return withStream(&t.unit, fn, "text_chunk_streaming_after", cfTextChunkStreamAfter)
+	return withStream(&t.unit, t.selector, fn, "text_chunk_streaming_after", cfTextChunkStreamAfter)
 }
 
 // StreamReplace replaces the chunk with output produced on demand by fn.
 func (t *TextChunk) StreamReplace(fn StreamFunc) error {
-	return withStream(&t.unit, fn, "text_chunk_streaming_replace", cfTextChunkStreamReplace)
+	return withStream(&t.unit, t.selector, fn, "text_chunk_streaming_replace", cfTextChunkStreamReplace)
 }

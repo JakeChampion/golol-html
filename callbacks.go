@@ -73,8 +73,9 @@ func (cb *docEndCB) run(d *DocumentEnd) error {
 }
 
 type endTagCB struct {
-	c  *core
-	fn func(*EndTag) error
+	c        *core
+	selector string
+	fn       func(*EndTag) error
 }
 
 type sinkCB struct {
@@ -111,7 +112,7 @@ func runHandler[U any](st *state, kind, selector string, u U, fn func(U) error) 
 //export golol_element_cb
 func golol_element_cb(ptr *C.lol_html_element_t, ud C.uintptr_t) C.lol_html_rewriter_directive_t {
 	cb := cgo.Handle(uintptr(ud)).Value().(*elementCB)
-	el := &Element{unit: unit[*C.lol_html_element_t]{ptr: ptr, c: cb.c}}
+	el := &Element{unit: unit[*C.lol_html_element_t]{ptr: ptr, c: cb.c}, selector: cb.selector}
 	defer el.detach()
 	return runHandler(cb.c.st, "element", cb.selector, el, cb.fn)
 }
@@ -127,7 +128,7 @@ func golol_comment_cb(ptr *C.lol_html_comment_t, ud C.uintptr_t) C.lol_html_rewr
 //export golol_text_cb
 func golol_text_cb(ptr *C.lol_html_text_chunk_t, ud C.uintptr_t) C.lol_html_rewriter_directive_t {
 	cb := cgo.Handle(uintptr(ud)).Value().(*textCB)
-	t := &TextChunk{unit: unit[*C.lol_html_text_chunk_t]{ptr: ptr, c: cb.c}}
+	t := &TextChunk{unit: unit[*C.lol_html_text_chunk_t]{ptr: ptr, c: cb.c}, selector: cb.selector}
 	defer t.detach()
 	return runHandler(cb.c.st, "text", cb.selector, t, cb.fn)
 }
@@ -151,9 +152,9 @@ func golol_doc_end_cb(ptr *C.lol_html_doc_end_t, ud C.uintptr_t) C.lol_html_rewr
 //export golol_end_tag_cb
 func golol_end_tag_cb(ptr *C.lol_html_end_tag_t, ud C.uintptr_t) C.lol_html_rewriter_directive_t {
 	cb := cgo.Handle(uintptr(ud)).Value().(*endTagCB)
-	et := &EndTag{unit: unit[*C.lol_html_end_tag_t]{ptr: ptr, c: cb.c}}
+	et := &EndTag{unit: unit[*C.lol_html_end_tag_t]{ptr: ptr, c: cb.c}, selector: cb.selector}
 	defer et.detach()
-	return runHandler(cb.c.st, "end-tag", "", et, cb.fn)
+	return runHandler(cb.c.st, "end-tag", cb.selector, et, cb.fn)
 }
 
 //export golol_sink_cb
@@ -214,7 +215,7 @@ func golol_streaming_write_cb(sink *C.lol_html_streaming_sink_t, ud C.uintptr_t)
 		return s.checkComplete()
 	}
 
-	if runHandler(cb.c.st, "streaming", "", s, call) == C.LOL_HTML_CONTINUE {
+	if runHandler(cb.c.st, "streaming", cb.selector, s, call) == C.LOL_HTML_CONTINUE {
 		return 0
 	}
 	return 1

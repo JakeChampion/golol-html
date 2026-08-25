@@ -117,6 +117,18 @@
   documentation says which of those applies where.
 
 ### Fixed
+- **`HandlerError.Selector` is now filled in for end-tag and streaming
+  handlers.** Both are registered from inside a handler that has a selector, and
+  both reported an empty one - so an error from a program with twenty handlers
+  said `end-tag handler` and left twenty candidates. They inherit the selector of
+  the handler that registered them, and the message says it:
+  `end-tag handler for "a[href]"`.
+
+  `Kind` also has a seventh value the documentation did not list, `streaming`,
+  which is a `StreamFunc`'s own failure - reported separately because it runs
+  later than the handler that registered it. `TestEveryDocumentedKindIsReachable`
+  now requires every documented kind to be produced by something and nothing to
+  produce a kind that is not documented, which is what noticed it.
 - **A poisoned `Writer` now says why it is poisoned.** lol-html cannot resume
   after an error, so the first failure is reported from whichever call was
   running and every later `Write` and the `Close` refuse. Those refusals returned

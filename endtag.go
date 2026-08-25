@@ -16,6 +16,10 @@ import "C"
 // package documentation on handler lifetime.
 type EndTag struct {
 	unit[*C.lol_html_end_tag_t]
+
+	// selector is the selector of the element handler that registered this
+	// end-tag handler; see the same field on Element.
+	selector string
 }
 
 // Name returns the tag name, lowercased.
