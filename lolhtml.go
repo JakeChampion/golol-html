@@ -630,6 +630,36 @@
 // the end tag with [ContentType] HTML, which also lets you change its tag and
 // attributes - at the cost of re-serialising those yourself, escaping included.
 //
+// # A table can contain things that are not in it
+//
+// A parser moves content that cannot be inside a table to just before the table,
+// which the specification calls foster parenting. There is no tree here to move
+// anything in, so that content is reported where it was written - inside the
+// table - and emitted there. The output is byte-identical, because a browser
+// reading it fosters the content out again, so nothing looks wrong:
+//
+//	<table>stray<tr><td>a</table>
+//
+//	in the tree      "stray" is a sibling before the table
+//	here             a text handler on "table" is given it
+//
+// Measured for text before the first row, text inside a row, text after a cell,
+// and an inline or block element in any of those places, in
+// differential/table_test.go.
+//
+// Two things follow. Collecting an element's text is the wrong question to ask of
+// a table this way, because the answer includes content that is not in it. And
+// removing the table removes that content, where a tree-based edit would keep it:
+//
+//	<p>before</p><table>stray<tr><td>a</table><p>after</p>
+//
+//	Element.Remove here   <p>before</p><p>after</p>
+//	the same edit on a    <p>before</p>stray<p>after</p>
+//	tree
+//
+// A table extractor should therefore take cell content from cells rather than
+// text from the table, which is what examples/gip/tablecsv does.
+//
 // # Removal suppresses output, not handler calls
 //
 // [Element.Remove] takes the element and its content out of the output. It does
