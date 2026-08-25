@@ -190,6 +190,14 @@ func (w *Writer) Write(p []byte) (int, error) {
 // If an earlier Write already failed, Close reports ErrPoisoned wrapped around
 // that first error rather than the bare sentinel: checking only Close is the
 // ordinary Go shape, and it should not lose the reason.
+//
+// The first Close, that is. "Safe to call more than once" means the later calls
+// do nothing and return nil, including after a failure - so a caller whose only
+// check is on a Close that runs second sees nil for a rewrite that failed. The
+// shape to avoid is an explicit Close in an error path together with a deferred
+// one that assigns to the returned error; keep one Close, and let it be the one
+// whose error is checked. Measured in faults_test.go, which asserts the quiet
+// second Close deliberately, and demonstrated in examples/gip/poisoned.
 func (w *Writer) Close() error {
 	if w.closed {
 		return nil
