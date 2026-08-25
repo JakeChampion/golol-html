@@ -934,6 +934,11 @@ func (e *Element) OnEndTag(fn func(*EndTag) error) error {
 
 // ClearEndTagHandlers removes every end-tag handler registered for this
 // element, including any added by handlers that ran before this one.
+//
+// It stops the callbacks running. It does not release what registering them cost:
+// the handle stays live until the Writer closes, so clearing is not a way to bound
+// the memory that [Element.OnEndTag] describes. Registering on fewer elements is.
+// Measured in userdatacost_test.go.
 func (e *Element) ClearEndTagHandlers() {
 	if p, err := e.live(); err == nil {
 		C.lol_html_element_clear_end_tag_handlers(p)
@@ -968,8 +973,35 @@ func (e *Element) UserData() any { return getUserData(&e.unit, elementUserData) 
 //
 // It is per unit and not per position: two elements never share it, and a value
 // set on one text chunk is not readable from the next chunk of the same text
-// node. The attached value is released with the Writer.
+// node.
+//
+// # What it costs
+//
+// A handle per unit, held until the rewrite ends - the same cost class as
+// [Element.OnEndTag], and for the same reason: the value has to stay reachable
+// from Go while C holds a reference to it. Measured, attaching user data to every
+// anchor in a 64 MB document held about 520 MB of Go heap, against 3.7 MB for the
+// same rewrite reading the same elements. [MemorySettings.MaxMemory] does not
+// bound it, because that limit is lol-html's parsing buffer and this is the
+// binding's handle table.
+//
+// Setting it to nil releases the handle immediately, so a handler that has handed
+// its value to the handler that needed it can clear it and the rewrite stays
+// bounded:
+//
+//	OnElement(".card", func(e *Element) error { return e.SetUserData(id) }),
+//	OnElement("[data-id]", func(e *Element) error {
+//		id := e.UserData()
+//		defer e.SetUserData(nil)   // releases the handle now, not at Close
+//		…
+//	}),
+//
+// Replacing a value releases the one it replaced, so a handler that sets it twice
+// holds one handle rather than two. Gated in userdatacost_test.go, and
+// examples/gip/unbounded measures which handler patterns keep a rewrite's memory
+// flat as the document grows.
 //
 // Go handlers can usually just close over the value instead, which is why this
-// exists mainly for parity with the C API.
+// exists mainly for parity with the C API - and closing over a variable costs
+// nothing that lives past the handler.
 func (e *Element) SetUserData(v any) error { return setUserData(&e.unit, elementUserData, v) }

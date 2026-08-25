@@ -1197,6 +1197,37 @@
   order they were written.
 
 ### Testing
+- **`userdatacost_test.go` counts handles rather than bytes**, since a retained
+  value is exactly one handle on every machine and a peak-memory figure is a sample
+  of a moving number. Seven patterns over 2000 elements: reading holds the two
+  handles a registration costs, editing holds those two, user data holds one per
+  element, replacing it holds one not two, clearing it to nil holds none, an
+  end-tag registration holds one per element, and clearing that one still holds it.
+  Everything is released by `Close` in all seven.
+
+- **A timing assertion in `examples/gip/bytewise` was flaky, and is gone.** It
+  asserted that byte-at-a-time writes take longer than one whole write - true, by
+  about eight times per byte - with a two-fold threshold for headroom, and it still
+  failed once under the load of `go test ./...`, where the rest of the module is
+  building and testing beside it. The neighbouring gate's own comment says a timing
+  assertion in CI is a flake generator; this was one. The allocation assertions stay,
+  the timing stays in the program's output where a reader can see what machine it
+  came from.
+
+- **`examples/gip/unbounded` rewrites a document larger than any buffer worth
+  holding**, and says which handler patterns keep the peak flat. It generates the
+  document as it writes it and discards the output, so what the peak measures is the
+  rewriter and the handler rather than the caller's buffers; it measures each pattern
+  at two sizes and reports the growth; and it exits non-zero if a pattern's claim and
+  its measurement disagree, which is what makes it a check rather than a table.
+
+  Two things it had to get right to be honest. The peak is a delta from a
+  post-collection baseline, because `HeapAlloc` counts the whole process. And a peak
+  under 8 MB is not treated as evidence either way: a bounded rewrite's working set
+  is a couple of megabytes whatever the document, so the ratio between two small
+  numbers is the sampler's noise - which is what reported "no handlers" as unbounded
+  in the first draft.
+
 - **The fuzzer compares the text of every node now, and its comment stops
   promising something it never did.** `FuzzRewrite` rewrites each input twice, as
   one write and in pieces, and compares the output, the structural invocation
@@ -1559,6 +1590,47 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`SetUserData` costs a handle per unit, and only `OnEndTag` said so.** Both
+  calls ask the library to remember something until the rewrite ends, and both
+  allocate outside `MaxMemory` - that limit is lol-html's parsing buffer and this
+  is the binding's handle table. `OnEndTag` has a paragraph about it, with figures.
+  `SetUserData` had five words: "The attached value is released with the Writer",
+  which reads as a note about lifetime rather than about memory. Measured over
+  documents fed in 4 KB writes, peak Go heap above the baseline:
+
+      pattern                      1 MB doc   4 MB doc   16 MB doc
+      reading elements              3.5 MB     3.5 MB      3.5 MB
+      editing attributes            3.5 MB     3.5 MB      3.5 MB
+      reading text per chunk        3.6 MB     3.6 MB      3.6 MB
+      SetUserData per element       8.4 MB    32.1 MB    128.8 MB
+      OnEndTag per element         10.5 MB    40.3 MB    153.4 MB
+      SetUserData per text chunk   29.8 MB   117.2 MB    422.2 MB
+
+  About 150 bytes per element, and 520 MB by the time the document is 64 MB.
+
+  Three things were not written down anywhere. **Setting the value to nil releases
+  the handle immediately**, which is what makes a bounded rewrite possible when a
+  value has to reach a later handler - clear it in the handler that reads it and
+  the peak stays flat. **Replacing a value releases the one it replaced**, so
+  setting it twice holds one handle rather than two. And **`ClearEndTagHandlers`
+  does not release anything**: it stops the callbacks running and keeps the
+  handle, so it is not a way to bound the cost that `OnEndTag` describes.
+
+  The text case is the sharpest of them, because the unit is the chunk. How many
+  chunks a text node arrives in is decided by the caller's write sizes, so this is
+  the one cost in the library that depends on how a document was fed rather than on
+  what it says:
+
+      one 2000-byte text node    written whole          2 chunks     4 handles
+                                 1024-byte writes       3 chunks     5 handles
+                                 64-byte writes        33 chunks    35 handles
+                                 one byte at a time  2001 chunks  2003 handles
+
+  A rewrite reading from a socket does not choose those sizes. Documented on
+  `Element.SetUserData` with the mitigation, on `TextChunk.SetUserData` with the
+  table, on `Comment.SetUserData` by reference, on `ClearEndTagHandlers`, in the
+  README's memory section, and as B166.
+
 - **B4 and `SPEC.md` understated what survives chunking.** Both said "output is
   invariant; handler invocation counts are not", which reads as though any handler
   might fire a different number of times. Only a text handler does. The number of

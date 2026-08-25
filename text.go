@@ -228,4 +228,19 @@ func (t *TextChunk) UserData() any { return getUserData(&t.unit, textUserData) }
 // not a place to accumulate across the chunks of one node. Measured - the second
 // chunk of a two-chunk node reads nil. Go handlers can usually close over the
 // value instead.
+//
+// The chunk being the unit makes this the one cost in the library that depends on
+// how the caller fed the document rather than on what the document says. A handle
+// is held per chunk until the rewrite ends, and how many chunks a node arrives in
+// is decided by the write sizes:
+//
+//	one 2000-byte text node    written whole        2 chunks
+//	                           1024-byte writes     3 chunks
+//	                           64-byte writes      33 chunks
+//	                           one byte at a time  2001 chunks
+//
+// A rewrite reading from a socket does not choose those sizes, so this is a shape
+// to avoid rather than to budget for. Setting the value to nil releases the handle
+// immediately; see [Element.SetUserData] for the cost and the mitigation, and
+// userdatacost_test.go for the gate.
 func (t *TextChunk) SetUserData(v any) error { return setUserData(&t.unit, textUserData, v) }
