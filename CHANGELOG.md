@@ -1197,6 +1197,39 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/idmerge`: concatenate documents and keep every id unique,
+  rewriting the references as well as the ids.** It is two passes per document and
+  not by choice: a table of contents at the top of a page points at headings further
+  down, so a rename has to be known before the first reference arrives and cannot
+  be. That is the ordering constraint in the case where no better position exists -
+  the evidence is genuinely later than the first place it is needed.
+
+  The part a program usually gets wrong is what counts as a reference. Nine
+  attributes name an id, five of them as space-separated lists, and a document whose
+  `aria-labelledby="intro summary"` is left behind by a rename is a document whose
+  labels point at nothing. So the list values are rebuilt entry by entry rather than
+  replaced, and each entry is looked up on its own.
+
+  Three smaller decisions, each the library's rather than the domain's. An id is
+  compared *decoded*, because `id="a&amp;b"` and `id="a&b"` are the same id to a
+  parser and a document can spell one either way - and the value is written back raw,
+  which is the same rule as everywhere else. A `<map>` is matched by its name rather
+  than by an id, so names share the namespace for this purpose. And a reference to an
+  id that no document defines is reported rather than rewritten, because inventing a
+  target is worse than saying so.
+
+  It also declines the thing the line asked for most directly: it does not feed
+  several documents into one rewriter. Two documents written into one Writer are one
+  document to the parser - the second one's `<html>` lands inside the first one's
+  body - so each is rewritten alone and the outputs are joined, wrapped in a section
+  that says where each came from.
+
+  Its read-size test was vacuous first time round: the helper it called ignored the
+  size and re-ran the whole-document path, so it compared a thing with itself. The
+  rewrite pass takes an `io.Reader` now, the test feeds it a reader that hands out a
+  few bytes at a time, and it counts the reads - so a rewrite that stopped streaming
+  would fail rather than pass.
+
 - **`examples/gip/formschema`: read every form on a page and print what it would
   take to submit it.** The point is replay - the hidden fields, the pre-selected
   options, the checkbox that submits nothing until it is checked - which is what
