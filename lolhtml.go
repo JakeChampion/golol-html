@@ -235,6 +235,29 @@
 //	::before  ::first-line  ::marker    any pseudo-element
 //	ns|name                            an explicit namespace other than *|
 //
+// An empty operand does not mean what CSS says it means, and this is worth
+// knowing before a selector is built from a string that might be empty. The
+// specification says a substring operator with an empty value "does not represent
+// anything" - matches nothing at all. Measured here, three of the six do something
+// else:
+//
+//	[a=""]     an empty value                    as the specification says
+//	[a|=""]    an empty value, or one starting "-"   as the specification says
+//	[a*=""]    nothing                           as the specification says
+//	[a^=""]    every non-empty value             the specification says nothing
+//	[a$=""]    every non-empty value             the specification says nothing
+//	[a~=""]    every value with no words in it   the specification says nothing
+//
+// So a rewrite that interpolates a prefix into a[href^="..."] and is handed an
+// empty prefix does not match nothing, it matches every link on the page. The i
+// and s flags make no difference, and an operand omitted altogether -
+// a[href^=] - is a [SelectorError], which is the one shape that fails loudly.
+//
+// The library does not refuse the empty operand because it does not parse
+// selectors - lol-html does, and this is what it decides. Check the value before
+// building the selector, which is a line of code and the only thing that helps.
+// Measured in emptyoperand_test.go.
+//
 // Tag and attribute names are matched case-insensitively, so "LI" and "li" are
 // the same selector and [CLASS=a] matches class="a". An attribute selector
 // matches a present-but-empty attribute: [style] matches style="".
