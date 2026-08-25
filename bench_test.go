@@ -64,6 +64,42 @@ func BenchmarkReadAttributes(b *testing.B) {
 	}))
 }
 
+// BenchmarkCrossing is the cost of a handler that does nothing, and of each way
+// of asking the element a question, against the same document. It exists because
+// throughput here tracks the number of crossings rather than the size of the
+// document, so the interesting number is what one crossing costs before any work
+// is done.
+//
+// Read allocs/op and B/op; ns/op on this benchmark is dominated by whatever else
+// the machine is doing. Measured once on benchDoc(200), which is about 604
+// elements: passthrough 14 allocations for the whole rewrite, a no-op element
+// handler 625, TagName 1229, and CanHaveContent and NamespaceURI none beyond the
+// crossing.
+func BenchmarkCrossing(b *testing.B) {
+	doc := benchDoc(200)
+	b.Run("noop", func(b *testing.B) {
+		benchmarkRewrite(b, doc, lolhtml.OnElement("*", func(*lolhtml.Element) error { return nil }))
+	})
+	b.Run("TagName", func(b *testing.B) {
+		benchmarkRewrite(b, doc, lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+			_ = e.TagName()
+			return nil
+		}))
+	})
+	b.Run("NamespaceURI", func(b *testing.B) {
+		benchmarkRewrite(b, doc, lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+			_ = e.NamespaceURI()
+			return nil
+		}))
+	})
+	b.Run("CanHaveContent", func(b *testing.B) {
+		benchmarkRewrite(b, doc, lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+			_ = e.CanHaveContent()
+			return nil
+		}))
+	})
+}
+
 // BenchmarkTextHandler exercises the chunked text path, where handler
 // invocations outnumber elements.
 func BenchmarkTextHandler(b *testing.B) {

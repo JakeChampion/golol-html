@@ -20,6 +20,18 @@
   arrived - there is no point at which delivery is known, since the rewriter may
   still be holding the content.
 
+- **`NamespaceHTML`, `NamespaceSVG` and `NamespaceMathML`, and
+  `Element.NamespaceURI` no longer copies.** There are three possible values,
+  they are static in lol-html, and every call was returning a fresh 28- or
+  32-byte string: measured at 1000 extra allocations and 32 KB for a document of
+  1000 elements, which is what anything namespace-aware pays. It now compares the
+  C string against the constants without copying it and returns one of them, so
+  reading it costs the same as not reading it. `TestNamespaceURIDoesNotAllocate`
+  fails by exactly one allocation per element if that regresses.
+
+  The constants are exported because a caller has to compare against something,
+  and three URIs retyped by hand is three chances to get one wrong.
+
 - **`ErrMemoryLimitExceeded` and `ErrAmbiguousTag`, so `errors.Is` reaches the
   two failures a streaming caller has to act on.** Both arrive as a
   `*NativeError` carrying lol-html's own message. The memory one had a
