@@ -263,8 +263,18 @@
 // "<title>page</title><p>x</p>" they match nothing at all.
 //
 // So a handler that must act on the document title and not on tooltips has to
-// match "title" and track whether it is inside <svg> or <math> itself, which is
-// two more handlers and a counter. examples/gip/envbadge does that.
+// match "title" and track the context itself, which is one more handler and a
+// stack. examples/gip/envbadge counts <svg> and <math> depth, which is enough
+// when the only question is "am I in foreign content".
+//
+// When the question is "which namespace is this element in", a depth counter is
+// not enough, because an integration point switches back: the <p> in
+// <svg><foreignObject><p> is an ordinary HTML paragraph and a counter says SVG.
+// What works is a stack of [Element.NamespaceURI] values - an element is parsed
+// in the namespace its parent's children are parsed in, which is what the parent
+// reported. The method's own documentation has the shape of it, and
+// examples/gip/histogram uses it to keep an HTML <a> and an SVG <a> in separate
+// rows.
 //
 // # :not() is wrong for anything but a single simple selector
 //

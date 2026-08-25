@@ -8,6 +8,7 @@ import "C"
 import (
 	"iter"
 	"runtime"
+	"unsafe"
 )
 
 // An Element is a start tag matched by one of your selectors.
@@ -149,16 +150,96 @@ func (e *Element) CanHaveContent() bool {
 // both a document title and an SVG tooltip - so a handler that needs to tell
 // them apart cannot do it with a selector alone and cannot do it with this
 // method either, since both report HTML. What works is a selector that names the
-// context ("svg title" matches only the tooltip) or tracking <svg> and <math>
-// depth in the handler. See the package documentation on selectors.
+// context ("svg title" matches only the tooltip), or the rule below.
+//
+// # The element's own namespace
+//
+// Read it one level up. An element is parsed in the namespace its parent's
+// children are parsed in, which is exactly what this method reports for the
+// parent, so a handler that keeps a stack of these values has the answer for
+// every element at the top of it:
+//
+//	ns := []string{lolhtml.NamespaceHTML}
+//	lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+//		own := ns[len(ns)-1]
+//		if child := e.NamespaceURI(); child != own && e.CanHaveContent() {
+//			ns = append(ns, child)
+//			tag := e.TagName()
+//			e.OnEndTag(func(t *lolhtml.EndTag) error {
+//				if t.Name() == tag {
+//					ns = ns[:len(ns)-1]
+//				}
+//				return nil
+//			})
+//		}
+//		return nil
+//	})
+//
+// with one exception: <svg> and <math> are the tags that enter foreign content,
+// so they are themselves foreign and their own namespace is the one they report.
+//
+// Counting <svg> and <math> depth instead is the obvious thing and it is wrong
+// at the integration points, in the direction that matters: it puts the <p> in
+// <svg><foreignObject><p> in the SVG namespace, where it is an ordinary HTML
+// paragraph. The stack gets that right because the switch back is exactly what
+// foreignObject reports. Worked through in examples/gip/histogram.
+//
+// The returned string is one of [NamespaceHTML], [NamespaceSVG] and
+// [NamespaceMathML], and is those constants rather than a copy of them: a fresh
+// 28- or 32-byte string per element was measured at 1000 allocations and 32 KB
+// per 1000 elements, for three distinct values.
 func (e *Element) NamespaceURI() string {
 	p, err := e.live()
 	if err != nil {
 		return ""
 	}
-	// Unlike the lol_html_str_t getters, this returns a static
-	// NUL-terminated string that must not be freed.
-	return C.GoString(C.lol_html_element_namespace_uri_get(p))
+	// Unlike the lol_html_str_t getters, this returns a static NUL-terminated
+	// string that must not be freed - and must not be handed out either, so it
+	// is compared against the constants and one of those is returned.
+	return namespaceConstant(C.lol_html_element_namespace_uri_get(p))
+}
+
+// The three namespaces an element can be parsed in. [Element.NamespaceURI]
+// returns one of these, so comparing its result against them compares two
+// constants.
+const (
+	NamespaceHTML   = "http://www.w3.org/1999/xhtml"
+	NamespaceSVG    = "http://www.w3.org/2000/svg"
+	NamespaceMathML = "http://www.w3.org/1998/Math/MathML"
+)
+
+// namespaceConstant maps lol-html's static namespace string onto one of the
+// constants without copying it.
+//
+// The view built here borrows C memory and must not escape: comparing a string
+// against a constant does not copy it, and what is returned is the constant,
+// which Go owns. Anything unrecognised is copied instead, which cannot happen
+// with lol-html v3 and would be a silent wrong answer if it were dropped.
+func namespaceConstant(p *C.char) string {
+	if p == nil {
+		return ""
+	}
+	s := unsafe.String((*byte)(unsafe.Pointer(p)), cStringLen(p))
+	switch s {
+	case NamespaceHTML:
+		return NamespaceHTML
+	case NamespaceSVG:
+		return NamespaceSVG
+	case NamespaceMathML:
+		return NamespaceMathML
+	}
+	return string(s)
+}
+
+// cStringLen is strlen without the cgo call, which for strings this short costs
+// more than the scan.
+func cStringLen(p *C.char) int {
+	b := unsafe.Pointer(p)
+	n := 0
+	for *(*byte)(unsafe.Add(b, n)) != 0 {
+		n++
+	}
+	return n
 }
 
 // SourceLocation returns the byte range the start tag occupied in the input -

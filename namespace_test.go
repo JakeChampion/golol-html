@@ -200,3 +200,62 @@ func TestContextSelectorsNeedTheContextToBePresent(t *testing.T) {
 		}
 	}
 }
+
+// TestNamespaceURIReturnsTheConstants: the value is one of three, and the three
+// are exported so a caller compares constants rather than retyping a URI.
+func TestNamespaceURIReturnsTheConstants(t *testing.T) {
+	tests := []struct{ doc, sel, want string }{
+		{`<p>a</p>`, "p", lolhtml.NamespaceHTML},
+		{`<svg><rect/></svg>`, "rect", lolhtml.NamespaceSVG},
+		{`<math><mrow></mrow></math>`, "mrow", lolhtml.NamespaceMathML},
+		{`<svg><foreignObject></foreignObject></svg>`, "foreignObject", lolhtml.NamespaceHTML},
+	}
+	for _, tt := range tests {
+		var got string
+		if _, err := lolhtml.RewriteString(tt.doc, lolhtml.OnElement(tt.sel,
+			func(e *lolhtml.Element) error { got = e.NamespaceURI(); return nil })); err != nil {
+			t.Fatalf("%q: %v", tt.doc, err)
+		}
+		if got != tt.want {
+			t.Errorf("%q: NamespaceURI() = %q, want %q", tt.doc, got, tt.want)
+		}
+	}
+}
+
+// TestNamespaceURIDoesNotAllocate. There are three possible values and they are
+// static, so returning a copy costs an allocation per element for anything
+// namespace-aware. Measured before this was fixed: 1000 extra allocations and
+// 32 KB for a document of 1000 elements.
+//
+// The assertion is one-sided and loose - what matters is that the cost does not
+// scale with the number of elements, not what the fixed overhead happens to be
+// on this toolchain.
+func TestNamespaceURIDoesNotAllocate(t *testing.T) {
+	requireRealAllocationCounts(t)
+
+	const elements = 200
+	doc := strings.Repeat(`<svg><rect/></svg>`, elements/2)
+
+	measure := func(read bool) float64 {
+		return testing.AllocsPerRun(20, func() {
+			_, err := lolhtml.RewriteString(doc, lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+				if read {
+					_ = e.NamespaceURI()
+				}
+				return nil
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	with, without := measure(true), measure(false)
+	// One allocation per element would be 200. Ten is far below that and far
+	// above the noise on a measurement that is otherwise identical.
+	if diff := with - without; diff > 10 {
+		t.Errorf("reading NamespaceURI on %d elements cost %.0f extra allocations "+
+			"(%.0f with, %.0f without); it should cost none that scale with the "+
+			"element count", elements, diff, with, without)
+	}
+}

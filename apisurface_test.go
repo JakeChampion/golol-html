@@ -160,7 +160,9 @@ func TestEveryExportedNameIsMentionedByATest(t *testing.T) {
 func TestTheSurfaceIsNotAccidentallyGrowing(t *testing.T) {
 	// 134: ErrMemoryLimitExceeded, ErrAmbiguousTag and NativeError.Is, which
 	// let errors.Is reach the two conditions a streaming caller acts on.
-	const want = 134
+	// 137: NamespaceHTML, NamespaceSVG and NamespaceMathML, which are what
+	// NamespaceURI returns and what a caller compares it against.
+	const want = 137
 
 	names := exportedNames(t)
 	if len(names) != want {
