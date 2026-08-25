@@ -424,12 +424,27 @@ really diverged.
   `export_test.go`, so it is reachable from the root package's tests and
   nowhere else.
 
-- **Rank a cost by weight, not by count.** Writes are quadratic at byte
-  granularity while an unclosed tag is buffered, because each write rescans the
-  pending buffer, so what matters is bytes rescanned rather than writes issued.
-  Likewise, a rewrite's cost tracks handler invocations rather than document
-  size: a 16 KB page with 200 links is expensive because of the 200, not the
-  16 KB. Count the thing that pays.
+- **Rank a cost by weight, not by count.** A rewrite's cost tracks handler
+  invocations rather than document size: a 16 KB page with 200 links is
+  expensive because of the 200, not the 16 KB. The write path is the same idea
+  from the other side - each write costs a crossing whatever its size, so the
+  number of writes is what pays. Count the thing that pays.
+
+- **Measure the shape before repeating it.** This document said for several
+  releases that byte-at-a-time writes were quadratic while a tag was buffered,
+  with figures to match. The figures did not reproduce and the shape was wrong:
+  the cost is flat per byte, and the buffered tag is the cheap case. The claim
+  had been reasoned from how a parser presumably works, and then cited as a
+  reason in five places, including the design of the fuzz harness. A performance
+  claim that nothing runs is a claim about the version it was written against, at
+  best.
+
+- **Measure the harness before believing the measurement.** The first attempt at
+  the above reported one allocation per byte too many, because the probe wrote
+  `[]byte(doc[i:j])` from a string and paid for the conversion once per write -
+  the same figure it was attributing to the library. An allocation measurement
+  has to own nothing: slice a `[]byte`, and check the arithmetic against the
+  write count before drawing a conclusion from it.
 
 - **Run the gates that carry signal for what you touched.** Section 4 says
   which those are and what each one is blind to. Two are worth calling out
@@ -450,9 +465,9 @@ really diverged.
   are `ErrDetached` and `ErrPoisoned`. Confirm against
   `docs/gip/known-behaviours.md` before calling any of them a bug.
 
-- **A hang may be the quadratic, not a deadlock.** Byte-at-a-time writes on a
-  document with an unclosed tag get slow enough to look stuck. Check the chunk
-  size before reaching for a stack dump.
+- **A hang may be the write size, not a deadlock.** Byte-at-a-time writes cost a
+  crossing into C per byte, which on a large document is slow enough to look
+  stuck. Check the chunk size before reaching for a stack dump.
 
 - **`go test -race` also enables `checkptr`.** An unsafe pointer round-trip
   through `uintptr` that passes plain `go test` fails there. That is why

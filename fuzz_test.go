@@ -132,11 +132,10 @@ const maxFuzzInput = 4 << 10
 // is the strictest test of chunk-invariance - while bounding the number of
 // writes for larger inputs.
 //
-// The byte-at-a-time threshold is low on purpose. Writes are quadratic while
-// the rewriter buffers an unclosed tag, so a 1 KB input meant roughly a
-// thousand increasingly expensive writes, and every iteration does that on top
-// of a whole-document rewrite. On a CI runner that dropped throughput to about
-// 1600 execs/sec and the engine then failed to shut down inside its grace
+// The byte-at-a-time threshold is low on purpose. Every write costs a crossing
+// into C whatever its size, so a 1 KB input meant roughly a thousand crossings
+// where a chunked one means a handful, and every iteration does that on top of a
+// whole-document rewrite. On a CI runner that dropped throughput to about// 1600 execs/sec and the engine then failed to shut down inside its grace
 // period at the end of a timed run, reporting "context deadline exceeded".
 // Cheap iterations find more than thorough ones that barely run.
 func fuzzChunk(n int) int {
@@ -148,10 +147,11 @@ func fuzzChunk(n int) int {
 
 func rewrite(f *testing.F, handlers func(*int, *bytes.Buffer) []lolhtml.Option) {
 	f.Fuzz(func(t *testing.T, in string) {
-		// Writing one byte at a time is quadratic when the rewriter is
-		// buffering an unclosed tag - measured 4.4ms for 4KB against 43.7ms for
-		// 16KB - so an unbounded harness stalls as the fuzzer grows inputs.
-		// Cap the size, and keep the write count bounded above that.
+		// Writing one byte at a time costs a crossing into C per byte - about
+		// eight times the time of one whole write on a 64 KB page - so an
+		// unbounded harness stalls as the fuzzer grows inputs. Linearly, but
+		// from a starting point several times too expensive. Cap the size, and
+		// keep the write count bounded above that. See bytecost_test.go.
 		if len(in) > maxFuzzInput {
 			t.Skip("input larger than the harness budget")
 		}
