@@ -870,6 +870,53 @@
 // rewrite that cannot tell the shapes apart should refuse the ones it cannot, which
 // is what examples/gip/csrf does. Pinned in differential/table_test.go.
 //
+// # A template is markup that is not on the page
+//
+// Handlers fire inside a <template> exactly as they do anywhere else, at any depth
+// of nesting, and a descendant selector crosses the boundary - "template video"
+// matches, and so does a bare "video". The content is parsed as markup, so a
+// rewrite reaches every element in it.
+//
+// What it does not reach is the page. A template's content is inert until a script
+// clones it: no video plays, no image loads, no script runs. So a match in there is
+// a rewrite of a blueprint, and a count that adds the two together is a count of
+// nothing in particular - a report saying "6 videos" for a page with two and a
+// carousel template is wrong twice over. Decide, and count separately; that is what
+// examples/gip/controls does with a depth counter, because the selector cannot tell
+// you.
+//
+// The content also follows the template's own parsing rules rather than the
+// surrounding document's, and this is where it stops being a curiosity. A template
+// may hold table rows with no table around them:
+//
+//	<template><tr><td>x</td></tr></template>   template > tr > td > "x"
+//	<div><tr><td>x</td></tr></div>             div > "x": the tags are dropped
+//
+// The rewriter fires a td handler in both, because it is reading tokens - so a
+// handler call is not evidence that a cell exists. Measured in
+// differential/template_test.go.
+//
+// A template is also the one element that a table does not foster out, so an
+// insertion into it lands where the bytes say. The trade is the other way round
+// from the table above: there the insertion moves and the content survives, and
+// here the insertion stays and the content can be thrown away. A template holding
+// rows is parsed in a mode that the first inserted *element* ends, and the rows go
+// with it:
+//
+//	<table><template><tr><td>x</td></tr></template></table>
+//
+//	Prepend("<input>", HTML)   table > template > input > "x"   the rows are gone
+//	Append("<input>", HTML)    table > template > tr > td > "x" > input
+//	Prepend("<!--c-->", HTML)  table > template > tr > td > "x"
+//	Prepend("hello", Text)     table > template > "hello" > tr > td > "x"
+//	Before("<input>", HTML)    table > input, table > template > tr > td > "x"
+//
+// It is the parser's rule and not the insertion's fault - the same bytes written by
+// hand lose the rows too - but a rewrite that prepends anything to elements it
+// matched has no reason to expect it. Prepending a comment or text is safe,
+// appending is safe, and for an element the safe positions are after the content or
+// outside the template.
+//
 // # Removal suppresses output, not handler calls
 //
 // [Element.Remove] takes the element and its content out of the output. It does

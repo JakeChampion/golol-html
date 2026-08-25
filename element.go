@@ -615,6 +615,11 @@ func (e *Element) After(content string, ct ContentType) error {
 //
 // Calling this after Remove still emits the content, without the element's tags
 // around it; see the package documentation on removal.
+//
+// Prepending an element into a <template> whose content is table markup deletes
+// that content: the rows are parsed in a mode the first inserted element ends. A
+// comment or text is safe there, and so is Append; see the package documentation on
+// templates.
 func (e *Element) Prepend(content string, ct ContentType) error {
 	return e.content(content, ct, "element_prepend", cfElementPrepend)
 }
