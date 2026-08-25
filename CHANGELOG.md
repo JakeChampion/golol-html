@@ -1318,6 +1318,32 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Strict mode's trigger list was wrong for `<frameset>`, in the direction that
+  matters.** `WithStrict` said eight names are ambiguous inside a `<select>` and
+  that inside a `<frameset>` it is "any of them except `<noframes>`", that
+  `<script>` is allowed, and that `<select>`, `<textarea>`, `<input>` and
+  `<keygen>` end the ambiguous context. Measured by trying every element name in
+  the HTML index inside each context:
+
+      inside <select>    8 names: title style iframe xmp plaintext noembed
+                         noframes noscript
+      inside <frameset>  9 names: those minus noframes, plus script and textarea
+
+  So two of the names the documentation calls safe are ambiguous in a frameset -
+  `script`, which it says is allowed, and `textarea`, which it says ends the
+  context. And the four context-ending tags end nothing there:
+  `<frameset><select><title>` is ambiguous, while `<select><textarea><title>` is
+  fine. Only `<noframes>` ends it in a frameset.
+
+  It matters because of what the other mode does: with strict off, the region after
+  an ambiguous tag is handed through as text with no handler invoked, which the
+  same documentation calls a sanitiser bypass. A caller reading the list would have
+  believed a `<frameset><script>` was seen and rewritten.
+
+  `strict_test.go` now sweeps every name in the index against both contexts and
+  four contexts that are not, so the two lists are measured rather than trusted -
+  which is how this was found: the old test asserted the frameset list by removing
+  one name from the select list, so the two extra names were never tried.
 - **A selector list handles an element once; separate handlers each run.** The two
   spellings look interchangeable and are not, and nothing said so. Measured on
   `<a href="/x" class="t">` with a handler that appends to an attribute:

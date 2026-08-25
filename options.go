@@ -748,15 +748,28 @@ func WithEncoding(label string) Option {
 // follows is markup or raw text. In strict mode it stops; with strict off it
 // guesses, and a wrong guess means your handlers never see that content.
 //
-// The trigger is narrow and worth knowing exactly. Inside a <select>, a start
-// tag for one of
+// The trigger is narrow and worth knowing exactly. Two contexts have it, and their
+// lists are not the same list - measured by trying every element name in the HTML
+// index inside each, in strict_test.go.
+//
+// Inside a <select>, eight names:
 //
 //	title  style  iframe  xmp  plaintext  noembed  noframes  noscript
 //
-// is ambiguous. So is any of them except <noframes> inside a <frameset>, where
-// <noframes> is legal. <script> is explicitly allowed in a <select>, and
-// <select>, <textarea>, <input> and <keygen> end the ambiguous context rather
-// than entering it. Nothing outside those two contexts triggers it.
+// Inside a <frameset>, nine - the same eight without <noframes>, which is legal
+// there, plus <script> and <textarea>, which are not ambiguous in a <select> and
+// are here:
+//
+//	title  style  iframe  xmp  plaintext  noembed  noscript  script  textarea
+//
+// <script> is explicitly allowed in a <select>, and <select>, <textarea>, <input>
+// and <keygen> end the ambiguous context there rather than entering it - so
+// <select><textarea><title> is fine. None of that carries over: inside a
+// <frameset> those tags do not end anything, and <frameset><select><title> is
+// ambiguous. <noframes> is the one thing that ends it there.
+//
+// Nothing outside those two contexts triggers it - measured for every name in the
+// index inside a <div>, a <table>, a <template> and an <optgroup>.
 //
 // Neither mode is simply the safe one, which is why this is spelled out:
 //
