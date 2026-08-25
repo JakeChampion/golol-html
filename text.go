@@ -30,11 +30,23 @@ type TextChunk struct {
 // "caf&eacute;", not "café".
 //
 // A chunk never contains part of a character. Where the chunk boundaries fall is
-// not a caller's choice - they follow the writes, which follow whatever reader is
-// upstream - but they always fall between characters, measured at one byte per
-// write over two-, three- and four-byte runes, in text, in a comment and in an
-// attribute value. Content going the other way has the opposite rule:
+// not a caller's choice - but they always fall between characters, measured at one
+// byte per write over two-, three- and four-byte runes, in text, in a comment and
+// in an attribute value. Content going the other way has the opposite rule:
 // [Sink.WriteChunk] takes a partial sequence and joins it to the next write.
+//
+// Two things decide the boundaries, and only one of them is the writes. The
+// tokenizer splits a text node of its own accord at a "<" that turns out not to
+// begin a tag, and delivers that character as a chunk by itself:
+//
+//	<p>3 < 4 and 5 < 6</p>    "3 "  "<"  " 4 and 5 "  "<"  " 6"  ""
+//
+// Six chunks for one text node, from one write. So controlling the writes does not
+// control the chunking, and prose with a bare "<" in it - arithmetic, a code
+// sample outside a <code> element - arrives in more pieces than a caller sizing
+// the work by writes would expect. A "&lt;" does not split anything, and neither
+// does a "&", a NUL or a CRLF; "<!", "</" and "<?" do something else again, since
+// each of those begins a comment token and so ends the text node.
 //
 // What a boundary does split is everything larger than a character. So a
 // transform applied per chunk is safe per character and wrong per pattern:

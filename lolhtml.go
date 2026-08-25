@@ -856,8 +856,13 @@
 // So a handler that reads one attribute costs two allocations per match, one
 // that reads the same attribute twice costs three - nothing is cached - and one
 // that lists every attribute to find a single one costs four times the number of
-// attributes on the element. A text handler sees two chunks per text node, the
-// content and its empty boundary marker, so it starts at two.
+// attributes on the element.
+//
+// A text handler starts at two calls per text node - the content and its empty
+// boundary marker - and two is a floor rather than a figure. The writes split a
+// node, and so does the tokenizer: a "<" in text that does not begin a tag is
+// delivered as a chunk of its own, so "3 < 4 and 5 < 6" is six calls from one
+// write. See [TextChunk.Text].
 //
 // Registering selectors has its own cost, paid once per [NewWriter]. Measured
 // with the options built beforehand, so what is counted is registration rather
