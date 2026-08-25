@@ -1197,6 +1197,35 @@
   order they were written.
 
 ### Testing
+- **The text-insertion property was stated over documents that excluded every
+  hazardous context.** `properties/text_structure_test.go` says inserting with
+  `lolhtml.Text` never changes a document's tags, "for any value, at any position,
+  in any document", and the documents it drew were built from nine ordinary
+  elements: div, p, span, a, b, i, ul, li, section. Raw text, escapable raw text,
+  foreign content, templates, tables and selects - every place a parser's rules
+  change, which is the whole of what anybody would doubt - were outside the space
+  the property was checked on.
+
+  `properties/hostileinsert_test.go` states the same property over fourteen of
+  those contexts: `<script>`, `<style>`, `<title>`, `<textarea>`, `<xmp>`,
+  `<plaintext>`, `<svg>`, a `<foreignObject>`, `<math>`, `<template>`, a table, a
+  table cell, a `<select>` and a paragraph, with the value inserted at all four
+  positions that take a content type and drawn from the terminators and
+  markup-shaped strings most likely to escape. It holds: Text never changed the
+  tags and was never refused.
+
+  Two tests keep that honest. The converse - the same insertions as `HTML` - changed
+  the tags 172 times and was refused twice, so the escaping is doing the work rather
+  than the positions being harmless. And each context is checked to have exactly one
+  target the selector matches, with its raw-text flag compared against
+  `lolhtml.IsRawText`, so a typo cannot quietly drop a context from the property.
+
+  Writing it also corrected two things I had wrong. The breakout payload has to end
+  *that* element - `</script>` does nothing inside a `<style>`, so the guard rightly
+  accepted it and the test was wrong, not the library. And `<plaintext>` is raw text
+  by `IsRawText` and has no end tag at all, so nothing can break out of it and the
+  breakout test skips it rather than expecting a refusal.
+
 - **`properties/sanitiser_test.go`: an allow-list sanitiser as a property, over
   documents built to break it.** Every other property in that package states
   something about one call. This one states something about a composition -
