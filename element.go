@@ -507,6 +507,36 @@ func (e *Element) HasAttribute(name string) (bool, error) {
 // every call to the most-used method in the package, to change the answer for the
 // documents that have a duplicate and move the attribute in all the rest. See "An
 // attribute can appear twice" in the package documentation.
+//
+// # The start tag comes back re-serialised
+//
+// Setting an attribute re-serialises the whole start tag, so the output is not the
+// input plus the attribute. Each attribute's own source text survives - its
+// quoting style, the case of its name, spaces around its equals sign, an entity in
+// its value, a duplicate, a bare boolean - and the separators between attributes
+// do not:
+//
+//	<a
+//	  href="/x"
+//	  class="c">        ->  <a href="/x" class="c" data-x="1">
+//	<a href="/x"class="c">  ->  <a href="/x" class="c" data-x="1">
+//	<a href="/x" >          ->  <a href="/x" data-x="1">
+//
+// Newlines, tabs and runs of spaces between attributes become single spaces, a
+// trailing space before the bracket is dropped, and a missing one is added. On a
+// page whose templates put each attribute on its own line the effect is
+// substantial: setting one attribute on every anchor of cloudflare.com.html takes
+// the document from 119,237 bytes to 114,542, having been asked to make it bigger.
+//
+// So a byte comparison, a checksum or an ETag over the output sees changes the
+// caller did not ask for, and a rewrite is not a diff of itself. It also happens
+// when the value set is the value already there, so a rewrite that wants to leave
+// unchanged elements untouched has to compare first and only set when it differs.
+//
+// [Element.RemoveAttribute] does the same when the attribute is present, and so
+// does [Element.SetTagName]. Reading, inserting, an end-tag handler and user data
+// do not: the tag's bytes come through exactly as they arrived. Measured in
+// reserialise_test.go.
 func (e *Element) SetAttribute(name, value string) error {
 	p, err := e.live()
 	if err != nil {
@@ -934,6 +964,10 @@ func (e *Element) OnEndTag(fn func(*EndTag) error) error {
 
 // ClearEndTagHandlers removes every end-tag handler registered for this
 // element, including any added by handlers that ran before this one.
+//
+// Removing a handler is not an edit to the document: the start tag is not
+// re-serialised by this or by anything else that only reads. See
+// [Element.SetAttribute] on what re-serialisation changes.
 //
 // It stops the callbacks running. It does not release what registering them cost:
 // the handle stays live until the Writer closes, so clearing is not a way to bound
