@@ -276,6 +276,13 @@ nothing:
   bash 3.2, where `set -e` aborts on a non-final pipeline element even when the
   pipeline succeeds, so that step failed unconditionally on macOS while
   printing nothing. Use the assignment form the Makefile uses.
+- **The shell's working directory persists between commands, and a relative
+  path written for the repository root then resolves somewhere else.** That has
+  cost time twice: once on a `cd` into a subdirectory that broke the next
+  command, and once on `rm -f examples/gip/queue/zz_test.go` run from inside
+  `examples/gip/queue`, which removed nothing, reported nothing, and left a
+  scratch test to be committed and merged. `rm` without a check is the same
+  blind edit as the one below. Use absolute paths, or assert the file is gone.
 - **An unasserted string replacement that matches nothing is
   indistinguishable from success.** That cost time twice here: once widening
   the constraint in `unsupported.go`, once querying `.GoFiles` in
