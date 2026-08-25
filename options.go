@@ -269,7 +269,51 @@ type SelectorError struct {
 }
 
 func (e *SelectorError) Error() string {
-	return "lolhtml: invalid selector " + quote(e.Selector) + ": " + e.Message
+	msg := "lolhtml: invalid selector " + quote(e.Selector) + ": " + e.Message
+	if h := selectorHint(e.Selector); h != "" {
+		msg += " " + h
+	}
+	return msg
+}
+
+// selectorHint adds what lol-html's parser cannot say, because it reports the
+// mistake in terms of what it thought it was reading.
+//
+// A colon in a tag or attribute name has to be escaped - esi\:include, not
+// esi:include - and an unescaped one is read as the start of a pseudo-class, so
+// the message is "Unsupported pseudo-class or pseudo-element in selector",
+// which sends a reader looking for a pseudo-class they did not write. Inside
+// brackets it is "Unexpected token".
+//
+// The hint is conditional on the failure and on there being an unescaped colon,
+// and it is worded as a question rather than a diagnosis, because a colon may
+// well have been meant as a pseudo-class that is genuinely unsupported.
+func selectorHint(sel string) string {
+	if !hasUnescapedColon(sel) {
+		return ""
+	}
+	return `(if the ":" is part of a tag or attribute name it must be escaped, ` +
+		`as in "esi\:include" or "[xlink\:href]")`
+}
+
+func hasUnescapedColon(sel string) bool {
+	for i := 0; i < len(sel); i++ {
+		switch sel[i] {
+		case '\\':
+			i++ // whatever follows is escaped, including a colon
+		case ':':
+			// "::" is a pseudo-element and can never be part of a name, so
+			// there is nothing to suggest. A single colon may be either, which
+			// is why the hint is worded as a condition: a selector like
+			// "p:has(a)" fails for its own reasons and still gets it.
+			if i+1 < len(sel) && sel[i+1] == ':' {
+				i++
+				continue
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // An EncodingError reports a character encoding label that lol-html would not
@@ -571,6 +615,14 @@ func WithGracefulBailOut() Option {
 // WithESITags treats Edge Side Includes tags as void elements, so an
 // <esi:include> written without a self-closing slash does not swallow what
 // follows it. It is off by default, matching lol-html.
+//
+// Selecting one needs the colon escaped, which is easy to get wrong because the
+// error blames something else:
+//
+//	OnElement(`esi\:include`, ...)   // matches
+//	OnElement("esi:include", ...)    // Unsupported pseudo-class or pseudo-element
+//
+// See the package documentation on escaping a selector.
 //
 // Without it, an esi: element is an ordinary container: its content runs until a
 // matching end tag, and since ESI is conventionally written unclosed, that is
