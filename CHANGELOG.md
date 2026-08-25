@@ -1318,6 +1318,39 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A wrapper is two insertions and the parser decides whether they wrap.** Putting
+  a container around an element is `Before` with an opening tag and a closing tag at
+  the element's end. Both insertions succeed, the output reads exactly as intended,
+  and whether the result is a container is decided afterwards by whoever parses it.
+
+      <p>text <iframe src="a"></iframe> more</p>
+
+      wrapped in a div     p > "text", div > iframe, "more", p
+      wrapped in a span    p > "text", span > iframe, "more"
+
+  A div closes an open paragraph, so it takes the element out of the paragraph,
+  leaves the text that followed it outside as well, and turns the source's `</p>`
+  into a second, empty paragraph: three changes to the tree from an edit that only
+  meant to add a container. A span does not - and cannot hold an element that closes
+  a paragraph by starting, where it comes out empty with the element outside it:
+
+      <p>text<pre>code</pre></p>
+
+      wrapped in a span    p > "text", span (empty), then pre outside it
+      wrapped in a div     p > "text", div > pre, p
+
+  So the question is not whether the wrapper is a block or an inline element, it is
+  whether the wrapped element closes a paragraph by starting. For a `<table>` that
+  depends on the doctype, because a table closes a paragraph only outside quirks
+  mode - the same document wraps one way with `<!DOCTYPE html>` and the other way
+  without it. The doctype arrives before any element, so `OnDoctype` can decide it.
+
+  And a wrapper around a table-internal element wraps nothing at all: it is fostered
+  out to just before the table while the cell stays where it was.
+
+  New package documentation section, a note on `Element.Before`,
+  `differential/wrap_test.go`, and B146.
+
 - **A descendant selector keeps matching after the ancestor has ended.** The
   documentation covered the end-tag rule for insertion positions - Append and After
   on an element whose end tag was omitted write somewhere else - and said nothing
