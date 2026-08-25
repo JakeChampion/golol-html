@@ -605,9 +605,30 @@ func OnDocumentEnd(fn func(*DocumentEnd) error) Option {
 // windows-1252, and the two differ over 0x80 to 0x9F: in true Latin-1 those are
 // control characters, and here 0x80 is the euro sign.
 //
-// A non-ASCII-compatible encoding is refused. "utf-16le", "utf-16be" and
-// "utf-16" are all rejected, because the rewriter has to find ASCII markup in
-// the byte stream. Decode to UTF-8 before rewriting.
+// Four of the standard's encodings are refused, and the list is measured rather
+// than assumed: every canonical name in the Encoding Standard's index was tried,
+// and 36 of the 40 work. The four are
+//
+//	utf-16le  utf-16be  (and the "utf-16" label, which means utf-16le)
+//	iso-2022-jp
+//	replacement
+//
+// The first three are refused as not ASCII-compatible, because the rewriter has to
+// find ASCII markup in the byte stream. UTF-16 is the obvious one; iso-2022-jp is
+// the one that surprises, because its bytes look ASCII until an escape sequence
+// switches the charset, after which they are not - so it cannot be rewritten in a
+// stream either. Decode to UTF-8 before rewriting, and expect a Japanese page to
+// be the one that needs it.
+//
+// "replacement" is refused as unknown rather than as incompatible. It is a real
+// label in the standard, whose whole purpose is to decode nothing safely, and
+// there is nothing for a rewriter to do with it.
+//
+// Labels are matched the standard's way, which is worth two notes for a caller
+// passing a value straight from a Content-Type header: leading and trailing
+// whitespace is stripped, so " utf-8 " works, and nothing else is normalised, so
+// "utf_8" and "utf 8" are unknown labels while "iso8859-1" and "iso88591" are
+// windows-1252.
 //
 // An unusable label fails from NewWriter, not from Write, with an
 // [EncodingError] naming it.
