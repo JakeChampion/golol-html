@@ -245,6 +245,31 @@
 // An unsupported selector is rejected by [NewWriter], not silently ignored, with
 // a [SelectorError] naming it and saying which part it could not use.
 //
+// # A colon or a dot in a name has to be escaped
+//
+// A selector is CSS, so a punctuation character in a tag or attribute name is
+// read as CSS punctuation unless it is escaped with a backslash. The two that
+// come up are the colon, in the namespace-prefixed names that Edge Side Includes
+// and SVG's xlink attributes use, and the dot, in a class or id that contains
+// one. Measured:
+//
+//	esi:include        Unsupported pseudo-class or pseudo-element in selector
+//	esi\:include       matches <esi:include>
+//	[xlink:href]       Unexpected token in the attribute selector
+//	[xlink\:href]      matches <a xlink:href="x">
+//	.a.b               parses, matches nothing: two classes, "a" and "b"
+//	.a\.b              matches class="a.b"
+//	my-element         matches; a hyphen needs no escape
+//
+// The first two rows are the ones worth knowing, because the message names a
+// pseudo-class the caller did not write. [SelectorError] adds the answer when the
+// selector it rejected contains an unescaped colon. The dot has no such help: it
+// parses, so nothing fails - the handler simply never runs, which is the quietest
+// failure in this list.
+//
+// Everything else about matching is case-insensitive as usual, so
+// `ESI\:INCLUDE` matches too.
+//
 // # Selectors do not consider namespaces
 //
 // A tag name in a selector matches that name in any namespace, so "a[href]"

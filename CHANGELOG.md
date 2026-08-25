@@ -493,6 +493,21 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Nothing said how to select an element whose name contains a colon, and the
+  error blames something else.** `esi:include` is rejected with "Unsupported
+  pseudo-class or pseudo-element in selector", which names something the caller
+  did not write; the answer is `esi\:include`. Same for `[xlink\:href]`.
+  `WithESITags` described a worked example with a handler on the include and
+  never showed a selector that could match one.
+
+  There is now a package-doc section with the measured table, `WithESITags`
+  shows the escaped form, and `SelectorError` adds the answer when the selector
+  it rejected contains an unescaped colon - suppressed for `::`, where a colon
+  cannot be part of a name.
+
+  The dot is worse and cannot be helped the same way: `.a.b` parses as "class a
+  and class b", matches nothing, and reports no error at all, so the handler
+  simply never runs. `.a\.b` is the escaped form. Both are pinned.
 - **An end-tag handler has three timings, and the documentation described two.**
   The guard added for insertions - compare `EndTag.Name` against the element's
   tag name, and do nothing when they differ - is right for writing at a position

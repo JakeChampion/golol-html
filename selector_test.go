@@ -427,3 +427,89 @@ func TestNamesAreMatchedWithoutRegardToCase(t *testing.T) {
 		}
 	}
 }
+
+// TestAColonOrDotInANameHasToBeEscaped is the table in the package
+// documentation. The colon is the one that matters: the message a caller gets
+// names a pseudo-class they did not write, so nothing points at the answer.
+func TestAColonOrDotInANameHasToBeEscaped(t *testing.T) {
+	tests := []struct {
+		sel     string
+		doc     string
+		matches int
+		// fails is whether the selector is rejected at all. A selector that
+		// parses and matches nothing is the worse outcome, so the distinction
+		// is asserted.
+		fails bool
+	}{
+		{sel: `esi:include`, doc: `<esi:include src=a>`, fails: true},
+		{sel: `esi\:include`, doc: `<esi:include src=a>`, matches: 1},
+		{sel: `ESI\:INCLUDE`, doc: `<esi:include src=a>`, matches: 1},
+		{sel: `[xlink:href]`, doc: `<svg><a xlink:href="x"/></svg>`, fails: true},
+		{sel: `[xlink\:href]`, doc: `<svg><a xlink:href="x"/></svg>`, matches: 1},
+		// Parses, and means "an element in class a and in class b".
+		{sel: `.a.b`, doc: `<p class="a.b">x</p>`, matches: 0},
+		{sel: `.a\.b`, doc: `<p class="a.b">x</p>`, matches: 1},
+		{sel: `#a\.b`, doc: `<p id="a.b">x</p>`, matches: 1},
+		// A hyphen is a name character and needs nothing.
+		{sel: `my-element`, doc: `<my-element>x</my-element>`, matches: 1},
+		{sel: `a\:b\:c`, doc: `<a:b:c>x</a:b:c>`, matches: 1},
+		// The escape hatch, for anyone who has not read this far: an attribute
+		// selector reaches an element whose name cannot be written.
+		{sel: `[src]`, doc: `<esi:include src=a>`, matches: 1},
+	}
+	for _, tt := range tests {
+		n := 0
+		_, err := lolhtml.RewriteString(tt.doc, lolhtml.OnElement(tt.sel, func(*lolhtml.Element) error {
+			n++
+			return nil
+		}))
+		if tt.fails {
+			if err == nil {
+				t.Errorf("%q was accepted", tt.sel)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%q: %v", tt.sel, err)
+			continue
+		}
+		if n != tt.matches {
+			t.Errorf("%q matched %d times, want %d", tt.sel, n, tt.matches)
+		}
+	}
+}
+
+// The error for an unescaped colon says what to do about it, because lol-html's
+// own message points at a pseudo-class the caller did not write.
+func TestTheSelectorErrorSuggestsEscapingAColon(t *testing.T) {
+	_, err := lolhtml.RewriteString(`<p>a</p>`,
+		lolhtml.OnElement("esi:include", func(*lolhtml.Element) error { return nil }))
+	if err == nil {
+		t.Fatal("accepted")
+	}
+	for _, want := range []string{"esi:include", "must be escaped", `esi\:include`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not mention %q: %v", want, err)
+		}
+	}
+
+	// Not for a pseudo-element, where a colon cannot be part of a name.
+	_, err = lolhtml.RewriteString(`<p>a</p>`,
+		lolhtml.OnElement("p::before", func(*lolhtml.Element) error { return nil }))
+	if err == nil {
+		t.Fatal("a pseudo-element was accepted")
+	}
+	if strings.Contains(err.Error(), "must be escaped") {
+		t.Errorf("a pseudo-element got the escaping hint: %v", err)
+	}
+
+	// Nor for a failure that has nothing to do with a colon.
+	_, err = lolhtml.RewriteString(`<p>a</p>`,
+		lolhtml.OnElement("[", func(*lolhtml.Element) error { return nil }))
+	if err == nil {
+		t.Fatal("an unterminated attribute selector was accepted")
+	}
+	if strings.Contains(err.Error(), "must be escaped") {
+		t.Errorf("an unrelated failure got the escaping hint: %v", err)
+	}
+}
