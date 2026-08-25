@@ -476,6 +476,19 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`OnText` said less than it needed to, in two directions.** It did not point
+  at `OnDocumentText` the way `OnComment` points at `OnDocumentComment`, and
+  nothing said that no selector reaches text outside every element - so
+  `OnText("*", redact)` leaves a fragment untouched and reports nothing.
+  Measured and now in the doc: `hello` gives 0 selector calls and 2 document
+  ones, `before<p>a</p>after` gives 2 and 6, and `<html><body>a</body></html>`
+  gives 2 and 2, which is why a test written against a full document passes.
+
+  And `IsLastInTextNode` said the final chunk is "frequently empty". It is a call
+  of its own and carries no bytes in every shape measured - a short node, a
+  100 KB one, character references, all four raw-text elements, and one-, two-,
+  three- and five-byte writes. The cost follows: a text handler runs at least
+  twice per text node and about half its calls on prose are handed nothing.
 - **`IsSelfClosing` says it is about the source text, and that it is not a test
   for emptiness.** Its comment said a trailing slash "is ignored" in HTML, which
   is true of the parser and not of this method: `<div/>` reports self-closing and
