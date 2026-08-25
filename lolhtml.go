@@ -1286,6 +1286,23 @@
 // saving is real but small, and registering the same selector twice to keep two
 // handlers separate is not something to avoid on cost grounds.
 //
+// That cost is per handler and not per selector, and a selector list is one
+// selector. Measured over 500 elements that match nothing, so the numbers are
+// registration and matching with no handler ever running:
+//
+//	no handlers                              16 allocations
+//	one selector                             24
+//	a twelve-clause list                     24
+//	twelve separate registrations            96
+//
+// So naming twelve elements in one [OnElement] costs what naming one costs, while
+// twelve OnElement calls cost eight times as much. The list is not free at match
+// time - it was measured slower per element than a single clause and faster than
+// twelve registrations - but it allocates nothing extra, and a rewrite that has a
+// list of elements to look at should say so in one selector. That is what
+// examples/gip/origins does with the twenty places a URL can hide. Gated in
+// reportshape_test.go.
+//
 // Matching cost grows with the number registered as well, on every element -
 // there is no index by tag or class - so a tool that registers one handler per
 // rule in a stylesheet pays for all of them at every element of the document.

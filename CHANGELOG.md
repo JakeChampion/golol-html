@@ -1347,6 +1347,29 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Registration cost is per handler, not per selector clause.** The Cost section had
+  the per-handler figure - about seven allocations per distinct selector - and said
+  nothing about what a selector *list* costs, which is the shape a tool with a list of
+  elements to look at wants. Measured over 500 elements that match nothing, so the
+  numbers are registration and matching with no handler ever running:
+
+      no handlers                              16 allocations
+      one selector                             24
+      a twelve-clause list                     24
+      twelve separate registrations            96
+
+  So naming twelve elements in one `OnElement` costs what naming one costs, and twelve
+  `OnElement` calls cost eight times as much. The list is not free at match time - it
+  measured slower per element than a single clause and faster than twelve
+  registrations - but it allocates nothing extra.
+
+  The section already advised the narrowest selector that says what the rule is, and
+  compared a list against a `"*"` handler on a matching document. This is the other
+  half: the list against separate registrations, on a document where nothing matches.
+  `reportshape_test.go` gates it, along with the two facts a reporting tool relies on -
+  a wide selector pays per element of the document and the gap grows with the page,
+  and a named lookup that misses allocates nothing. B153.
+
 - **Rewriting raw text inverts both rules for inserting into it.** The package
   documentation covered inserting into a `<script>` or a `<style>`: `Text` escapes
   three characters that raw text does not decode, so it corrupts the content, and
