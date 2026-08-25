@@ -1384,9 +1384,16 @@
 // because they move with the toolchain: what is asserted is that the marginal
 // cost is single-digit and that a repeat is cheaper than a distinct one.
 //
-// [Writer.Write] is quadratic at byte granularity while the rewriter is
-// buffering an unclosed tag, because each write rescans the pending buffer.
-// Network-sized reads are far from this; writing a byte at a time is not.
+// [Writer.Write] allocates nothing of its own, whatever the size of the write, so
+// an allocation count measured with one big write is the count a caller streaming
+// from a socket sees too. What a small write costs is the crossing into C: about
+// 100 ns each on an M3 Pro, which makes a byte-at-a-time rewrite of a 64 KB page
+// roughly eight times the time of the same page written whole - a constant factor
+// rather than a change in shape. The per-byte cost is flat from 4 KB to 64 KB,
+// including while the rewriter is buffering an unclosed tag, which is the cheap
+// case rather than the expensive one: a pending tag produces no tokens to hand
+// back. Releases up to v0.1.1 documented that case as quadratic; it is not, and
+// bytecost_test.go gates the shape.
 //
 // The destination has a cost of its own, and it is not the one a reader of the
 // above would guess. The number of writes it receives is decided by what the

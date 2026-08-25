@@ -366,11 +366,21 @@ now encode the real behaviour:
   handler invocation counts are not. `FuzzRewrite` compares output always, and invocation counts
   only for structural handlers.
 
-**Writes are quadratic at byte granularity.** While the rewriter is buffering an unclosed tag,
-each write rescans the pending buffer: 4 KB byte-at-a-time takes 4.4 ms against 43.7 ms for
-16 KB. This is upstream behaviour, not a binding artefact, but it shaped the fuzz harness, which
-caps input at 8 KB and bounds the write count above 1 KB - without that the fuzzer stalled to
-0 execs/sec within seconds as it grew inputs. Documented in the README as a user-facing caveat.
+**Small writes cost a constant factor, not an asymptotic one.** Each `Write` costs about 100 ns
+of crossing into C on top of the document's own work and allocates nothing, so the number of
+writes is what a caller pays for: byte-at-a-time is roughly eight times the time of one whole
+write on a 64 KB page, and the per-byte cost is flat from 4 KB to 64 KB for ordinary markup and
+for every pathological shape tried. Releases up to v0.1.1 documented this as quadratic while an
+unclosed tag is buffered, on the theory that each write rescans the pending buffer; measurement
+says otherwise, and says the buffered tag is the cheap case, since it produces no tokens to hand
+back. Gated by `bytecost_test.go` in allocations, which are machine-independent where timings
+are not.
+
+The practical consequence is unchanged and still shapes the fuzz harness, which caps input at
+4 KB and bounds the write count above 256 bytes: a byte-at-a-time iteration is several times the
+work of a chunked one, and each iteration does several rewrites. Without the caps the fuzzer
+stalled as it grew inputs. What changed is the reason - a factor to pay knowingly rather than a
+curve to design around.
 
 Graceful bail-out. The first measurement of this used a single `Write` of the
 whole document, and the "0" it produced was generalised into the table below as

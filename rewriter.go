@@ -59,7 +59,18 @@ type state struct {
 // native owns every C allocation belonging to one rewriter, so that a single
 // release() frees them in the right order.
 type native struct {
-	rw        *C.lol_html_rewriter_t
+	rw *C.lol_html_rewriter_t
+	// cerr is the out-parameter Write passes to C. It is allocated once with the
+	// rewriter rather than declared inside Write, because taking the address of a
+	// local forces it to the heap and a byte-at-a-time write would pay for that
+	// once per byte - it was the whole cost of writing small chunks. It is its own
+	// allocation rather than a field of this struct because cgo refuses a pointer
+	// into memory that holds Go pointers, and this struct holds several.
+	//
+	// Reuse across writes is safe: a Writer is not safe for concurrent use, so
+	// two writes on one rewriter never overlap. Close keeps its own local, since
+	// once per document is not worth sharing state with the hot path for.
+	cerr      *C.lol_html_str_t
 	selectors []*C.lol_html_selector_t
 	handles   []cgo.Handle
 	userData  map[cgo.Handle]struct{}
@@ -107,7 +118,7 @@ func NewWriter(dst io.Writer, opts ...Option) (*Writer, error) {
 		return nil, err
 	}
 
-	c := &core{st: &state{dst: dst}, nt: &native{}}
+	c := &core{st: &state{dst: dst}, nt: &native{cerr: new(C.lol_html_str_t)}}
 
 	builder := C.lol_html_rewriter_builder_new()
 	// The builder is only needed until the rewriter is built; selectors must
@@ -170,11 +181,11 @@ func (w *Writer) Write(p []byte) (int, error) {
 	// rewriter and its handles, however they were driving the Writer.
 	defer w.releaseOnPanic()
 
-	var cerr C.lol_html_str_t
-	rc := C.golol_rewriter_write(w.c.nt.rw, (*C.char)(bytePtr(p)), C.size_t(len(p)), &cerr)
+	cerr := w.c.nt.cerr
+	rc := C.golol_rewriter_write(w.c.nt.rw, (*C.char)(bytePtr(p)), C.size_t(len(p)), cerr)
 	runtime.KeepAlive(p)
 
-	if err := w.c.st.takeDeferred(nativeErrIf(rc != 0, "write", cerr)); err != nil {
+	if err := w.c.st.takeDeferred(nativeErrIf(rc != 0, "write", *cerr)); err != nil {
 		w.poison(err)
 		return 0, err
 	}

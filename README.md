@@ -324,12 +324,12 @@ inserting anything of your own.
 page with 200 links. Run it on your own hardware before relying on these.
 
 ```
-BenchmarkPassthrough-12         23437 ns/op   705.88 MB/s     440 B/op    14 allocs/op
-BenchmarkSetAttribute-12       211903 ns/op    78.07 MB/s    7042 B/op   423 allocs/op
-BenchmarkReadAttributes-12     189778 ns/op    87.18 MB/s   17179 B/op  1023 allocs/op
-BenchmarkTextHandler-12        139737 ns/op   118.39 MB/s   11842 B/op   623 allocs/op
-BenchmarkStreamingAppend-12    229763 ns/op    72.00 MB/s   28336 B/op  1426 allocs/op
-BenchmarkChunkedWrite-12       199385 ns/op    82.98 MB/s    7249 B/op   435 allocs/op
+BenchmarkPassthrough-12         25050 ns/op   660.44 MB/s     488 B/op    14 allocs/op
+BenchmarkSetAttribute-12       221860 ns/op    74.57 MB/s   10290 B/op   423 allocs/op
+BenchmarkReadAttributes-12     204167 ns/op    81.03 MB/s   20427 B/op  1023 allocs/op
+BenchmarkTextHandler-12        154697 ns/op   106.94 MB/s   18290 B/op   623 allocs/op
+BenchmarkStreamingAppend-12    232503 ns/op    71.16 MB/s   37978 B/op  1426 allocs/op
+BenchmarkChunkedWrite-12       215627 ns/op    76.72 MB/s   10324 B/op   424 allocs/op
 ```
 
 Passthrough is the floor - lol-html plus cgo and sink overhead, with no handlers.
@@ -343,19 +343,48 @@ per attribute. Nothing is cached, so reading the same attribute twice costs
 twice. A handler that lists every attribute to find one is the usual accidental
 cost.
 
+`Write` itself costs none, whatever its size, so the count above is the count a
+caller streaming from a socket sees too: `BenchmarkChunkedWrite` and
+`BenchmarkSetAttribute` rewrite the same page in twelve writes and in one, and
+report the same figure. `bytecost_test.go` gates that across seven document
+shapes and four write sizes.
+
 ### Write in reasonable chunks
 
-Feeding the rewriter a byte at a time is quadratic while it is buffering an
-unclosed tag, because each write rescans the pending buffer. Measured on the same
-machine with a pathological unclosed-tag input:
+Each `Write` costs about 100 ns of crossing into C on top of the document's own
+work, whatever the size of the write, so the write size is a constant factor and
+the number of writes is what you pay for. Measured over 64 KB of ordinary markup
+with one matching handler:
 
-| Input | Byte-at-a-time |
-|---|---|
-| 4 KB | 4.4 ms |
-| 16 KB | 43.7 ms |
+| Write size | Writes | Time | ns/byte | Allocations |
+|---|---|---|---|---|
+| 1 | 65541 | 7.6 ms | 116 | 3143 |
+| 64 | 1025 | 1.17 ms | 17.9 | 3143 |
+| 256 | 257 | 1.06 ms | 16.1 | 3143 |
+| 4096 | 17 | 1.04 ms | 15.8 | 3143 |
+| whole document | 1 | 1.03 ms | 15.9 | 3143 |
 
-`io.Copy` and normal network-sized reads are all well clear of this. It only bites
-if you deliberately write tiny chunks.
+The allocation column is the same at every write size by design, and gated. The
+timings are darwin/arm64, and are here for the ratio between them: a
+byte-at-a-time rewrite of this page spends about 7 ms crossing the boundary and
+about 1 ms rewriting.
+
+`io.Copy` and normal network-sized reads are all well clear of the expensive end.
+It only bites if you deliberately write tiny chunks.
+
+The cost is a constant factor and not an asymptotic one. Releases up to v0.1.1
+documented this section as quadratic while the rewriter buffered an unclosed tag,
+on the theory that each write rescans the pending buffer. It does not: per-byte
+cost is flat from 4 KB to 64 KB, for ordinary markup and for every pathological
+shape tried - an unclosed tag, an unclosed comment, an unclosed quoted value, a
+raw-text element that never ends, one enormous text node. Quadrupling the document
+quadruples the work.
+
+The buffered tag is in fact the *cheap* case, because it produces no tokens to
+hand back: 64 KB of unclosed tag costs 22 allocations against 3143 for the same
+weight of ordinary markup. `bytecost_test.go` gates both halves of this, in
+allocations rather than in time, since allocation counts are the same on any
+machine.
 
 Linking adds about 1 MB to a binary: 3.44 MB against a 2.37 MB pure-Go baseline
 on darwin/arm64.

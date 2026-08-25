@@ -213,6 +213,35 @@
   documentation says which of those applies where.
 
 ### Fixed
+- **`Write` allocated once per call, whatever its size.** The out-parameter the
+  write passes to C - `var cerr C.lol_html_str_t` - has its address taken, which
+  forces it to the heap: one 16-byte allocation per write, and a byte-at-a-time
+  rewrite paid it once per byte. Measured on a 64 KB page, with the difference
+  being exactly the number of writes:
+
+      64 KB of ordinary markup     before   after   written whole
+        one byte at a time         68,684   3,143   3,143
+      64 KB of unclosed tag        before   after   written whole
+        one byte at a time         65,563       22      22
+
+  It now lives with the rewriter, allocated once in `NewWriter`. It is its own
+  allocation rather than a field of the `native` struct because cgo refuses a
+  pointer into memory that holds Go pointers, and that struct holds several -
+  the attempt panics with "cgo argument has Go pointer to unpinned Go pointer",
+  which is the runtime being right. Reuse across writes is safe because a Writer
+  is not safe for concurrent use; `Close` keeps its own local, since once per
+  document is not worth sharing state with the hot path for.
+
+  What this buys is not mainly speed - the time is dominated by the crossing
+  itself, and the measured difference is a few per cent, at the edge of what one
+  machine can separate. It is that an allocation count no longer depends on how
+  the document is fed. `BenchmarkChunkedWrite` and `BenchmarkSetAttribute`
+  rewrite the same page in twelve writes and in one, and now report the same
+  figure; every allocation number in `alloc_test.go` and in the README describes
+  a streaming caller as well as a batch one. `bytecost_test.go` gates it across
+  seven document shapes and four write sizes, and fails by three orders of
+  magnitude if the allocation comes back.
+
 - **`examples/gip/mixed` missed an insecure `<image>`.** The mixed-content checker
   matched `img` and not `image`, so a page whose insecure request was spelled the old
   way passed. It now matches both, and reports SVG's own `image` element as
@@ -1168,6 +1197,28 @@
   order they were written.
 
 ### Testing
+- **`bytecost_test.go` gates the shape of the write cost**, in allocations rather
+  than in time, since allocation counts are identical on every machine and timings
+  are not. Four tests: the allocation count does not change with the write size,
+  over seven document shapes and four write sizes; the per-byte cost is flat
+  across four-fold steps in document size; a pending tag costs less per byte than
+  ordinary markup, which is the claim that inverts the old story; and a hundred
+  empty writes cost nothing.
+
+  The measurement slices a `[]byte` rather than converting `string` slices,
+  deliberately and with a comment saying why: the first version of it wrote
+  `[]byte(in[i:end])` and so paid one allocation per write of its own, which is
+  the same figure it was measuring the library for. Half the reported cost was the
+  harness.
+
+- **`examples/gip/bytewise` measures the curve for a caller's own document.**
+  Reads a document on stdin, or generates one of the pathological shapes with
+  `-shape`, and prints allocations and time per byte at several write sizes. With
+  `-check` it re-measures a document four times the size and says whether the
+  per-byte cost held, which is the same assertion the gate makes, available to
+  anyone who would rather run it against their own markup on their own hardware
+  than take a table on trust.
+
 - **`examples/gip/corpus`, which says which of the documented hazards a document actually
   has.** Twelve constructs, each one a place where a streaming rewrite and a browser see
   different documents, counted with the first offset and what each costs. Run over the three
@@ -1476,6 +1527,40 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Byte-at-a-time writing is not quadratic.** The README, the package doc,
+  `SPEC.md`, the fuzz harness, two lessons in `GIP.md` and B5 in the
+  known-behaviours table all said that writes are quadratic at byte granularity
+  while the rewriter buffers an unclosed tag, because each write rescans the
+  pending buffer. They are not, and the documented figures (4.4 ms for 4 KB
+  against 43.7 ms for 16 KB) do not reproduce:
+
+      one byte at a time        4 KB      16 KB     64 KB
+      ordinary markup       157 ns/B  146 ns/B  123 ns/B
+      one unclosed tag      130 ns/B  134 ns/B  144 ns/B
+
+  Flat, at four-fold steps in size, and flat for every shape that makes the
+  rewriter hold something across writes: an unclosed tag, an unclosed tag with
+  many attributes, an unclosed comment, an unclosed quoted value, a raw-text
+  element that never ends, one enormous text node. Also flat with no handlers,
+  with a handler on the pending element, with every handler kind registered, with
+  a memory limit, with a legacy encoding, and with strict mode off.
+
+  The buffered tag turns out to be the cheap case rather than the pathological
+  one: 64 KB of it costs 22 allocations and 0.9 ns per byte written whole, against
+  3143 and 15.9 for the same weight of ordinary markup, because a pending tag
+  produces no tokens to hand back and ordinary markup produces one per element.
+
+  What survives is the advice, for a different reason. Each write costs about
+  100 ns of crossing into C whatever its size, so writing in reasonable chunks
+  matters and the fuzz harness still needs its caps - a byte-at-a-time rewrite of
+  a 64 KB page spends about 7 ms crossing the boundary and about 1 ms rewriting.
+  A constant factor is a thing a caller pays knowingly; a quadratic is a thing
+  they have to design around, and saying the first is the second sends them
+  somewhere they did not need to go.
+
+  The benchmark table in the README was re-run on the same machine while this was
+  measured, since one of its rows moves with the fix above.
+
 - **Two handlers can run inside `Close`, and a panic from there leaves the Writer closed
   rather than poisoned.** `Close` said the error from the final flush is reported there,
   "including any handler error raised while processing the document end". The document end
