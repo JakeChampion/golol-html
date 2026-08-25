@@ -405,3 +405,67 @@ func TestSetAttributeCostsNoMoreThanReadingOne(t *testing.T) {
 		t.Errorf("setting an attribute allocates %d, reading one allocates %d", write, read)
 	}
 }
+
+// TestSelectorRegistrationCost pins the numbers the Cost section gives for
+// building a rewriter, which nothing measured before: the section said "about
+// five allocations per distinct selector, one fewer for a repeat" and the
+// measurement is nearer seven and one and a half.
+//
+// A range rather than a value, because these move with the toolchain and with
+// how the slices behind them happen to grow. What is worth asserting is the
+// shape: single-digit per selector, and a repeat cheaper than a distinct one.
+func TestSelectorRegistrationCost(t *testing.T) {
+	requireRealAllocationCounts(t)
+
+	// Distinct selectors, one per handler.
+	distinct := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+
+	// The options are built outside the measured function, so the count is
+	// NewWriter's work and not the caller's slice.
+	build := func(n int, repeat bool) []lolhtml.Option {
+		opts := make([]lolhtml.Option, 0, n)
+		for i := range n {
+			sel := distinct[i%len(distinct)]
+			if repeat {
+				sel = "a"
+			}
+			opts = append(opts, lolhtml.OnElement(sel, func(*lolhtml.Element) error { return nil }))
+		}
+		return opts
+	}
+	measure := func(opts []lolhtml.Option) float64 {
+		return testing.AllocsPerRun(100, func() {
+			w, err := lolhtml.NewWriter(io.Discard, opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	base := measure(nil)
+	if base < 5 || base > 40 {
+		t.Errorf("a rewriter with no handlers cost %.0f allocations; the "+
+			"documented figure is 13 and this range is generous", base)
+	}
+
+	const n = 8
+	perDistinct := (measure(build(n, false)) - base) / n
+	perRepeat := (measure(build(n, true)) - base) / n
+
+	// The documented figure is about seven. One to fifteen is wide enough for a
+	// toolchain and narrow enough to notice a change in kind.
+	if perDistinct < 1 || perDistinct > 15 {
+		t.Errorf("%.1f allocations per distinct selector; the documentation says "+
+			"about seven", perDistinct)
+	}
+	// The saving from reusing a parsed selector is small, so this is a
+	// comparison rather than a number.
+	if perRepeat >= perDistinct {
+		t.Errorf("a repeated selector cost %.1f against %.1f for a distinct one; "+
+			"the documentation claims each distinct selector is parsed once and "+
+			"reused, which should make a repeat cheaper", perRepeat, perDistinct)
+	}
+}

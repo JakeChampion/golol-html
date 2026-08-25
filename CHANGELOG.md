@@ -493,6 +493,19 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **The `# Cost` section gave a number for building a rewriter that nothing
+  measured, and it was wrong.** It said "about five allocations per distinct
+  selector, one fewer for a repeat". Measured with the options built beforehand,
+  so the count is registration rather than the caller's slice: 13 allocations
+  with no handlers, and a marginal cost around seven per distinct selector that
+  falls as more are registered, because the slices behind them grow in steps. A
+  repeat saves about one and a half, not one.
+
+  The section now carries the table and says the numbers are gated as a range
+  rather than a value, which is what `TestSelectorRegistrationCost` does: the
+  marginal cost has to be single-digit and a repeat has to be cheaper than a
+  distinct one. The per-invocation figures next to it were already gated; these
+  were the ones nothing looked at.
 - **What survives a write boundary, and what a boundary can fall inside.** The
   chunking of text was documented as having "no guaranteed boundaries", which is
   true and reads as weaker than it is: a chunk never contains part of a

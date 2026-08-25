@@ -695,14 +695,33 @@
 // attributes on the element. A text handler sees two chunks per text node, the
 // content and its empty boundary marker, so it starts at two.
 //
-// Registering selectors has its own cost, paid once per [NewWriter]: about five
-// allocations per distinct selector, one fewer for a repeat, since each distinct
-// selector is parsed once and reused. Matching cost grows with the number
-// registered as well, on every element - there is no index by tag or class - so a
-// tool that registers one handler per rule in a stylesheet pays for all of them
-// at every element of the document. Registering a few handlers with broad
-// selectors and deciding inside them is cheaper than registering many narrow
-// ones.
+// Registering selectors has its own cost, paid once per [NewWriter]. Measured
+// with the options built beforehand, so what is counted is registration rather
+// than the caller's slice:
+//
+//	handlers   all distinct   all the same selector
+//	       0             13                      13
+//	       1             21                      22
+//	       2             30                      28
+//	       4             43                      38
+//	       8             67                      57
+//
+// So the marginal cost is around seven allocations per distinct selector, and it
+// falls as more are registered because the slices behind them grow in steps. A
+// repeated selector costs about one and a half fewer, since each distinct
+// selector is parsed once and reused - which is the part worth relying on: the
+// saving is real but small, and registering the same selector twice to keep two
+// handlers separate is not something to avoid on cost grounds.
+//
+// Matching cost grows with the number registered as well, on every element -
+// there is no index by tag or class - so a tool that registers one handler per
+// rule in a stylesheet pays for all of them at every element of the document.
+// Registering a few handlers with broad selectors and deciding inside them is
+// cheaper than registering many narrow ones.
+//
+// The numbers above are gated by alloc_test.go as a range rather than a value,
+// because they move with the toolchain: what is asserted is that the marginal
+// cost is single-digit and that a repeat is cheaper than a distinct one.
 //
 // [Writer.Write] is quadratic at byte granularity while the rewriter is
 // buffering an unclosed tag, because each write rescans the pending buffer.
