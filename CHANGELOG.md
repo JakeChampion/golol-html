@@ -1318,6 +1318,26 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A selector list handles an element once; separate handlers each run.** The two
+  spellings look interchangeable and are not, and nothing said so. Measured on
+  `<a href="/x" class="t">` with a handler that appends to an attribute:
+
+      OnElement(`a[href], a.t`, set)                     one call    data-n="x"
+      OnElement(`a[href]`, set), OnElement(`a.t`, set)   two calls   data-n="xx"
+      OnElement(`a`, set), OnElement(`a`, set)           two calls   data-n="xx"
+      OnElement(`a[href], a.t, a`, set)                  one call
+
+  A list is one selector, so an element matching several of its parts is handled
+  once - two hundred copies of `a` in a list still give one call. That makes a list
+  the way to say "at most once per element", which is usually what a rewrite wants,
+  and it is also the cheapest form, which the cost section already measured.
+  Separate handlers are for rules that really do each need their own call.
+
+  The "Handler order" section now carries it, with the measured table.
+  `selectorlist_test.go` pins the three shapes, the visible difference in the
+  output, and the list-level errors: an invalid part fails the whole registration
+  and the error names the whole list rather than the part, while an empty part -
+  `a,,p`, `a, p,` - is refused with a message that for once means what it says.
 - **A class or id that starts with a digit is a third escaping case, with the least
   helpful error.** The escaping section covered the colon and the dot. A digit is a
   different rule - a CSS identifier cannot begin with one - and lol-html reports it

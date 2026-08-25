@@ -178,6 +178,22 @@
 // Each sees what the previous one did, so a handler reading an attribute gets
 // the value an earlier handler wrote to it.
 //
+// How many times a handler runs on one element is decided by how the rules were
+// spelled, and the two spellings differ. A selector list is one selector: the
+// handler runs once for an element, however many parts of the list match it.
+// Separate handlers are separate: each runs. Measured on
+// <a href="/x" class="t">, with a handler that appends to an attribute:
+//
+//	OnElement(`a[href], a.t`, set)              one call    data-n="x"
+//	OnElement(`a[href]`, set), OnElement(`a.t`, set)   two calls   data-n="xx"
+//	OnElement(`a`, set), OnElement(`a`, set)    two calls   data-n="xx"
+//	OnElement(`a[href], a.t, a`, set)           one call
+//
+// So merging rules into one list is the way to say "at most once per element",
+// which is usually what a rewrite wants and is also the cheapest form - see the
+// section on cost. Keep them separate when each rule really does need its own
+// call. Pinned in selectorlist_test.go.
+//
 // Selectors do not. Matching is decided against the document as it arrived,
 // before any handler runs, so an edit never changes which handlers fire:
 //
