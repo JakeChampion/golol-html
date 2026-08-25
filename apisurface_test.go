@@ -176,7 +176,10 @@ func TestTheSurfaceIsNotAccidentallyGrowing(t *testing.T) {
 	// 141: ErrNilOption, because a nil option was a nil pointer dereference inside
 	// NewWriter. The library already refused a nil destination; this is the same
 	// answer for the same shape of mistake.
-	const want = 141
+	// 142: CheckRawText, because the TextChunk insertion paths cannot apply the
+	// breakout guard - a chunk does not say what element it is in - and they are
+	// the paths a rewrite editing a script or a stylesheet has to use.
+	const want = 142
 
 	names := exportedNames(t)
 	if len(names) != want {

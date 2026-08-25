@@ -3,6 +3,35 @@
 ## Unreleased
 
 ### Added
+- **`CheckRawText`, because the text paths cannot apply the breakout guard.**
+  Inserting content into a `<script>` or a `<style>` through an `Element` method is
+  refused when the content would close the element - `ErrRawTextBreakout`, with
+  advice per element. The same content through `TextChunk.Before`,
+  `TextChunk.After` or `TextChunk.Replace` was written straight out:
+
+      OnElement("script", … SetInnerContent(payload, HTML))   ErrRawTextBreakout
+      OnText("script",    … Replace(payload, HTML))           the payload, verbatim
+
+  where the payload is `var a="</script><img src=x onerror=alert(1)>"` and the
+  output of the second is a document with an `img` element in it. Measured for
+  `script`, `style`, `title`, `textarea`, `iframe`, `noembed`, `noframes`,
+  `noscript` and `xmp`: the element paths refuse, the text paths do not.
+
+  The binding cannot close that gap by itself, and the reason is worth writing
+  down. A text chunk does not know what element it is in: lol-html's C API for one
+  has its content, source location, removal, user data and the streaming variants,
+  and nothing that names the enclosing element. There is no tag to check against.
+
+  A handler does know, because it registered the selector. So the check is exported
+  now: `CheckRawText(tag, content)` is what the element paths apply, tokenizer rule
+  and per-element advice included - raw text ends at `</` plus the name followed by
+  `>`, `/`, ASCII whitespace, or the end of the content, since what follows an
+  insertion is the rest of the document. The test asserts the exported function's
+  error against the element path's for the same content, so the two cannot drift.
+
+  It matters because the text path is the one a rewrite editing CSS or JavaScript
+  has to use - see the Documentation entry below.
+
 - **`ErrNilOption`: a nil option was a panic.** `NewWriter(dst, opts...)` with a
   nil entry in the list dereferenced it, so the stack trace pointed at
   `rewriter.go` rather than at the call that made the mistake - while a nil
@@ -1318,6 +1347,27 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Rewriting raw text inverts both rules for inserting into it.** The package
+  documentation covered inserting into a `<script>` or a `<style>`: `Text` escapes
+  three characters that raw text does not decode, so it corrupts the content, and
+  `HTML` is refused when it would close the element. Rewriting text that is already
+  there turns both of those around, and nothing said so.
+
+      <style>.a > .b{color:red}</style>          Replace(s, Text)
+      <style>.a &gt; .b{color:red}</style>       a selector that matches nothing
+
+      <script>if (a < b && c > d) f()</script>   Replace(s, Text)
+      <script>if (a &lt; b &amp;&amp; c &gt; d) f()</script>
+
+  A `<title>`'s `&amp;` is escaped twice the same way. So `HTML` is the content type
+  for editing a stylesheet or a script body - which reads backwards, and is the
+  opposite of the advice for inserting new content into the same element - and the
+  breakout guard does not cover that path, which is what `CheckRawText` is for.
+
+  New paragraph in the package documentation's script-and-style section, notes on
+  `TextChunk.Replace`, `TextChunk.Before` and `TextChunk.After`, and
+  `rawtextrewrite_test.go` measuring all of it. B152.
+
 - **Structural selectors count tokens, not children.** The engine pushes on a start
   tag and pops on an end tag, so it matches against the nesting the tokens describe.
   HTML lets a document leave most end tags out, and then that nesting is not the
