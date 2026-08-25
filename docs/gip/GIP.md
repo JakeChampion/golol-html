@@ -186,6 +186,33 @@ that fails when the claim fails rather than a table that always prints. Rules 1,
 2 and 4 hold for every app either way, and the streaming path is not optional in
 a measuring instrument - it is the thing being measured.
 
+If the instrument does have to time something, **never time an interval a
+microsecond long, and never gate on one.** Two things go wrong and fixing one
+does not fix the other. `examples/gip/queue` learned both the expensive way.
+
+A mean over microsecond samples is decided by the scheduler: one item that loses
+its core for a millisecond outweighs the other fifty-nine put together, and
+where the pause lands decides the answer. Its build share ranged from 0.16 to
+0.45 on a loaded machine where the median of the same samples held between 0.16
+and 0.18, and the slowest single sample in a sixty-item queue measured 7x to 24x
+the median.
+
+And the median does not save it, because on the Windows runner every per-item
+figure was exactly zero - that clock ticks more coarsely than an item takes, so
+a hundred microseconds reads as nothing, and the median of sixty zeros is zero.
+The mean had been hiding that: a sum of mostly-zero readings with the occasional
+tick in it is not zero, so it looked like a measurement.
+
+What works: time a whole run rather than a step, so the interval is milliseconds
+and thousands of ticks; take the fastest of several passes, since preemption only
+ever adds; measure the clock's tick rather than assuming it, and say so in the
+report instead of printing a figure the clock cannot support. Then **put the gate
+on a count, not on the interval.** `allocs/op` is the same number on every
+platform and at any load - measured, to within one allocation in four hundred -
+and where a counted share and a timed share disagree in magnitude they still
+rank the same configurations in the same order. Assert the timed figure only
+where the clock can resolve it, and log what that skipped.
+
 `main_test.go` must contain at least **three** non-trivial tests: not
 `assert(2+2 == 4)`, but the invariants that would actually break if you got it
 wrong. At least one of the three must be a property over the whole input rather
