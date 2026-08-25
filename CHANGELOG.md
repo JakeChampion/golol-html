@@ -1197,6 +1197,34 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/middleware`** rewrites a handler's HTML on the way out without
+  giving up streaming, and measures what the alternative costs. The same handler,
+  writing five chunks forty milliseconds apart:
+
+      streaming middleware   first byte after 411µs, last after 209ms
+      buffering middleware   first byte after 210ms, last after 210ms
+
+  Both produce the same bytes. Three things break the first column, and the example
+  is mostly about them: buffering the response and rewriting at the end, which is
+  the shape everyone writes first; a wrapped `ResponseWriter` that does not
+  implement `Flush`, which leaves the handler's own flushes stranded and lets Go's
+  chunked writer hold up to 4 KB; and deleting `Content-Length` too late, since
+  after `WriteHeader` the header map has already gone.
+
+  It also keeps the buffering middleware, rather than only naming it as the mistake,
+  because it is the right answer for a rewrite that has to know something about the
+  whole document before it can write anything - and it has one advantage worth
+  stating: with nothing sent yet, a failed rewrite can still become a 502.
+
+  Its tests assert the ordering rather than the timings: a signalling
+  `ResponseWriter` holds the handler mid-page and checks that bytes have already
+  reached the client, and the same test against the buffering middleware checks that
+  they have not. Also gated: `Content-Length` deleted, a non-HTML response untouched
+  headers and all, the handler's own `Flush` arriving through the wrapper, the status
+  code surviving so a 404's body is still rewritten, a handler that writes nothing
+  being fine, and the tail of a document that ends inside a tag arriving - which is
+  what closing the rewriter after the handler returns is for.
+
 - **`lossytext_test.go`** gates the table above - six bodies against both handler
   sets, with the gzip case checked for still being decodable rather than merely for
   its length - and the encoding labels: `utf-8`, `windows-1252`, `iso-8859-1` and
