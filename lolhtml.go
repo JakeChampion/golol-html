@@ -145,6 +145,30 @@
 // open. Each of those methods says so; the general rule is this one, and the name
 // guard above is what detects it in all of them.
 //
+// The same token rule decides which handlers fire, not only where content goes. The
+// selector engine pops its stack on end tags, and a start tag never pops anything,
+// so a descendant selector goes on matching after the element has ended:
+//
+//	<ul><li><video><li><track></ul>
+//
+//	"video track"  matches the track
+//	in the tree    the track is in the second item, with no video above it
+//
+// Measured over a second list item, paragraph, table cell, row, definition and
+// option in differential/impliedclose_test.go. The over-match runs until something
+// explicit closes the ancestor - the enclosing </ul> ends it - and catches
+// everything after it at any depth, so "li p" on a page written without </li> is a
+// selector for the rest of the list. This is the worse half of the two: a position
+// taken from a missing end tag is at least silent, and this one runs the handler on
+// an element that is not there.
+//
+// The child combinator cannot be fooled this way, because the start tag that ended
+// the element is also the parent of whatever comes next. Where the thing being
+// looked for can only be a child, "a > b" is both the more precise question and the
+// safe one - examples/gip/captions asks "video > track" for that reason - and where
+// it cannot, the answer is the caller's own stack of open elements with the implied
+// end tags applied.
+//
 // A handler that only wants to know the element is over, rather than to write at
 // its position, needs a finer distinction than the name gives. A foreign end tag
 // is where the element ended when an ancestor's end tag closed it, and later than
@@ -227,7 +251,9 @@
 //
 //	div  *  .cls  #id                  type, universal, class, id
 //	a, b                               a selector list
-//	div p     div > p                  descendant and child combinators
+//	div p     div > p                  descendant and child combinators, though a
+//	                                   descendant one keeps matching after an
+//	                                   omitted end tag: see end tags above
 //	[a]  [a=v]  [a~=v]  [a|=v]         attribute presence and matching
 //	[a^=v]  [a$=v]  [a*=v]
 //	[a=v i]   [a=v s]                  case-sensitivity flags
