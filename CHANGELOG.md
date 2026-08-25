@@ -523,6 +523,34 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A stream can tell a comment from a bogus comment, and the documentation said
+  it could not.** "What counts as a comment" has always said that four pieces of
+  syntax arrive as comment tokens - a comment, a bogus comment, a processing
+  instruction, a CDATA section - and that `<!x>` and `<!--x-->` both have the text
+  `x`, so the text cannot say which. It then concluded: "A stripper that has the
+  input to hand can check; one working from a stream cannot, and should match the
+  comments it wants to keep rather than the ones it wants to remove."
+
+  It can. The token's source range less its text is exactly the delimiters:
+
+      End - Start - len(Text) == 7   the document spelled it <!--...-->
+      8   a comment closed by --!>        3   a bogus comment or a CDATA section
+      4   a comment closed by the input   2   a processing instruction
+
+  and that is exact rather than approximate because a comment's text is raw source
+  bytes: measured, a CR, a CRLF and a NUL inside a comment are all passed through
+  unrewritten, so nothing changes the text's length but the text.
+
+  Two of the values collide - a truncated bogus comment and a processing
+  instruction are both 2 - so what this tells you reliably is the ordinary form
+  from everything else, which is the question a comment stripper actually has.
+
+  `Comment` now carries the measured table, `Comment.Text` says the delimiters it
+  removed were not necessarily `<!--` and `-->`, and `Comment.SetText` says it
+  writes them back as `<!--` and `-->` whatever the document used - so a
+  processing instruction that gets its text set becomes a comment, and the
+  template engine downstream stops seeing it. `commentshapes_test.go` measures all
+  of it, including the one-byte-at-a-time stripper that keeps the PHP block.
 - **Removing or renaming an element acts on the token that closed it, which is
   not always its own end tag.** `Remove` and `Replace` already said so - they
   take the content up to that token with them, which is why removing the first
