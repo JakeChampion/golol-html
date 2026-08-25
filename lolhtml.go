@@ -71,12 +71,38 @@
 // over a large document are not cheap because the overhead is amortised; they
 // cost twice.
 //
-// What also grows is memory: the document has to be held while the first pass
-// reads it, which is the part that stops it being a streaming rewrite at all.
+// What grows with it is memory - but only for the kind of second pass that needs
+// what the first pass learned. A table of contents or a canonical URL derived
+// from the body has to be complete before the second pass starts, so the document
+// is held, and that is what stops it being a streaming rewrite.
 // examples/gip/pagenav and examples/gip/glossary both do this, with the second
-// pass behind a flag or skipped entirely when the first pass found nothing to
-// do. Gated as a ratio in alloc_test.go, since the absolute numbers move with
-// the toolchain and the doubling does not.
+// pass behind a flag or skipped entirely when the first pass found nothing to do.
+//
+// A second pass that is just another rewrite needs none of that. A [Writer] is an
+// io.Writer, so it can be another Writer's destination:
+//
+//	second, _ := lolhtml.NewWriter(dst, annotate...)
+//	first, _  := lolhtml.NewWriter(second, insert...)
+//	io.Copy(first, src)
+//	first.Close()   // upstream first: its tail flushes into second
+//	second.Close()
+//
+// Both stages run at once, the downstream one seeing bytes before the upstream one
+// has been given the whole document, and neither holds it: measured, peak heap
+// above the baseline was 2.8 MB piping 1 MB and 3.5 MB piping 4 MB and 16 MB. The
+// allocation cost is the same doubling as the buffered form - 831 for one pass
+// over 400 anchors, 1645 piped, 1655 buffered - and the output is identical, so
+// the pipeline is the buffered form without the document.
+//
+// Two things to know about the shape. Close upstream first, because each stage's
+// Close flushes into the next: the wrong order truncates the tail and reports
+// [ErrClosed] from the upstream Close, on a document that has a tail. And an error
+// in any stage reaches the caller through the stages above it with its identity
+// intact, so a pipeline needs no error plumbing of its own. examples/gip/pipeline
+// is the whole thing in one file; pipeline_test.go gates it.
+//
+// Gated as a ratio in alloc_test.go, since the absolute numbers move with the
+// toolchain and the doubling does not.
 //
 // # An end tag is a token, not a fact about the element
 //
