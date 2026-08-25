@@ -158,7 +158,9 @@ func TestEveryExportedNameIsMentionedByATest(t *testing.T) {
 // here because an exported name is a promise, and the cheapest moment to ask
 // whether a promise was intended is when it appears.
 func TestTheSurfaceIsNotAccidentallyGrowing(t *testing.T) {
-	const want = 131
+	// 134: ErrMemoryLimitExceeded, ErrAmbiguousTag and NativeError.Is, which
+	// let errors.Is reach the two conditions a streaming caller acts on.
+	const want = 134
 
 	names := exportedNames(t)
 	if len(names) != want {

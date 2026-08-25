@@ -78,8 +78,8 @@ func feed(t *testing.T, doc string, limit, chunk int, graceful bool) bailOutResu
 	}
 	cerr := w.Close()
 
-	var ne *lolhtml.NativeError
-	res.bailedOut = (errors.As(werr, &ne) || errors.As(cerr, &ne)) && ne.MemoryLimitExceeded()
+	res.bailedOut = errors.Is(werr, lolhtml.ErrMemoryLimitExceeded) ||
+		errors.Is(cerr, lolhtml.ErrMemoryLimitExceeded)
 	res.out = out.String()
 	res.rewritten = strings.Count(res.out, `rel="noopener"`)
 	return res

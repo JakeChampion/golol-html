@@ -122,6 +122,9 @@ func TestStrictModeFailureTruncatesTheResponse(t *testing.T) {
 		t.Fatal("expected strict mode to abort")
 	}
 
+	if !errors.Is(err, lolhtml.ErrAmbiguousTag) {
+		t.Fatalf("err = %v, want ErrAmbiguousTag", err)
+	}
 	var ne *lolhtml.NativeError
 	if !errors.As(err, &ne) {
 		t.Fatalf("err = %T, want *NativeError", err)
@@ -129,8 +132,8 @@ func TestStrictModeFailureTruncatesTheResponse(t *testing.T) {
 	if !strings.Contains(ne.Message, "ambiguous") {
 		t.Errorf("the message does not explain itself: %q", ne.Message)
 	}
-	if ne.MemoryLimitExceeded() {
-		t.Error("MemoryLimitExceeded is true for a parsing ambiguity")
+	if errors.Is(err, lolhtml.ErrMemoryLimitExceeded) {
+		t.Error("a parsing ambiguity matched ErrMemoryLimitExceeded")
 	}
 
 	if !strings.Contains(out, `src="/first"`) {

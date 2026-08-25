@@ -255,8 +255,7 @@ func errorCases() []errCase {
 		},
 		mentions: []string{"memory limit"},
 		as: func(err error) bool {
-			var e *lolhtml.NativeError
-			return errors.As(err, &e) && e.MemoryLimitExceeded()
+			return errors.Is(err, lolhtml.ErrMemoryLimitExceeded)
 		},
 	}, {
 		name: "a short write reports the standard error",

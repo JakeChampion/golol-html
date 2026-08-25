@@ -56,7 +56,7 @@ type MemorySettings struct {
 	// MaxMemory caps total rewriter memory in bytes. Zero means unlimited.
 	//
 	// Exceeding it fails the Write or Close that noticed, with a *NativeError
-	// whose MemoryLimitExceeded reports true.
+	// that errors.Is matches against [ErrMemoryLimitExceeded].
 	//
 	// How much a document needs depends on how it is written, not only on the
 	// document: one measured 5170-byte page completes at 1024 when fed in a
@@ -493,10 +493,11 @@ func WithEncoding(label string) Option {
 //
 // Neither mode is simply the safe one, which is why this is spelled out:
 //
-// With strict on, the rewrite fails from Write or Close with a *NativeError,
-// and whatever had already been emitted has reached the sink. That is a
-// truncated document, exactly as with a memory bail-out, so a caller has to
-// discard the response rather than serve what it has.
+// With strict on, the rewrite fails from Write or Close with a *NativeError
+// that errors.Is matches against [ErrAmbiguousTag], and whatever had already
+// been emitted has reached the sink. That is a truncated document, exactly as
+// with a memory bail-out, so a caller has to discard the response rather than
+// serve what it has.
 //
 // With strict off, the rewrite succeeds and the content after the ambiguous tag
 // is treated as text, so no handler runs for it. For a rewriter that adds
