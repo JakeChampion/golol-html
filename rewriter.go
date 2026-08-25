@@ -97,7 +97,10 @@ func NewWriter(dst io.Writer, opts ...Option) (*Writer, error) {
 	}
 
 	cfg := defaultConfig()
-	for _, o := range opts {
+	for i, o := range opts {
+		if o == nil {
+			return nil, fmt.Errorf("%w: option %d of %d", ErrNilOption, i+1, len(opts))
+		}
 		o.apply(&cfg)
 	}
 	if err := cfg.validate(); err != nil {

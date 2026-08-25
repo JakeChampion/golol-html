@@ -3,6 +3,27 @@
 ## Unreleased
 
 ### Added
+- **`ErrNilOption`: a nil option was a panic.** `NewWriter(dst, opts...)` with a
+  nil entry in the list dereferenced it, so the stack trace pointed at
+  `rewriter.go` rather than at the call that made the mistake - while a nil
+  destination has always been a returned error. The asymmetry was the bug.
+
+  It is an easy mistake to make: a conditional that leaves an `Option` unset, a
+  slice built with a gap, a helper returning a zero value on a path nobody tested.
+
+      var opt lolhtml.Option
+      if enabled {
+          opt = lolhtml.OnElement("a", rewriteLink)
+      }
+      w, err := lolhtml.NewWriter(dst, opt)   // panicked; now an error
+
+  Refused rather than skipped, for the same reason an unsupported selector is
+  refused rather than ignored: a rewrite that quietly did less than it was told to
+  is worse than one that did not start. The error names the position, because a
+  caller building options in a loop needs to know which iteration it was.
+  `niloption_test.go` covers every position in the list, both entry points, that
+  no handle is left behind, and that no options at all is still fine.
+
 - **`ErrInvalidUTF8`, because a value from outside the program can fail the whole
   rewrite.** Every path that takes content or a name refuses bytes that are not
   valid UTF-8: the `ContentType` insertions, `SetAttribute` for name and value,

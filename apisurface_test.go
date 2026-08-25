@@ -173,7 +173,10 @@ func TestTheSurfaceIsNotAccidentallyGrowing(t *testing.T) {
 	// is not UTF-8" from the other reasons an insertion fails. Every write path
 	// refuses such a value, and the document path does not refuse the same bytes,
 	// so a rewrite can carry what it cannot write.
-	const want = 140
+	// 141: ErrNilOption, because a nil option was a nil pointer dereference inside
+	// NewWriter. The library already refused a nil destination; this is the same
+	// answer for the same shape of mistake.
+	const want = 141
 
 	names := exportedNames(t)
 	if len(names) != want {
