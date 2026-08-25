@@ -1197,6 +1197,20 @@
   order they were written.
 
 ### Testing
+- **`sinkwrites_test.go`** counts how the output was divided rather than what it
+  said: a passthrough is one write, a selector matching nothing is one, a handler
+  that does nothing is two per match, reading an attribute is the same, editing
+  multiplies it and most of those writes are four bytes or fewer, the count is per
+  match rather than per byte, a buffer collapses it by two orders of magnitude
+  without changing a byte, and a document whose every element is removed costs no
+  writes at all.
+
+- **`examples/gip/backpressure`** measures the same thing against a destination
+  with a latency, since that is where the write count becomes a number a caller
+  feels: it prints writes, writes per match, median write size, and elapsed time
+  with and without a `bufio.Writer` in front, for eight rewrites from a passthrough
+  to an attribute set.
+
 - **`sinkfailure_test.go`** gates the five facts above: every handler stops, the
   document-end handler does not run, the destination's own error is findable from
   `Write` and from `Close` under `ErrPoisoned`, the stopping point does not move
@@ -1619,6 +1633,43 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **What splits the output is matching, not editing.** The cost section said the
+  number of writes a destination receives "is decided by what the rewrite does",
+  and illustrated it with a mutation: one attribute set turning one write into
+  twelve. Editing is not where it starts. A handler that does nothing at all splits
+  the output around every element it matched. Measured on 200 anchors handed over
+  as one 6200-byte `Write`:
+
+      no handlers                        1 write
+      a selector matching nothing        1 write
+      a handler that does nothing      400 writes
+      the same, reading an attribute   400 writes
+      an end-tag handler               600 writes
+      RemoveAttribute                 1200 writes
+      SetAttribute                    2600 writes, mostly of one byte
+
+  Two writes per matched element before the handler has done anything. The
+  registration is not what costs - a selector matching nothing costs one write for
+  the document, and so does a comment handler on a document without comments - so
+  it is the matches that count.
+
+  The case this matters for is the one that looks free. A read-only instrumentation
+  pass - a counter, an audit, a linter - over a rewrite streaming to an unbuffered
+  destination turns one write per document into two per element. The output is
+  identical, which is exactly what makes it easy to miss, and "adding a read-only
+  handler cannot change the output" is documented and true. The write pattern is
+  not the output.
+
+  At 50 microseconds a write, which is a plausible figure for a socket, the
+  passthrough above takes 96 microseconds and the attribute set 192 milliseconds.
+  A `bufio.Writer` of 4096 bytes collapses every row to two or three writes. The
+  library still declines to buffer on the caller's behalf, for the reason it always
+  did: a buffer is a promise not to write yet, and only the caller knows whether
+  the far end is a browser waiting for a page.
+
+  Rewritten in the package documentation's cost section, given its own subsection
+  in the README's performance section, and recorded as B169.
+
 - **A destination failure stops every handler, including the one a summary is
   written in.** The docs said a destination error surfaces from `Write` or `Close`
   and poisons the Writer. They did not say that the rewrite stops entirely: no

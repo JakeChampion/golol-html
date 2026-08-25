@@ -1396,12 +1396,36 @@
 // bytecost_test.go gates the shape.
 //
 // The destination has a cost of its own, and it is not the one a reader of the
-// above would guess. The number of writes it receives is decided by what the
-// rewrite does rather than by how the document arrives: a start tag that a
-// handler mutated is re-serialised piece by piece, so one attribute set turns
-// one write into twelve on a single element, and 2000 elements turn one 132 KB
-// write into 22,001 writes of median size one byte. Wrap an unbuffered
-// destination in a bufio.Writer; see [NewWriter].
+// above would guess. The number of writes it receives is decided by the rewrite
+// rather than by how the document arrives, and what decides it first is *matching*
+// rather than editing. A handler that does nothing at all splits the output around
+// every element it matched. Measured on 200 anchors written as one 6200-byte
+// Write:
+//
+//	no handlers                        1 write
+//	a selector matching nothing        1 write
+//	a handler that does nothing      400 writes
+//	the same, reading an attribute   400 writes
+//	an end-tag handler               600 writes
+//	RemoveAttribute                 1200 writes
+//	SetAttribute                    2600 writes, mostly of one byte
+//
+// Editing multiplies it again, because a mutated start tag is re-serialised piece
+// by piece: 2000 elements turn one 132 KB write into 22,001 writes of median size
+// one byte.
+//
+// So the case to watch is the one that looks free: a read-only instrumentation
+// pass - a counter, an audit, a linter - over a rewrite streaming to an unbuffered
+// destination turns one write per document into two per matched element. The
+// output is identical, which is what makes it easy to miss; the write pattern is
+// not.
+//
+// Wrap an unbuffered destination in a bufio.Writer and all of it collapses to the
+// number of buffer-fulls - two or three writes for the document above. The library
+// does not do that for you because a buffer is a promise not to write yet, and
+// only the caller knows whether the thing at the other end is a browser waiting
+// for a page or a file. See [NewWriter]; measured in sinkwrites_test.go and
+// examples/gip/backpressure.
 //
 // # Errors
 //

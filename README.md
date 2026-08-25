@@ -372,6 +372,31 @@ caller streaming from a socket sees too: `BenchmarkChunkedWrite` and
 report the same figure. `bytecost_test.go` gates that across seven document
 shapes and four write sizes.
 
+### Buffer the destination
+
+The number of writes your destination receives is decided by matching, not by
+editing. Measured on 200 anchors handed over as one 6200-byte `Write`:
+
+| Rewrite | Destination writes |
+|---|---|
+| no handlers | 1 |
+| a selector matching nothing | 1 |
+| a handler that does nothing | 400 |
+| the same, reading an attribute | 400 |
+| an end-tag handler | 600 |
+| `RemoveAttribute` | 1200 |
+| `SetAttribute` | 2600, mostly of one byte |
+
+A read-only pass - a counter, an audit, a linter - is the case where nobody
+expects a cost, and it turns one write per document into two per matched element.
+The output is identical; the write pattern is not, and an unbuffered destination
+pays per write. At 50 microseconds a write, the rewrites above take 96
+microseconds and 192 milliseconds respectively.
+
+`bufio.NewWriterSize(dst, 4096)` collapses every row to two or three writes. The
+library does not do it for you because a buffer is a promise not to write yet, and
+only you know whether the far end is a browser waiting for a page.
+
 ### Write in reasonable chunks
 
 Each `Write` costs about 100 ns of crossing into C on top of the document's own
