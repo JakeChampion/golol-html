@@ -204,7 +204,17 @@ func golol_streaming_write_cb(sink *C.lol_html_streaming_sink_t, ud C.uintptr_t)
 	//
 	// lol-html reports a streaming failure with a nonzero return rather than a
 	// directive, so the directive is mapped rather than passed through.
-	if runHandler(cb.c.st, "streaming", "", s, cb.call) == C.LOL_HTML_CONTINUE {
+	// The completeness check runs after the StreamFunc rather than inside the
+	// writes, because a partial sequence is only wrong once nothing more is
+	// coming.
+	call := func(s *Sink) error {
+		if err := cb.call(s); err != nil {
+			return err
+		}
+		return s.checkComplete()
+	}
+
+	if runHandler(cb.c.st, "streaming", "", s, call) == C.LOL_HTML_CONTINUE {
 		return 0
 	}
 	return 1

@@ -6,6 +6,7 @@ package lolhtml
 import "C"
 
 import (
+	"fmt"
 	"io"
 	"runtime"
 )
@@ -33,15 +34,32 @@ import (
 // by a later handler, or it is inside something that was removed - the function
 // is not called. So a StreamFunc is the wrong place for a side effect you need:
 // count and log in the handler, and write only content in the sink.
+//
+// It must not finish mid-character. Writes may split a rune however they like -
+// lol-html joins the pieces, which is what makes io.Copy from an arbitrary
+// reader safe - but a sequence still open when the function returns is dropped,
+// so returning then is [ErrIncompleteRune] rather than a shorter insertion
+// nobody mentioned.
 type StreamFunc func(*Sink) error
 
 // A Sink receives the output of a StreamFunc.
+//
+// Writes may fall anywhere: a rune split across two of them is joined, so
+// copying from a reader that knows nothing about UTF-8 boundaries is safe. What
+// is not safe is stopping in the middle of one, and that is checked when the
+// StreamFunc returns; see [ErrIncompleteRune].
 //
 // It is valid only for the duration of that call. The rewriter may run it on a
 // different goroutine than the one that called Write, though never on more than
 // one at a time, so a StreamFunc must not depend on goroutine-local state.
 type Sink struct {
 	unit[*C.lol_html_streaming_sink_t]
+
+	// tail is the trailing bytes of an incomplete UTF-8 sequence, if the last
+	// write ended in one. lol-html holds those bytes waiting for the rest and
+	// discards them if the stream ends first, silently; see checkComplete.
+	tail    [4]byte
+	tailLen int
 }
 
 // Err reports the error that has already stopped this rewrite, if any.
@@ -103,6 +121,15 @@ func (s *Sink) WriteString(str string, ct ContentType) error {
 	if err != nil {
 		return err
 	}
+	if s.tailLen > 0 {
+		// lol-html joins a partial sequence to the next WriteChunk, and does
+		// not join it to a WriteString: the held bytes become U+FFFD and the
+		// string is written after them. Measured, WriteChunk("caf\xc3") then
+		// WriteString("x") produced "caf\ufffdx" with no error.
+		return fmt.Errorf("%w: WriteString while %d byte(s) % x from an earlier "+
+			"WriteChunk are still waiting to be completed; finish the sequence "+
+			"with WriteChunk first", ErrIncompleteRune, s.tailLen, s.tail[:s.tailLen])
+	}
 	sp, sl := strPtr(str)
 	var cerr C.lol_html_str_t
 	rc := C.golol_sink_write_str(p, sp, sl, C.bool(ct.isHTML()), &cerr)
@@ -110,6 +137,7 @@ func (s *Sink) WriteString(str string, ct ContentType) error {
 	if rc != 0 {
 		return nativeErr("streaming_sink_write_str", cerr)
 	}
+	s.trackTail(str)
 	return nil
 }
 
@@ -117,10 +145,13 @@ func (s *Sink) WriteString(str string, ct ContentType) error {
 // Text.
 //
 // Unlike WriteString, b need not be complete UTF-8: a trailing partial sequence
-// is buffered and flushed once a later call completes it, so content can be
-// forwarded straight from a network read. Consecutive calls must still form
-// valid UTF-8 overall, and WriteString must not be used after a WriteChunk that
-// ended mid-sequence.
+// is buffered and flushed once a later WriteChunk completes it, so content can
+// be forwarded straight from a network read.
+//
+// Two ways of never completing it, both of which used to be silent and are now
+// [ErrIncompleteRune]. A [StreamFunc] that returns with a sequence still open
+// loses those bytes - lol-html drops them - and a WriteString while one is open
+// does not join it: the held bytes become U+FFFD and the string follows them.
 func (s *Sink) WriteChunk(b []byte, ct ContentType) error {
 	p, err := s.live()
 	if err != nil {
@@ -133,7 +164,99 @@ func (s *Sink) WriteChunk(b []byte, ct ContentType) error {
 	if rc != 0 {
 		return nativeErr("streaming_sink_write_utf8_chunk", cerr)
 	}
+	s.trackTail(string(b))
 	return nil
+}
+
+// trackTail records whether everything written so far ends in the middle of a
+// UTF-8 sequence.
+//
+// It keeps at most four bytes: a rune is at most four bytes long, so the last
+// four are enough to say whether the final one is complete. Splitting a rune
+// across writes is fine - lol-html holds the prefix and joins it to the next
+// chunk - so this is not about rejecting a split, only about noticing one that
+// never gets finished.
+func (s *Sink) trackTail(w string) {
+	if w == "" {
+		return
+	}
+	// The last four bytes of tail+w, which is all that can matter. A write of
+	// four bytes or more supersedes the tail entirely.
+	var buf [4]byte
+	var n int
+	if len(w) >= 4 {
+		n = copy(buf[:], w[len(w)-4:])
+	} else {
+		var joined [8]byte
+		m := copy(joined[:], s.tail[:s.tailLen])
+		m += copy(joined[m:], w)
+		if m > 4 {
+			m = copy(buf[:], joined[m-4:m])
+		} else {
+			m = copy(buf[:], joined[:m])
+		}
+		n = m
+	}
+
+	// Walk back to the byte that starts the last sequence. A continuation byte
+	// is 10xxxxxx; anything else begins one.
+	start := -1
+	for i := n - 1; i >= 0 && i >= n-4; i-- {
+		if buf[i]&0xC0 != 0x80 {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		// Four continuation bytes with no lead: not valid UTF-8 at all, which
+		// lol-html would have refused. Nothing to hold.
+		s.tailLen = 0
+		return
+	}
+	if have, want := n-start, runeLen(buf[start]); have < want {
+		s.tailLen = copy(s.tail[:], buf[start:n])
+		return
+	}
+	s.tailLen = 0
+}
+
+// runeLen is the length in bytes of the sequence a lead byte begins, or 1 for
+// anything that does not begin one.
+func runeLen(b byte) int {
+	switch {
+	case b&0x80 == 0:
+		return 1
+	case b&0xE0 == 0xC0:
+		return 2
+	case b&0xF0 == 0xE0:
+		return 3
+	case b&0xF8 == 0xF0:
+		return 4
+	}
+	return 1
+}
+
+// checkComplete reports whether the content written to this sink ended in the
+// middle of a UTF-8 sequence.
+//
+// It matters because those bytes are dropped rather than reported. lol-html
+// holds an incomplete sequence waiting for the rest of it, which is what makes
+// io.Copy into AsWriter safe across arbitrary chunk boundaries - but if the
+// StreamFunc returns while a sequence is still open, the bytes go nowhere and
+// nothing says so. Measured before this check existed:
+//
+//	s.WriteChunk([]byte("ab\xc3"), lolhtml.Text)  ->  <div>ab</div>, nil
+//
+// The document path does not lose them - a truncated sequence in the input
+// becomes U+FFFD - so this was the one place in the library where content
+// vanished silently.
+func (s *Sink) checkComplete() error {
+	if s.tailLen == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %d trailing byte(s) % x begin a UTF-8 sequence that "+
+		"was never completed, and lol-html discards them", ErrIncompleteRune,
+		s.tailLen, s.tail[:s.tailLen])
 }
 
 // AsWriter adapts the sink to io.Writer, so content can be produced with

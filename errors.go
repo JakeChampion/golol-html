@@ -38,6 +38,24 @@ var ErrClosed = errors.New("lolhtml: writer is closed")
 // to the caller without leaving an error, and the sentinel then stands alone.
 var ErrPoisoned = errors.New("lolhtml: writer is poisoned by an earlier error")
 
+// ErrIncompleteRune reports a UTF-8 sequence written into a [Sink] that never
+// gets completed.
+//
+// Splitting a rune across writes is fine: lol-html holds the prefix and joins it
+// to the next [Sink.WriteChunk], which is what makes copying from an arbitrary
+// reader into [Sink.AsWriter] safe. Two things do not finish it, and both were
+// silent:
+//
+//	the StreamFunc returns    the held bytes are dropped, so the insertion is
+//	                          shorter than the content and nothing says so
+//	a WriteString arrives     the held bytes become U+FFFD and the string is
+//	                          written after them
+//
+// The first happens whenever the source is truncated mid-character. The second
+// is a mistake in the calling code, and [Sink.WriteChunk] had documented it as
+// something not to do without there being any way to notice having done it.
+var ErrIncompleteRune = errors.New("lolhtml: streamed content has an unfinished UTF-8 sequence")
+
 // A NativeError is an error reported by the underlying lol-html library.
 type NativeError struct {
 	Op      string // the operation that failed, e.g. "set_attribute"
