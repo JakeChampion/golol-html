@@ -246,7 +246,7 @@ func (o Outcome) BuildShare() float64 {
 // misses the per-byte parsing, which is most of a large document's time and almost none of its
 // allocation - but it ranks rule sets and document sizes in the same order, measured over six
 // combinations of size and selector count, and neither the clock nor the load can move it by
-// more than one allocation in four hundred.
+// more than a couple of allocations in four hundred and fifty.
 func (o Outcome) AllocShare() float64 {
 	if o.AllocsFull == 0 {
 		return 0
@@ -307,11 +307,14 @@ func clockTick() time.Duration {
 // is a whole number of allocations per item, so an average would leave room for a stray malloc
 // to show up as a fraction of one.
 //
-// Nearly, not exactly: measured over repeated runs the figure for the same input moves by at
-// most one allocation in four hundred, in either direction, and no amount of extra runs removes
-// it - the malloc counter includes the runtime's own allocations, which depend on the state of
-// the heap. One in four hundred does not move a share quoted to two figures, which is what this
-// is for, and it is nothing like the two-and-a-half-fold spread a timing has.
+// Nearly, not exactly: the malloc counter includes the runtime's own allocations, which depend
+// on the state of the heap, so the figure for the same input moves a little and no amount of
+// extra runs removes it. An M3 Pro moves by one allocation in four hundred; the project's macOS
+// and Linux arm64 runners moved by two in four hundred and fifty. That is the same wobble
+// alloc_test.go documents for the fixed part of a count, and it allows eight for it.
+//
+// Two allocations in four hundred and fifty does not move a share quoted to two figures, which
+// is what this is for, and it is nothing like the two-and-a-half-fold spread a timing has.
 func allocsPer(runs int, f func()) float64 {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 

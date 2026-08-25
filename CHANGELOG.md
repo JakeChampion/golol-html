@@ -268,9 +268,13 @@
 
   Counting has its own tolerance, measured rather than assumed: with the
   measurement pinned to one processor and the answer rounded to whole
-  allocations, the same input still moves by up to one allocation in four
-  hundred, because the malloc counter includes the runtime's own. That is the
-  tolerance the test asserts.
+  allocations, the same input still moves a little, because the malloc counter
+  includes the runtime's own and those depend on the state of the heap. An M3 Pro
+  moves by one allocation in four hundred and the macOS and Linux arm64 runners
+  by two in four hundred and fifty - the same wobble `alloc_test.go` already
+  documents for the fixed part of a count, and the tolerance here is the eight
+  that gate uses. The share itself is asserted thirty times tighter than the
+  signal it has to separate.
 
   `examples/gip/backpressure` had the same shape in a test rather than in a
   report - a rewrite that takes microseconds compared against the same rewrite
