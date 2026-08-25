@@ -35,6 +35,10 @@ type Element struct {
 // strings.EqualFold is the fix here, and it is more than a selector can do - a
 // selector is folded the same way, so it matches one of the two spellings and not
 // both. See the package documentation on selectors, and asciicase_test.go.
+//
+// It is the document's name, not the tree's, and one name differs: <image> in HTML
+// content builds an img element, so this reports "image" where a browser has an img.
+// See the package documentation on <image>.
 func (e *Element) TagName() string {
 	p, err := e.live()
 	if err != nil {

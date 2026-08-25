@@ -83,23 +83,27 @@ var Sources = map[string][]where{
 	"object": {{"data", Blockable}},
 	"embed":  {{"src", Blockable}},
 	"img":    {{"src", Upgradeable}, {"srcset", Upgradeable}},
-	"source": {{"src", Upgradeable}, {"srcset", Upgradeable}},
-	"video":  {{"src", Upgradeable}, {"poster", Upgradeable}},
-	"audio":  {{"src", Upgradeable}},
-	"track":  {{"src", Upgradeable}},
-	"input":  {{"src", Upgradeable}},
-	"use":    {{"xlink:href", Blockable}},
-	"image":  {{"xlink:href", Upgradeable}},
-	"a":      {{"href", Navigation}},
-	"area":   {{"href", Navigation}},
-	"form":   {{"action", Navigation}},
-	"q":      {{"cite", Navigation}},
+	// <image> is a spelling of <img>: the parser renames it and a browser fetches
+	// it, so a checker that matched only img would miss an insecure request. The SVG
+	// element of the same name is a different thing, and is skipped by namespace.
+	"image":     {{"src", Upgradeable}, {"srcset", Upgradeable}, {"xlink:href", Upgradeable}},
+	"source":    {{"src", Upgradeable}, {"srcset", Upgradeable}},
+	"video":     {{"src", Upgradeable}, {"poster", Upgradeable}},
+	"audio":     {{"src", Upgradeable}},
+	"track":     {{"src", Upgradeable}},
+	"input":     {{"src", Upgradeable}},
+	"use":       {{"xlink:href", Blockable}},
+	"svg:image": {{"xlink:href", Upgradeable}},
+	"a":         {{"href", Navigation}},
+	"area":      {{"href", Navigation}},
+	"form":      {{"action", Navigation}},
+	"q":         {{"cite", Navigation}},
 }
 
 // Elements is the selector list: one handler, because two selectors matching the same
 // element would see each other's edits and upgrade a URL twice.
-const Elements = `script[src],iframe[src],object[data],embed[src],img,source,video,` +
-	`audio[src],track[src],input[src],use[xlink\:href],image[xlink\:href],` +
+const Elements = `script[src],iframe[src],object[data],embed[src],img,image,source,video,` +
+	`audio[src],track[src],input[src],use[xlink\:href],` +
 	`a[href],area[href],form[action],q[cite],link[href],[style]`
 
 // LinkBlockable are the link rel tokens whose target is a subresource rather than a
@@ -179,6 +183,10 @@ type finder struct {
 
 func (f *finder) element(e *lolhtml.Element) error {
 	tag := e.TagName()
+	if tag == "image" && e.NamespaceURI() != lolhtml.NamespaceHTML {
+		// An SVG image, which is its own element rather than a spelling of img.
+		tag = "svg:image"
+	}
 
 	if style, ok := e.Attribute("style"); ok && strings.Contains(style, "url(") {
 		for _, u := range cssURLs(style) {

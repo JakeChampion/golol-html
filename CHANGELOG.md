@@ -213,6 +213,13 @@
   documentation says which of those applies where.
 
 ### Fixed
+- **`examples/gip/mixed` missed an insecure `<image>`.** The mixed-content checker
+  matched `img` and not `image`, so a page whose insecure request was spelled the old
+  way passed. It now matches both, and reports SVG's own `image` element as
+  `svg:image` rather than as a spelling of img, which the namespace tells it apart by.
+  Found by the measurement above; the other example programs keyed on `img` have the
+  same hole and are listed in the issue.
+
 - **Two of the example programs lower-cased SVG attribute names**, found by the
   `SetAttribute` measurement under Documentation below. `examples/gip/widows` rebuilt a heading's markup through the
   `Attributes` iterator, so an `<svg viewBox>` inside a heading came out as
@@ -1347,6 +1354,30 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`<image>` is a spelling of `<img>`, and a selector for `img` does not match it.**
+  The parser renames one element, carrying the attributes over:
+
+      <image src="x.png" onerror="alert(1)">
+
+      in the tree   img src="x.png" onerror="alert(1)"
+      here          TagName() == "image", and "img" matches nothing
+
+  So a browser fetches the file and runs the handler, and every rewrite keyed on `img`
+  has a hole in it - a sanitiser stripping event handlers, a URL rewriter, a
+  mixed-content checker. Measured against x/net/html over five spellings, including a
+  self-closing one and one with an explicit end tag, and confirmed the other way:
+  center, font, marquee, blink, nobr, acronym, big, strike, tt, applet, keygen,
+  isindex, spacer, menuitem, dir and basefont all reach the tree under their own
+  names, so this is one alias rather than a habit.
+
+  Matching both names needs a namespace check rather than a rename, because SVG has an
+  image element of its own that keeps its name and is not an img at all.
+  `Element.NamespaceURI` answers that, and `SetTagName("img")` is the tidiest fix for a
+  rewrite that is editing the document anyway.
+
+  New package documentation section, a note on `Element.TagName`,
+  `differential/imagealias_test.go`, and B155.
+
 - **Failing a rewrite from a handler is not atomic, and nothing said what the
   destination already holds.** `Write` and `ErrPoisoned` documented that a handler
   error stops the rewrite and poisons the Writer. What has gone out by then is the

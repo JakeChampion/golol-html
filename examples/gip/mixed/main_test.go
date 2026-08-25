@@ -42,6 +42,10 @@ func TestTheClassificationIsTheSpecificationsSplit(t *testing.T) {
 		{`<link rel="preload" href="http://x/p">`, Blockable},
 		{`<svg><use xlink:href="http://x/i.svg#a"/></svg>`, Blockable},
 		{`<img src="http://x/i.png">`, Upgradeable},
+		// <image> is a spelling of <img>: the parser renames it and a browser
+		// fetches it, so a checker that missed it would pass an insecure page.
+		{`<image src="http://x/i.png">`, Upgradeable},
+		{`<svg><image xlink:href="http://x/i.png"/></svg>`, Upgradeable},
 		{`<img srcset="http://x/i.png 2x">`, Upgradeable},
 		{`<video poster="http://x/p.jpg"></video>`, Upgradeable},
 		{`<audio src="http://x/a.mp3"></audio>`, Upgradeable},
@@ -66,6 +70,32 @@ func TestTheClassificationIsTheSpecificationsSplit(t *testing.T) {
 		if got := res.Findings[0].Class; got != tc.class {
 			t.Errorf("%q: class is %v, want %v", tc.doc, got, tc.class)
 		}
+	}
+}
+
+// TestAnImageIsAnImg, both spellings, and the SVG element of the same name is reported
+// as itself rather than as a spelling of img.
+func TestAnImageIsAnImg(t *testing.T) {
+	_, res, err := check(t, `<image src="http://x/a.png">`, Options{Upgrade: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Findings) != 1 || res.Findings[0].Element != "image" {
+		t.Fatalf("%v", res.Findings)
+	}
+	got, _, err := check(t, `<image src="http://x/a.png">`, Options{Upgrade: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `<image src="https://x/a.png">`; got != want {
+		t.Errorf("\n got %q\nwant %q", got, want)
+	}
+	_, res, err = check(t, `<svg><image xlink:href="http://x/b.png"/></svg>`, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Findings) != 1 || res.Findings[0].Element != "svg:image" {
+		t.Errorf("%v", res.Findings)
 	}
 }
 
