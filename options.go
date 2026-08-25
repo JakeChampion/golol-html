@@ -590,7 +590,15 @@ func OnComment(selector string, fn func(*Comment) error) Option {
 // alone, and an element handler leaves an attribute's alone, whatever they hold.
 // So "adding a read-only handler cannot change the output" is true of every kind
 // but this one, which matters for instrumentation - a counter, an audit, a
-// linter - added to a rewrite that has to be byte-exact. Where the answer only
+// linter - added to a rewrite that has to be byte-exact.
+//
+// It matters more than one character's worth when the body is not text. A gzip
+// response through a rewrite with a text handler comes back longer and no longer
+// decodable; with element handlers only it comes back byte-identical. Neither
+// reports an error, so a proxy that does not check Content-Encoding either
+// destroys the response or silently rewrites nothing, depending on which handlers
+// it happens to register. See "Rewriting an HTTP response" in the package
+// documentation. Where the answer only
 // has to be reported rather than served, write the rewrite's output to
 // io.Discard and the question does not arise. Measured in readonlytext_test.go
 // and as a property in properties/.
