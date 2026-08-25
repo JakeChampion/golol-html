@@ -135,394 +135,12 @@
   documentation says which of those applies where.
 
 ### Fixed
-- **`HandlerError.Selector` is now filled in for end-tag and streaming
-  handlers.** Both are registered from inside a handler that has a selector, and
-  both reported an empty one - so an error from a program with twenty handlers
-  said `end-tag handler` and left twenty candidates. They inherit the selector of
-  the handler that registered them, and the message says it:
-  `end-tag handler for "a[href]"`.
-
-  `Kind` also has a seventh value the documentation did not list, `streaming`,
-  which is a `StreamFunc`'s own failure - reported separately because it runs
-  later than the handler that registered it. `TestEveryDocumentedKindIsReachable`
-  now requires every documented kind to be produced by something and nothing to
-  produce a kind that is not documented, which is what noticed it.
-- **A poisoned `Writer` now says why it is poisoned.** lol-html cannot resume
-  after an error, so the first failure is reported from whichever call was
-  running and every later `Write` and the `Close` refuse. Those refusals returned
-  the bare `ErrPoisoned` sentinel, which names a state and not a cause - so a
-  caller writing the ordinary Go shape, write and then check `Close`, learned that
-  something had failed and never what. `ErrPoisoned` is now wrapped around the
-  first error, so `errors.Is` and `errors.As` reach the handler error or the
-  destination-writer error underneath it however late they are asked. A handler
-  panic is the exception: it poisons the `Writer` on its way to the caller without
-  leaving an error, and the sentinel then stands alone.
-
-- **`WithGracefulBailOut` before `WithMemorySettings` no longer does nothing.**
-  Every other option sets one field, so order cannot matter;
-  `WithMemorySettings` takes a whole struct and replaces every field in it,
-  including the graceful flag an earlier `WithGracefulBailOut()` had set. The
-  difference is not subtle once it bites: on a bail-out, the graceful path flushed
-  2021 bytes of already-rewritten output in one measured case and the strict path
-  flushed none. The flag is now kept separately and combined by union, so the two
-  compose in either order, and `MemorySettings{GracefulBailOut: false}` does not
-  turn off an explicit `WithGracefulBailOut` - there is no reason to ask for both.
-
-
-- **`.gitignore` actually ignores rapid's failure files now.** The pattern was
-  `testdata/rapid/`, and a pattern containing a slash is anchored to the
-  directory holding the `.gitignore` - so it matched only a top-level
-  `testdata/rapid/`, and the only module that uses rapid is `properties/`. It has
-  therefore never ignored anything. Three `.fail` files reached a commit before
-  it was noticed, from deliberately breaking an escaper to check the new
-  properties fail.
-
-- **`SetAttribute` no longer claims to make untrusted input safe.** Its doc
-  comment said "the value is escaped as needed, so it is safe to pass untrusted
-  input", and the package documentation said it escaped the quote and the
-  ampersand. Measured, it rewrites the double quote and nothing else - which is
-  correct, because its argument is raw attribute-value source, the mirror of what
-  `Attribute` reports. `Attribute`'s own comment said so all along. The two now
-  agree, and `SetAttribute` says what the difference between source and a literal
-  value costs: passing the five characters "&amp;" sets an attribute a browser
-  reads as one "&".
-
-- **The table of contents in `examples/gip/toc` no longer carries an
-  injection.** It interpolated a heading's id straight into an href it quoted
-  itself, so a heading with `id='a" onmouseover="alert(1)'` produced a working
-  event handler in the contents. This is what the missing escaper cost in
-  practice, in a program written after the documentation warning existed.
-- **The handle-leak assertions no longer measure other tests' garbage.**
-  `LiveHandles` counts the whole process, and a `Writer` dropped without being
-  closed releases its handles from a `runtime.AddCleanup` callback that runs one
-  GC cycle later. `TestUnclosedWriterIsReclaimed` abandons 200 writers on
-  purpose, so a later test sampling the count before and after its own work could
-  see it fall: five subtests reported between -1 and -4 "leaked" handles on one
-  CI run. Every equality assertion now samples through `settledHandles`, which
-  drains the queue first, and the manual-writer test keeps its writer alive
-  across the measurement so it cannot collect what it is counting. Demonstrated:
-  the same window measures -20 unsettled and 0 settled, and the assertions still
-  report 30 leaked handles when the streaming panic fix is reverted.
-
-- **The allocation gate no longer demands an exactness the measurement cannot
-  give.** It compared the per-match slope for equality with an integer and
-  required the extrapolated fixed cost to be identical at both document sizes.
-  Neither holds in general: on darwin/amd64 under Rosetta the same code measured
-  222 allocations at 100 matches and 823 at 400, a slope of 2.003, because one
-  allocation of setup appeared somewhere between the two sizes. The gate failed
-  on a difference of one allocation and passed on the same commit elsewhere,
-  which makes it noise rather than a signal. The slope is now compared within
-  0.05 and the base within 8 allocations - fifteen times the observed noise, and
-  more than an order of magnitude below the regression it is there to catch,
-  which is verified by injecting one extra allocation per match and watching
-  both checks fire.
-
-- **The allocation-complexity gate no longer fails the AddressSanitizer build.**
-  `alloc_test.go` asserts how many times a rewrite allocates, and `-asan`
-  replaces the allocator with one that allocates on its own account: a path that
-  allocates once per match allocates four times per match under the sanitizer,
-  and setting an attribute goes from two to 19.84. The gate was therefore
-  measuring the sanitizer rather than the binding, and the `sanitize` job had
-  failed on every commit since the gate landed. The six allocation tests now
-  skip under `-asan`, behind a build constraint, and say why where they skip.
-  The sanitizer still runs the rest of the suite, which is what it is for.
-
-- **`:not()` is wrong for anything but a single simple selector.** Upstream's,
-  and not fixable here, so it is documented and pinned instead. `:not()` is
-  correct with one simple selector - `:not(div)`, `:not(.a)`, `:not([href])`,
-  `:not(:first-child)`. Given a compound selector it negates each part separately
-  and requires all of them, which is the wrong half of De Morgan's law:
-  **`:not(div.a)` is evaluated as `:not(div):not(.a)`**. On a document of
-  `div.a div.b span.a span.b` it matches one element where CSS says three, and
-  `:not(div.a, span.b)` matches nothing at all. There is no error. A filter
-  written `OnElement(":not(a.trusted)")` therefore skips every anchor and
-  everything carrying that class, which for a filter is a hole rather than a
-  nuisance. The cause is `add_selector_components` in `selectors_vm/ast.rs`,
-  which flips the negation flag per component and adds each to a predicate whose
-  expressions are ANDed; upstream's own tests only ever put a single simple
-  selector inside `:not()`. `selector_test.go` asserts the wrong behaviour
-  deliberately, so a fix upstream fails the test and the documentation gets
-  corrected rather than rotting.
-
-- **`WithESITags` said what it enabled but not what it does.** The option was
-  documented as enabling "parsing of ESI tags such as `<esi:include>`". What it
-  does is treat them as **void elements**. Without it an `esi:` element is an
-  ordinary container whose content runs to the next matching end tag - which,
-  since ESI is conventionally written unclosed, is the enclosing element's. So
-  replacing or removing an include takes that end tag with it:
-  `<span><esi:include src=a></span>` with a handler replacing the include gives
-  `<span>?` rather than `<span>?</span>`, with no error. A trailing slash does
-  not help, because HTML ignores it on an element that is neither void nor
-  foreign. `Element.CanHaveContent` is what reports the treatment. The existing
-  `TestESITags` said outright that it asserted no ESI-specific parsing and used
-  the self-closing form; it now pins the void treatment, the swallowed end tag,
-  the trailing slash, and that `<esi:remove>` keeps its content either way.
-
-- **`WithStrict(false)` is a sanitiser bypass, and its documentation called it
-  "tolerance".** Strict mode is on by default, and the option said only that
-  turning it off "trades that safety for tolerance of markup the rewriter cannot
-  fully reason about". What actually happens is that content after an ambiguous
-  tag is treated as raw text, so no handler runs for it: a rewriter that removes
-  every `<script>` does not remove the one in
-  `<select><xmp><script>alert(1)</script>`, and emits it verbatim with no error
-  and no handler invocation. The unseen region runs to the closing tag, or to
-  the end of the document if there is not one - and a document malformed enough
-  to trip the guard often has not got one. The other direction is not free
-  either: with strict on the rewrite fails mid-stream, leaving a truncated
-  response that the caller must discard. `WithStrict` now says all of this, with
-  the exact trigger set (eight tags inside `<select>`; the same minus
-  `<noframes>` inside `<frameset>`; nothing else), and `strict_test.go` pins it,
-  the bypass included.
-
-- **The README's graceful bail-out table was wrong about the default, and it is
-  the dangerous direction.** It said that exceeding `MaxMemory` with
-  `GracefulBailOut` off delivers 0 bytes and "the response is broken". That
-  holds only when the whole document arrives in one `Write`. Fed in chunks -
-  which is what `io.Copy` does - the same document and cap deliver a **rewritten
-  prefix and then stop**: 670 bytes of 5170 in the measured case, cut on an
-  element boundary, so the result is well-formed HTML that a parser accepts
-  without complaint. A client sees a plausible page missing most of its content.
-  The `MemorySettings.GracefulBailOut` doc comment always said this correctly;
-  the README contradicted it, and the README is read first. Both tables are now
-  the measured four-row matrix, and `memory_test.go` pins every row.
-
-- **How much memory a rewrite needs depends on how the input is fed.** The same
-  5170-byte document completes with `MaxMemory: 1024` in a single `Write` and
-  needs `8192` in 256-byte writes - eight times as much. A limit sized by
-  testing with one big write will bail out under `io.Copy`, and nothing said so.
-  Now documented on `MaxMemory` and in the README, and pinned by test.
-
-- **An unusable encoding label was reported without naming it.** A bad
-  `WithEncoding` value failed with `rewriter_build: Unknown character encoding
-  has been provided`, which leaves a caller whose encoding comes from
-  configuration to go and find which one. It is now an `*EncodingError`
-  carrying the label, matching `*SelectorError`, which has always named the
-  selector. Every way `lol_html_rewriter_build` can fail is about the encoding
-  - upstream returns `UnknownEncoding` or `NonAsciiCompatibleEncoding` and
-  nothing else - so the attribution is exact rather than a guess, and the
-  native message is kept verbatim in `Message` in case that ever changes.
-
-- **A destination that reported a short write silently truncated the output.**
-  The sink discarded the count `io.Writer` returns. A destination accepting five
-  bytes of every chunk delivered 14 bytes of a 213-byte document, and both
-  `Write` and `Close` reported success; one accepting nothing delivered nothing,
-  still with no error. `io.Writer`'s contract says an implementation returning
-  `n < len(p)` must also return an error, and not every implementation obeys it -
-  which is why `io.Copy` checks. The count is now checked and `io.ErrShortWrite`
-  reported, the same error `io.Copy` reports. A destination that returns its own
-  error alongside a short count keeps that error rather than having it replaced.
-  The seeded fault scenarios in `faults_test.go` now include short writes, and
-  their assertion is stronger: the error reported has to be one of the faults
-  actually injected rather than merely non-nil.
-
-- **A panic inside a `StreamFunc` leaked a cgo handle per rewrite.** The
-  streaming callback was the one `//export`ed callback that did not go through
-  the shared panic-recovery path, so a panic in a streaming insertion unwound
-  through Rust instead of being converted to an error at the boundary. lol-html
-  never ran the drop callback that releases the streaming handle, so each such
-  rewrite leaked one handle for the life of the process, growing with traffic
-  and invisible in the output. Every other handler kind was already covered:
-  this was the gap left by the v0.1.1 panic-leak fix. `FuzzOperations` asserts
-  the handle count on every iteration but only ever panicked from an element
-  handler, so it could not reach the path; it now has a streaming-panic opcode,
-  and fails within a tenth of a second without the fix.
-
-- **Several `OnDocumentEnd` handlers ran in reverse.** lol-html dispatches its
-  document-end handlers in the opposite order to the one they were registered
-  in, which is deliberate upstream but the opposite of `Element.OnEndTag`, the
-  sibling API. Two handlers appending content emitted it backwards, and because
-  a failing handler stops the ones after it, an error in a handler written
-  second could stop one written first from running at all. Every
-  `OnDocumentEnd` now shares a single native registration and they run in the
-  order they were written.
-
-### Testing
-- **`differential/tagname_test.go`.** `TagNamePreserveCase` had exactly one
-  mention in the whole suite - `_ = e.TagNamePreserveCase()` inside the operations
-  fuzzer, with the result discarded - so nothing checked what it returned. It now
-  has eight SVG cases and four HTML ones against `x/net/html`, which is where a
-  claim about what a parser does belongs.
-
-- **The README's code is compiled now, and one block of it did not compile.**
-  Eight Go blocks, none of them built by anything. `readme_snippets_test.go` holds
-  each one verbatim inside something that typechecks, and `readme_test.go` asserts
-  the README and that file have not drifted - comparing with whitespace collapsed,
-  since the snippet file carries an extra tab and gofmt aligns trailing comments
-  its own way. A changed identifier or argument still fails; indentation does not.
-
-  The block illustrating detached units declared `src` and never used it, so it
-  could not have compiled. It now copies the value out, which is the contrast the
-  surrounding paragraph is about anyway - a copied string survives its handler and
-  a retained `*Element` does not.
-
-  Four of the blocks make a claim in a comment about what they produce, and those
-  claims are checked too, which a compiler cannot do. Verified the gates can fail:
-  changing a block's code, adding a block nothing compiles, and both are caught.
-
-  These tests read the README from disk, and the first version of them assumed
-  LF: the Windows runner checks out CRLF, so the fence never matched, no blocks
-  were found, and one of the three checks passed *vacuously* rather than failing -
-  its pattern contained a newline and simply never matched anything. Line endings
-  are normalised on read now, and the block count is asserted exactly rather than
-  as "more than none", so an extraction that stops working cannot leave the checks
-  below passing on an empty list.
-
-- **`readme_test.go` checks the README against the package.** Three tests: every
-  `lolhtml.X` it names exists, a short explicit list of names a caller cannot
-  safely do without is mentioned at all, and the sentence that went stale has not
-  returned. The middle one is a judgement call encoded as a list, and says so - a
-  name belongs on it only if a caller who does not know about it writes something
-  unsafe rather than something clumsy. All three verified to fail: by renaming a
-  README identifier, by removing a required name, and by restoring the stale
-  sentence.
-
-- **`properties/` is vetted now, and a script fails if a module is added without
-  being.** `go vet ./...` stops at a module boundary, so the root's invocation
-  covers neither `differential/` nor `properties/`. CI vetted the first two and
-  `make lint` vetted only the root, which means `properties/` - a whole module,
-  including the generator - had never been vetted since the day it landed.
-  Confirmed by putting a `fmt.Printf` with the wrong argument type in it: `make
-  lint` passed, and so would CI.
-
-  `scripts/check-modules.sh` finds every `go.mod` in the tree and fails unless the
-  workflow both vets and tests each one, so the next module cannot be forgotten
-  the same way. Verified in both directions by removing a vet step and by
-  pointing a test job at a directory that does not exist.
-
-  `properties/` also runs under `-race` now, like the root and `differential`.
-  Measured at 1.5 seconds without and 7.9 with, for 2000 checks, which is worth
-  paying for code that drives the library harder than any fixed corpus.
-
-- **The documentation's code is compiled and run now, at least in part.** The
-  package carried about 140 lines of indented code inside doc comments and zero
-  example functions, so none of it was compiled, let alone executed.
-  `example_test.go` holds sixteen runnable transcriptions of the load-bearing
-  claims - the streaming shape, the insertion-order table, that matching is
-  decided before any handler runs, the `:not()` defect, the escaper equivalence,
-  the repeated-attribute split, the raw-text refusal, raw source in and out, the
-  document-end truncation, bogus comments, comment refusal, removal semantics, the
-  encoding fallback, strict mode, and text chunking. `go test` compiles them, runs
-  them and checks their output, so those claims cannot rot silently.
-
-  Two of the sixteen failed on the first run, and both times the transcription
-  was wrong rather than the documentation: an example of `:not()` dropped the
-  element the documented output depended on, and a strict-mode example used a
-  construct that does not trigger the guard. The documentation was right in both
-  cases, which is worth recording alongside the five claims that have been found
-  wrong by hand.
-
-- **`apisurface_test.go` fails if a test file does not so much as mention an
-  exported name.** The crudest possible coverage check - a name appearing in the
-  text of a test, not a claim that anything about it is asserted - and it found
-  two gaps immediately. `WithGracefulBailOut` was never used in a test, only the
-  `MemorySettings` field it sets, which is why the bug above could exist;
-  `HandlerError.Unwrap` was never mentioned either, though it is the only way a
-  caller recovers the error their own handler returned. Both now have tests. The
-  same file counts the exported names, so adding one is a deliberate act visible
-  in a diff.
-
-- **`FuzzRewrite` compares what the handlers were told, not only what came out.**
-  It checked output bytes, failure parity, handle counts and handler invocation
-  counts - all four of which are identical whether a source location is absolute
-  or relative to the current `Write`, whether a tag name is reported in the wrong
-  case, or whether an attribute is read from the wrong element. What a handler
-  sees is the library's other interface and nothing compared it across chunkings.
-  Each structural handler now records what it was given and the two runs' records
-  are compared. Text is deliberately excluded: chunk boundaries do split text
-  nodes, so its record would differ legitimately.
-
-- **`sourceloc_test.go` pins the promise that made that gap matter.**
-  `SourceLocation` is documented as "counted from the first byte fed to the
-  rewriter", which anything extracting by slicing its own copy of the input
-  depends on. Ten documents at five chunk sizes, checking that element, comment
-  and doctype locations are identical however the input arrives, that slicing the
-  document at them returns the unit, and that text chunk locations stay absolute,
-  contiguous and in order even though the chunks themselves move.
-
-
-- **Two properties for attribute rewriting, and two for duplicates.**
-  `properties/attributes_test.go` states four claims over generated documents:
-  `RemoveAttribute` removes every copy of a repeated attribute, `SetAttribute`
-  replaces the first and leaves the rest, an attribute-only rewrite leaves the
-  tree an independent parser sees exactly as it was - error recovery included,
-  which the generator produces on purpose - and removing an absent attribute is
-  a no-op. The shared generator deliberately avoids duplicate attributes, so the
-  first two bring their own document builder.
-
-- **Error message quality is gated.** Nothing checked that this package's errors
-  say anything useful, and they are the surface a caller meets when something
-  goes wrong. `errquality_test.go` collects every reachable error - 23 of them,
-  covering all four typed errors and all three sentinels - and checks the
-  properties they should share: non-empty, attributable to the package, no
-  formatting fault, no dangling colon from a wrap whose inner error was lost, and
-  crucially that an error about a caller's input contains that input. A second
-  test fails if an exported error type has no case, so the list cannot rot as the
-  package grows. Verified to have teeth by removing the selector from
-  `SelectorError` and by dropping the wrapped error from `HandlerError`; both
-  fail with a message that names the problem.
-
-- **The differential oracle now covers what a rewriter reads, not only what it
-  copies.** Passthrough byte-identity says the rewriter can copy a document.
-  `differential/links_test.go` says something harder: that every anchor's target
-  and text, extracted by a rewrite, matches what `golang.org/x/net/html` reads
-  out of the same document - across 47 documents at four chunk sizes each. That
-  exercises attribute reading, text accumulation across nested markup, and chunk
-  boundaries together, which is the part a rewriter is responsible for rather
-  than the part lol-html has its own fuzzing for.
-
-  It also widens an existing claim: `TestTextHandlerSeesAllText` compared the
-  concatenated text chunks against the parser's text, but only for a document
-  written in one call. Chunk boundaries are the one thing lol-html explicitly
-  does not promise to reproduce, so the chunked version of that claim is the
-  interesting one, and it is the only way a document arrives in production.
-
-  No disagreement was found. That is the result, not a lack of one: the claim is
-  now checked rather than assumed.
-
-- **The fuzzers now vary the rewriter's configuration.** Neither passed a `With*`
-  option, so every one of roughly 32 million nightly executions ran with the
-  defaults: utf-8, strict on, no memory limit, no ESI. Whole categories were
-  therefore unexplored - an insertion transcoded into a legacy encoding, a
-  streaming sink interrupted by a memory bail-out, malformed markup with strict
-  mode off - and both fuzzers assert the live handle count on every iteration, so
-  a leak reachable only under one of those would never have been found. That is
-  the same shape of gap that hid the `StreamFunc` panic leak.
-
-  `FuzzOperations` now derives an encoding, a strict-mode choice, ESI and an
-  occasional generous memory limit from the program bytes. `FuzzRewrite` derives
-  an encoding and strict mode, given to both of its writers - but deliberately
-  **not** a memory limit: the memory a rewrite needs depends on how the input is
-  fed, by a factor of eight in one measured case, so a limit one writer stayed
-  under and the other did not would make them differ legitimately and the
-  chunk-invariance test would report it as a bug. Both run clean, and both found
-  new interesting inputs immediately - 35 and 26 - so the variation is reaching
-  states neither had before.
-
-- **The cost of registering selectors is gated, and the parse cache now has a
-  test.** `config.register` parses each distinct selector once and reuses it,
-  which is deliberate and had no test - removing it would have broken nobody's
-  build. `alloc_test.go` now asserts that build allocations are linear in the
-  number of selectors rather than quadratic, that a repeated selector costs less
-  than a distinct one, and that the saving grows with the number of duplicates.
-  Verified by defeating the cache: both assertions fail, reporting "the parse
-  cache is not saving anything". The cost model is documented too - about five
-  allocations per distinct selector at build, and matching cost that grows with
-  the number registered on every element, since there is no index by tag or
-  class.
-
-- **Allocation complexity is gated.** The benchmarks measure six fixed shapes and
-  nothing compared them across document sizes, so nothing would have noticed a
-  path going from a constant number of allocations to one proportional to the
-  input, or a per-match cost quietly doubling. Both leave every output identical.
-  `alloc_test.go` pins the shape instead of the numbers: passthrough and
-  non-matching handlers must not allocate per byte, and the cost of one more
-  match is asserted exactly while the fixed overhead is allowed to drift with the
-  toolchain. Verified to have teeth by injecting one escaping allocation per
-  callback (7 subtests fail) and by making the output sink copy each chunk
-  instead of borrowing it - the regression the borrow exists to prevent, worth
-  2224 allocations against 423 when it was first measured.
-
-### Documentation
+- **Two of the example programs lower-cased SVG attribute names**, found by the
+  `SetAttribute` measurement under Documentation below. `examples/gip/widows` rebuilt a heading's markup through the
+  `Attributes` iterator, so an `<svg viewBox>` inside a heading came out as
+  `viewbox`; `examples/gip/minifydiff` projected attribute names the same way, so
+  its checker would have approved a minifier that lower-cased one. Both now use
+  `AttributeList` and `NamePreserveCase`, with a test each.
 - **The first byte written to a `Sink` is a commitment, and `StreamFunc` did not
   say so.** It said "returning an error aborts the rewrite, and the error surfaces
   from Write or Close", which reads like the insertion is abandoned the way a
@@ -1262,6 +880,419 @@
   `OnDocumentText` - whatever order the options were written in, because
   lol-html keeps the two in separate lists. Neither rule was documented, and
   the second cannot be changed from here.
+
+- **`HandlerError.Selector` is now filled in for end-tag and streaming
+  handlers.** Both are registered from inside a handler that has a selector, and
+  both reported an empty one - so an error from a program with twenty handlers
+  said `end-tag handler` and left twenty candidates. They inherit the selector of
+  the handler that registered them, and the message says it:
+  `end-tag handler for "a[href]"`.
+
+  `Kind` also has a seventh value the documentation did not list, `streaming`,
+  which is a `StreamFunc`'s own failure - reported separately because it runs
+  later than the handler that registered it. `TestEveryDocumentedKindIsReachable`
+  now requires every documented kind to be produced by something and nothing to
+  produce a kind that is not documented, which is what noticed it.
+- **A poisoned `Writer` now says why it is poisoned.** lol-html cannot resume
+  after an error, so the first failure is reported from whichever call was
+  running and every later `Write` and the `Close` refuse. Those refusals returned
+  the bare `ErrPoisoned` sentinel, which names a state and not a cause - so a
+  caller writing the ordinary Go shape, write and then check `Close`, learned that
+  something had failed and never what. `ErrPoisoned` is now wrapped around the
+  first error, so `errors.Is` and `errors.As` reach the handler error or the
+  destination-writer error underneath it however late they are asked. A handler
+  panic is the exception: it poisons the `Writer` on its way to the caller without
+  leaving an error, and the sentinel then stands alone.
+
+- **`WithGracefulBailOut` before `WithMemorySettings` no longer does nothing.**
+  Every other option sets one field, so order cannot matter;
+  `WithMemorySettings` takes a whole struct and replaces every field in it,
+  including the graceful flag an earlier `WithGracefulBailOut()` had set. The
+  difference is not subtle once it bites: on a bail-out, the graceful path flushed
+  2021 bytes of already-rewritten output in one measured case and the strict path
+  flushed none. The flag is now kept separately and combined by union, so the two
+  compose in either order, and `MemorySettings{GracefulBailOut: false}` does not
+  turn off an explicit `WithGracefulBailOut` - there is no reason to ask for both.
+
+
+- **`.gitignore` actually ignores rapid's failure files now.** The pattern was
+  `testdata/rapid/`, and a pattern containing a slash is anchored to the
+  directory holding the `.gitignore` - so it matched only a top-level
+  `testdata/rapid/`, and the only module that uses rapid is `properties/`. It has
+  therefore never ignored anything. Three `.fail` files reached a commit before
+  it was noticed, from deliberately breaking an escaper to check the new
+  properties fail.
+
+- **`SetAttribute` no longer claims to make untrusted input safe.** Its doc
+  comment said "the value is escaped as needed, so it is safe to pass untrusted
+  input", and the package documentation said it escaped the quote and the
+  ampersand. Measured, it rewrites the double quote and nothing else - which is
+  correct, because its argument is raw attribute-value source, the mirror of what
+  `Attribute` reports. `Attribute`'s own comment said so all along. The two now
+  agree, and `SetAttribute` says what the difference between source and a literal
+  value costs: passing the five characters "&amp;" sets an attribute a browser
+  reads as one "&".
+
+- **The table of contents in `examples/gip/toc` no longer carries an
+  injection.** It interpolated a heading's id straight into an href it quoted
+  itself, so a heading with `id='a" onmouseover="alert(1)'` produced a working
+  event handler in the contents. This is what the missing escaper cost in
+  practice, in a program written after the documentation warning existed.
+- **The handle-leak assertions no longer measure other tests' garbage.**
+  `LiveHandles` counts the whole process, and a `Writer` dropped without being
+  closed releases its handles from a `runtime.AddCleanup` callback that runs one
+  GC cycle later. `TestUnclosedWriterIsReclaimed` abandons 200 writers on
+  purpose, so a later test sampling the count before and after its own work could
+  see it fall: five subtests reported between -1 and -4 "leaked" handles on one
+  CI run. Every equality assertion now samples through `settledHandles`, which
+  drains the queue first, and the manual-writer test keeps its writer alive
+  across the measurement so it cannot collect what it is counting. Demonstrated:
+  the same window measures -20 unsettled and 0 settled, and the assertions still
+  report 30 leaked handles when the streaming panic fix is reverted.
+
+- **The allocation gate no longer demands an exactness the measurement cannot
+  give.** It compared the per-match slope for equality with an integer and
+  required the extrapolated fixed cost to be identical at both document sizes.
+  Neither holds in general: on darwin/amd64 under Rosetta the same code measured
+  222 allocations at 100 matches and 823 at 400, a slope of 2.003, because one
+  allocation of setup appeared somewhere between the two sizes. The gate failed
+  on a difference of one allocation and passed on the same commit elsewhere,
+  which makes it noise rather than a signal. The slope is now compared within
+  0.05 and the base within 8 allocations - fifteen times the observed noise, and
+  more than an order of magnitude below the regression it is there to catch,
+  which is verified by injecting one extra allocation per match and watching
+  both checks fire.
+
+- **The allocation-complexity gate no longer fails the AddressSanitizer build.**
+  `alloc_test.go` asserts how many times a rewrite allocates, and `-asan`
+  replaces the allocator with one that allocates on its own account: a path that
+  allocates once per match allocates four times per match under the sanitizer,
+  and setting an attribute goes from two to 19.84. The gate was therefore
+  measuring the sanitizer rather than the binding, and the `sanitize` job had
+  failed on every commit since the gate landed. The six allocation tests now
+  skip under `-asan`, behind a build constraint, and say why where they skip.
+  The sanitizer still runs the rest of the suite, which is what it is for.
+
+- **`:not()` is wrong for anything but a single simple selector.** Upstream's,
+  and not fixable here, so it is documented and pinned instead. `:not()` is
+  correct with one simple selector - `:not(div)`, `:not(.a)`, `:not([href])`,
+  `:not(:first-child)`. Given a compound selector it negates each part separately
+  and requires all of them, which is the wrong half of De Morgan's law:
+  **`:not(div.a)` is evaluated as `:not(div):not(.a)`**. On a document of
+  `div.a div.b span.a span.b` it matches one element where CSS says three, and
+  `:not(div.a, span.b)` matches nothing at all. There is no error. A filter
+  written `OnElement(":not(a.trusted)")` therefore skips every anchor and
+  everything carrying that class, which for a filter is a hole rather than a
+  nuisance. The cause is `add_selector_components` in `selectors_vm/ast.rs`,
+  which flips the negation flag per component and adds each to a predicate whose
+  expressions are ANDed; upstream's own tests only ever put a single simple
+  selector inside `:not()`. `selector_test.go` asserts the wrong behaviour
+  deliberately, so a fix upstream fails the test and the documentation gets
+  corrected rather than rotting.
+
+- **`WithESITags` said what it enabled but not what it does.** The option was
+  documented as enabling "parsing of ESI tags such as `<esi:include>`". What it
+  does is treat them as **void elements**. Without it an `esi:` element is an
+  ordinary container whose content runs to the next matching end tag - which,
+  since ESI is conventionally written unclosed, is the enclosing element's. So
+  replacing or removing an include takes that end tag with it:
+  `<span><esi:include src=a></span>` with a handler replacing the include gives
+  `<span>?` rather than `<span>?</span>`, with no error. A trailing slash does
+  not help, because HTML ignores it on an element that is neither void nor
+  foreign. `Element.CanHaveContent` is what reports the treatment. The existing
+  `TestESITags` said outright that it asserted no ESI-specific parsing and used
+  the self-closing form; it now pins the void treatment, the swallowed end tag,
+  the trailing slash, and that `<esi:remove>` keeps its content either way.
+
+- **`WithStrict(false)` is a sanitiser bypass, and its documentation called it
+  "tolerance".** Strict mode is on by default, and the option said only that
+  turning it off "trades that safety for tolerance of markup the rewriter cannot
+  fully reason about". What actually happens is that content after an ambiguous
+  tag is treated as raw text, so no handler runs for it: a rewriter that removes
+  every `<script>` does not remove the one in
+  `<select><xmp><script>alert(1)</script>`, and emits it verbatim with no error
+  and no handler invocation. The unseen region runs to the closing tag, or to
+  the end of the document if there is not one - and a document malformed enough
+  to trip the guard often has not got one. The other direction is not free
+  either: with strict on the rewrite fails mid-stream, leaving a truncated
+  response that the caller must discard. `WithStrict` now says all of this, with
+  the exact trigger set (eight tags inside `<select>`; the same minus
+  `<noframes>` inside `<frameset>`; nothing else), and `strict_test.go` pins it,
+  the bypass included.
+
+- **The README's graceful bail-out table was wrong about the default, and it is
+  the dangerous direction.** It said that exceeding `MaxMemory` with
+  `GracefulBailOut` off delivers 0 bytes and "the response is broken". That
+  holds only when the whole document arrives in one `Write`. Fed in chunks -
+  which is what `io.Copy` does - the same document and cap deliver a **rewritten
+  prefix and then stop**: 670 bytes of 5170 in the measured case, cut on an
+  element boundary, so the result is well-formed HTML that a parser accepts
+  without complaint. A client sees a plausible page missing most of its content.
+  The `MemorySettings.GracefulBailOut` doc comment always said this correctly;
+  the README contradicted it, and the README is read first. Both tables are now
+  the measured four-row matrix, and `memory_test.go` pins every row.
+
+- **How much memory a rewrite needs depends on how the input is fed.** The same
+  5170-byte document completes with `MaxMemory: 1024` in a single `Write` and
+  needs `8192` in 256-byte writes - eight times as much. A limit sized by
+  testing with one big write will bail out under `io.Copy`, and nothing said so.
+  Now documented on `MaxMemory` and in the README, and pinned by test.
+
+- **An unusable encoding label was reported without naming it.** A bad
+  `WithEncoding` value failed with `rewriter_build: Unknown character encoding
+  has been provided`, which leaves a caller whose encoding comes from
+  configuration to go and find which one. It is now an `*EncodingError`
+  carrying the label, matching `*SelectorError`, which has always named the
+  selector. Every way `lol_html_rewriter_build` can fail is about the encoding
+  - upstream returns `UnknownEncoding` or `NonAsciiCompatibleEncoding` and
+  nothing else - so the attribution is exact rather than a guess, and the
+  native message is kept verbatim in `Message` in case that ever changes.
+
+- **A destination that reported a short write silently truncated the output.**
+  The sink discarded the count `io.Writer` returns. A destination accepting five
+  bytes of every chunk delivered 14 bytes of a 213-byte document, and both
+  `Write` and `Close` reported success; one accepting nothing delivered nothing,
+  still with no error. `io.Writer`'s contract says an implementation returning
+  `n < len(p)` must also return an error, and not every implementation obeys it -
+  which is why `io.Copy` checks. The count is now checked and `io.ErrShortWrite`
+  reported, the same error `io.Copy` reports. A destination that returns its own
+  error alongside a short count keeps that error rather than having it replaced.
+  The seeded fault scenarios in `faults_test.go` now include short writes, and
+  their assertion is stronger: the error reported has to be one of the faults
+  actually injected rather than merely non-nil.
+
+- **A panic inside a `StreamFunc` leaked a cgo handle per rewrite.** The
+  streaming callback was the one `//export`ed callback that did not go through
+  the shared panic-recovery path, so a panic in a streaming insertion unwound
+  through Rust instead of being converted to an error at the boundary. lol-html
+  never ran the drop callback that releases the streaming handle, so each such
+  rewrite leaked one handle for the life of the process, growing with traffic
+  and invisible in the output. Every other handler kind was already covered:
+  this was the gap left by the v0.1.1 panic-leak fix. `FuzzOperations` asserts
+  the handle count on every iteration but only ever panicked from an element
+  handler, so it could not reach the path; it now has a streaming-panic opcode,
+  and fails within a tenth of a second without the fix.
+
+- **Several `OnDocumentEnd` handlers ran in reverse.** lol-html dispatches its
+  document-end handlers in the opposite order to the one they were registered
+  in, which is deliberate upstream but the opposite of `Element.OnEndTag`, the
+  sibling API. Two handlers appending content emitted it backwards, and because
+  a failing handler stops the ones after it, an error in a handler written
+  second could stop one written first from running at all. Every
+  `OnDocumentEnd` now shares a single native registration and they run in the
+  order they were written.
+
+### Testing
+- **`differential/tagname_test.go`.** `TagNamePreserveCase` had exactly one
+  mention in the whole suite - `_ = e.TagNamePreserveCase()` inside the operations
+  fuzzer, with the result discarded - so nothing checked what it returned. It now
+  has eight SVG cases and four HTML ones against `x/net/html`, which is where a
+  claim about what a parser does belongs.
+
+- **The README's code is compiled now, and one block of it did not compile.**
+  Eight Go blocks, none of them built by anything. `readme_snippets_test.go` holds
+  each one verbatim inside something that typechecks, and `readme_test.go` asserts
+  the README and that file have not drifted - comparing with whitespace collapsed,
+  since the snippet file carries an extra tab and gofmt aligns trailing comments
+  its own way. A changed identifier or argument still fails; indentation does not.
+
+  The block illustrating detached units declared `src` and never used it, so it
+  could not have compiled. It now copies the value out, which is the contrast the
+  surrounding paragraph is about anyway - a copied string survives its handler and
+  a retained `*Element` does not.
+
+  Four of the blocks make a claim in a comment about what they produce, and those
+  claims are checked too, which a compiler cannot do. Verified the gates can fail:
+  changing a block's code, adding a block nothing compiles, and both are caught.
+
+  These tests read the README from disk, and the first version of them assumed
+  LF: the Windows runner checks out CRLF, so the fence never matched, no blocks
+  were found, and one of the three checks passed *vacuously* rather than failing -
+  its pattern contained a newline and simply never matched anything. Line endings
+  are normalised on read now, and the block count is asserted exactly rather than
+  as "more than none", so an extraction that stops working cannot leave the checks
+  below passing on an empty list.
+
+- **`readme_test.go` checks the README against the package.** Three tests: every
+  `lolhtml.X` it names exists, a short explicit list of names a caller cannot
+  safely do without is mentioned at all, and the sentence that went stale has not
+  returned. The middle one is a judgement call encoded as a list, and says so - a
+  name belongs on it only if a caller who does not know about it writes something
+  unsafe rather than something clumsy. All three verified to fail: by renaming a
+  README identifier, by removing a required name, and by restoring the stale
+  sentence.
+
+- **`properties/` is vetted now, and a script fails if a module is added without
+  being.** `go vet ./...` stops at a module boundary, so the root's invocation
+  covers neither `differential/` nor `properties/`. CI vetted the first two and
+  `make lint` vetted only the root, which means `properties/` - a whole module,
+  including the generator - had never been vetted since the day it landed.
+  Confirmed by putting a `fmt.Printf` with the wrong argument type in it: `make
+  lint` passed, and so would CI.
+
+  `scripts/check-modules.sh` finds every `go.mod` in the tree and fails unless the
+  workflow both vets and tests each one, so the next module cannot be forgotten
+  the same way. Verified in both directions by removing a vet step and by
+  pointing a test job at a directory that does not exist.
+
+  `properties/` also runs under `-race` now, like the root and `differential`.
+  Measured at 1.5 seconds without and 7.9 with, for 2000 checks, which is worth
+  paying for code that drives the library harder than any fixed corpus.
+
+- **The documentation's code is compiled and run now, at least in part.** The
+  package carried about 140 lines of indented code inside doc comments and zero
+  example functions, so none of it was compiled, let alone executed.
+  `example_test.go` holds sixteen runnable transcriptions of the load-bearing
+  claims - the streaming shape, the insertion-order table, that matching is
+  decided before any handler runs, the `:not()` defect, the escaper equivalence,
+  the repeated-attribute split, the raw-text refusal, raw source in and out, the
+  document-end truncation, bogus comments, comment refusal, removal semantics, the
+  encoding fallback, strict mode, and text chunking. `go test` compiles them, runs
+  them and checks their output, so those claims cannot rot silently.
+
+  Two of the sixteen failed on the first run, and both times the transcription
+  was wrong rather than the documentation: an example of `:not()` dropped the
+  element the documented output depended on, and a strict-mode example used a
+  construct that does not trigger the guard. The documentation was right in both
+  cases, which is worth recording alongside the five claims that have been found
+  wrong by hand.
+
+- **`apisurface_test.go` fails if a test file does not so much as mention an
+  exported name.** The crudest possible coverage check - a name appearing in the
+  text of a test, not a claim that anything about it is asserted - and it found
+  two gaps immediately. `WithGracefulBailOut` was never used in a test, only the
+  `MemorySettings` field it sets, which is why the bug above could exist;
+  `HandlerError.Unwrap` was never mentioned either, though it is the only way a
+  caller recovers the error their own handler returned. Both now have tests. The
+  same file counts the exported names, so adding one is a deliberate act visible
+  in a diff.
+
+- **`FuzzRewrite` compares what the handlers were told, not only what came out.**
+  It checked output bytes, failure parity, handle counts and handler invocation
+  counts - all four of which are identical whether a source location is absolute
+  or relative to the current `Write`, whether a tag name is reported in the wrong
+  case, or whether an attribute is read from the wrong element. What a handler
+  sees is the library's other interface and nothing compared it across chunkings.
+  Each structural handler now records what it was given and the two runs' records
+  are compared. Text is deliberately excluded: chunk boundaries do split text
+  nodes, so its record would differ legitimately.
+
+- **`sourceloc_test.go` pins the promise that made that gap matter.**
+  `SourceLocation` is documented as "counted from the first byte fed to the
+  rewriter", which anything extracting by slicing its own copy of the input
+  depends on. Ten documents at five chunk sizes, checking that element, comment
+  and doctype locations are identical however the input arrives, that slicing the
+  document at them returns the unit, and that text chunk locations stay absolute,
+  contiguous and in order even though the chunks themselves move.
+
+
+- **Two properties for attribute rewriting, and two for duplicates.**
+  `properties/attributes_test.go` states four claims over generated documents:
+  `RemoveAttribute` removes every copy of a repeated attribute, `SetAttribute`
+  replaces the first and leaves the rest, an attribute-only rewrite leaves the
+  tree an independent parser sees exactly as it was - error recovery included,
+  which the generator produces on purpose - and removing an absent attribute is
+  a no-op. The shared generator deliberately avoids duplicate attributes, so the
+  first two bring their own document builder.
+
+- **Error message quality is gated.** Nothing checked that this package's errors
+  say anything useful, and they are the surface a caller meets when something
+  goes wrong. `errquality_test.go` collects every reachable error - 23 of them,
+  covering all four typed errors and all three sentinels - and checks the
+  properties they should share: non-empty, attributable to the package, no
+  formatting fault, no dangling colon from a wrap whose inner error was lost, and
+  crucially that an error about a caller's input contains that input. A second
+  test fails if an exported error type has no case, so the list cannot rot as the
+  package grows. Verified to have teeth by removing the selector from
+  `SelectorError` and by dropping the wrapped error from `HandlerError`; both
+  fail with a message that names the problem.
+
+- **The differential oracle now covers what a rewriter reads, not only what it
+  copies.** Passthrough byte-identity says the rewriter can copy a document.
+  `differential/links_test.go` says something harder: that every anchor's target
+  and text, extracted by a rewrite, matches what `golang.org/x/net/html` reads
+  out of the same document - across 47 documents at four chunk sizes each. That
+  exercises attribute reading, text accumulation across nested markup, and chunk
+  boundaries together, which is the part a rewriter is responsible for rather
+  than the part lol-html has its own fuzzing for.
+
+  It also widens an existing claim: `TestTextHandlerSeesAllText` compared the
+  concatenated text chunks against the parser's text, but only for a document
+  written in one call. Chunk boundaries are the one thing lol-html explicitly
+  does not promise to reproduce, so the chunked version of that claim is the
+  interesting one, and it is the only way a document arrives in production.
+
+  No disagreement was found. That is the result, not a lack of one: the claim is
+  now checked rather than assumed.
+
+- **The fuzzers now vary the rewriter's configuration.** Neither passed a `With*`
+  option, so every one of roughly 32 million nightly executions ran with the
+  defaults: utf-8, strict on, no memory limit, no ESI. Whole categories were
+  therefore unexplored - an insertion transcoded into a legacy encoding, a
+  streaming sink interrupted by a memory bail-out, malformed markup with strict
+  mode off - and both fuzzers assert the live handle count on every iteration, so
+  a leak reachable only under one of those would never have been found. That is
+  the same shape of gap that hid the `StreamFunc` panic leak.
+
+  `FuzzOperations` now derives an encoding, a strict-mode choice, ESI and an
+  occasional generous memory limit from the program bytes. `FuzzRewrite` derives
+  an encoding and strict mode, given to both of its writers - but deliberately
+  **not** a memory limit: the memory a rewrite needs depends on how the input is
+  fed, by a factor of eight in one measured case, so a limit one writer stayed
+  under and the other did not would make them differ legitimately and the
+  chunk-invariance test would report it as a bug. Both run clean, and both found
+  new interesting inputs immediately - 35 and 26 - so the variation is reaching
+  states neither had before.
+
+- **The cost of registering selectors is gated, and the parse cache now has a
+  test.** `config.register` parses each distinct selector once and reuses it,
+  which is deliberate and had no test - removing it would have broken nobody's
+  build. `alloc_test.go` now asserts that build allocations are linear in the
+  number of selectors rather than quadratic, that a repeated selector costs less
+  than a distinct one, and that the saving grows with the number of duplicates.
+  Verified by defeating the cache: both assertions fail, reporting "the parse
+  cache is not saving anything". The cost model is documented too - about five
+  allocations per distinct selector at build, and matching cost that grows with
+  the number registered on every element, since there is no index by tag or
+  class.
+
+- **Allocation complexity is gated.** The benchmarks measure six fixed shapes and
+  nothing compared them across document sizes, so nothing would have noticed a
+  path going from a constant number of allocations to one proportional to the
+  input, or a per-match cost quietly doubling. Both leave every output identical.
+  `alloc_test.go` pins the shape instead of the numbers: passthrough and
+  non-matching handlers must not allocate per byte, and the cost of one more
+  match is asserted exactly while the fixed overhead is allowed to drift with the
+  toolchain. Verified to have teeth by injecting one escaping allocation per
+  callback (7 subtests fail) and by making the output sink copy each chunk
+  instead of borrowing it - the regression the borrow exists to prevent, worth
+  2224 allocations against 423 when it was first measured.
+
+### Documentation
+- **`SetAttribute` lower-cases a name it is adding, and keeps the document's
+  spelling when it is updating.** Which means an SVG attribute can be changed and
+  cannot be introduced:
+
+      <svg viewBox="0 0 1 1">   SetAttribute("viewBox", "0 0 9 9")  ->  viewBox="0 0 9 9"
+      <svg>                     SetAttribute("viewBox", "0 0 9 9")  ->  viewbox="0 0 9 9"
+
+  In HTML that is nothing - names are matched case-insensitively, which is why
+  `Attributes` lower-cases them. In SVG and MathML the case is part of the name, so
+  the second line is an attribute a browser ignores, silently, on the path that is
+  hardest to test: a rewrite that reads a `viewBox`, computes a new value and writes
+  it back works, and the same code on an element that did not have one does not.
+
+  The library already takes care over this in the other direction -
+  `Attribute.NamePreserveCase` exists and its comment names `viewBox` - so the
+  write side quietly undoing it is worth a paragraph. `SetAttribute` now has one,
+  with the workaround (rebuild the tag, or carry the attribute in the source), and
+  the measured name rules: a space, a tab, a newline, `/`, `=`, `>` and the empty
+  name are refused, so a name taken from a document cannot break the tag it is
+  written into, while the merely odd - a quote, a `<`, a leading digit - is
+  accepted and reads back as itself. `SetTagName` is stricter and different again:
+  it keeps the case it is given and wants an ASCII letter first.
+
+  `attrnamecase_test.go` measures all of it.
 
 ## v0.1.1
 

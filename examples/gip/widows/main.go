@@ -413,9 +413,16 @@ func (j *joiner) pop(name string) {
 	}
 }
 
-// startTag rebuilds an element's start tag. Only the attributes the parser
-// reported are in it, which is one fewer than the document has if the document
-// repeated one.
+// startTag rebuilds an element's start tag.
+//
+// The names come from AttributeList rather than from the Attributes iterator,
+// because the iterator lower-cases them and this is a rebuild: an <svg
+// viewBox=""> inside a heading would come out as viewbox, which a browser
+// ignores. In HTML the case does not matter; the rebuild cannot tell which it is
+// looking at, so it keeps what the document wrote either way.
+//
+// Every attribute the parser reported is here, repeats included, so a duplicated
+// name survives the rebuild as a duplicate.
 //
 // Values are written back as the document spelled them, because that is how they
 // are reported: escaping them again would turn every &amp; into &amp;amp;. The
@@ -426,7 +433,8 @@ func startTag(e *lolhtml.Element) string {
 	var b strings.Builder
 	b.WriteByte('<')
 	b.WriteString(e.TagName())
-	for name, value := range e.Attributes() {
+	for _, a := range e.AttributeList() {
+		name, value := a.NamePreserveCase, a.Value
 		b.WriteByte(' ')
 		b.WriteString(name)
 		if value != "" {

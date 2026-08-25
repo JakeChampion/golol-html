@@ -33,6 +33,7 @@ var Corpus = []string{
 	"<svg><![CDATA[x]]><text>  a  </text></svg>",
 	"<table>  <tr><td>  a  </td></tr>  </table>",
 	"<p>a&#32;&#32;b</p>",
+	`<svg viewBox="0 0 1 1" preserveAspectRatio="none">  a  </svg>`,
 	"<plaintext>  a  b  ",
 	"",
 	"   ",
@@ -122,6 +123,11 @@ func TestTheCheckerCatchesEachKindOfHarm(t *testing.T) {
 		{"a comment invented", "<p>a</p>", "<p>a</p><!--x-->"},
 		{"a space deleted rather than shortened", "<p>a  b</p>", "<p>ab</p>"},
 		{"a doctype dropped", "<!DOCTYPE html><p>a</p>", "<p>a</p>"},
+		// In SVG the case is part of the attribute name, so a minifier that
+		// lower-cased one has changed the document even though an HTML parser
+		// would not care.
+		{"an SVG attribute lower-cased", `<svg viewBox="0 0 1 1"></svg>`,
+			`<svg viewbox="0 0 1 1"></svg>`},
 	} {
 		before, err := Project(tc.in)
 		if err != nil {
