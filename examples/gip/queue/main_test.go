@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestNoCrossTalk is the property the program checks: every output is what that document
@@ -72,9 +73,69 @@ func itoa(n int) string {
 	return string(b)
 }
 
+// TestOneSlowItemBarelyMovesTheReading, which is why the reported figures are medians. This
+// test does no timing of its own: it builds the samples a run would have collected, adds the
+// one preempted item that a loaded machine hands out, and checks the reading holds. With a mean
+// the same outlier moves the build share from 20% to 82%, which is the distance between two of
+// advice's three answers.
+func TestOneSlowItemBarelyMovesTheReading(t *testing.T) {
+	quiet := Outcome{Items: 60}
+	for range 60 {
+		quiet.Builds = append(quiet.Builds, 2*time.Microsecond)
+		quiet.Totals = append(quiet.Totals, 10*time.Microsecond)
+	}
+	loud := Outcome{Items: 60, Builds: append([]time.Duration(nil), quiet.Builds...),
+		Totals: append([]time.Duration(nil), quiet.Totals...)}
+	loud.Builds[17] += 2 * time.Millisecond
+	loud.Totals[17] += 2 * time.Millisecond
+
+	if quiet.BuildShare() != loud.BuildShare() {
+		t.Errorf("one slow item moved the share from %.3f to %.3f",
+			quiet.BuildShare(), loud.BuildShare())
+	}
+
+	// And the mean it replaced would have moved a long way, so the change is worth its
+	// keep rather than a distinction without a difference.
+	mean := func(o Outcome) float64 {
+		var build, total time.Duration
+		for i := range o.Builds {
+			build += o.Builds[i]
+			total += o.Totals[i]
+		}
+		return float64(build) / float64(total)
+	}
+	if quiet, loud := mean(quiet), mean(loud); loud-quiet < 0.3 {
+		t.Errorf("the mean moved from %.3f to %.3f, so this outlier does not "+
+			"demonstrate the problem", quiet, loud)
+	}
+}
+
+// TestTheMedianIgnoresTheOrderTheSamplesArrivedIn, since a queue hands them back in whatever
+// order the workers finish and the statistic must not depend on that.
+func TestTheMedianIgnoresTheOrderTheSamplesArrivedIn(t *testing.T) {
+	rising := []time.Duration{1, 2, 3, 4, 5}
+	falling := []time.Duration{5, 4, 3, 2, 1}
+	shuffled := []time.Duration{3, 1, 5, 2, 4}
+	for _, samples := range [][]time.Duration{rising, falling, shuffled} {
+		if got := median(samples); got != 3 {
+			t.Errorf("median(%v) = %v", samples, got)
+		}
+	}
+	if got := median(nil); got != 0 {
+		t.Errorf("median(nil) = %v", got)
+	}
+	if got := median([]time.Duration{7}); got != 7 {
+		t.Errorf("median of one sample = %v", got)
+	}
+	// An even count takes a reading rather than averaging two of them.
+	if got := median([]time.Duration{2, 4}); got != 4 {
+		t.Errorf("median of two samples = %v", got)
+	}
+}
+
 // TestBuildingIsMostOfTheWorkForSmallItemsWithManySelectors, which is the measurement the
-// program exists to make. The assertion is on the ratio of two figures from the same run, so
-// it does not depend on the machine's speed - only on the shape.
+// program exists to make. The assertion is on the ratio of two medians from the same run, so it
+// does not depend on the machine's speed or on its load - only on the shape.
 func TestBuildingIsMostOfTheWorkForSmallItemsWithManySelectors(t *testing.T) {
 	many, err := Run(makeItems(60, 128), 1, 50)
 	if err != nil {
@@ -125,7 +186,7 @@ func TestTheReportIsCoherent(t *testing.T) {
 		t.Fatal(err)
 	}
 	report := out.String()
-	for _, want := range []string{"cross-talk", "wall clock", "worker time", "advice"} {
+	for _, want := range []string{"cross-talk", "wall clock", "median item", "advice"} {
 		if !strings.Contains(report, want) {
 			t.Errorf("the report does not mention %q:\n%s", want, report)
 		}

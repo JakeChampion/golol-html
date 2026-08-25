@@ -213,6 +213,38 @@
   documentation says which of those applies where.
 
 ### Fixed
+- **A mean over microsecond timings is not a measurement.**
+  `examples/gip/queue` reported the share of a queue's time that went on building
+  rewriters rather than rewriting, and drove its advice off that share. The figure
+  was a mean over the items, so one item that lost its core to the scheduler
+  outweighed the other fifty-nine and decided the answer. Measured on sixty
+  128-byte documents with a one-selector rule set, on a loaded machine:
+
+      statistic   build share, lowest to highest, twenty runs
+      mean               0.16 to 0.45
+      median             0.16 to 0.18
+
+  The slowest single build in a sixty-item queue measured 7x to 24x the median.
+  CI caught it as a flaky test: the program's own assertion that fifty selectors
+  spend a larger share on construction than one selector does failed with 60% for
+  fifty and 64% for one, which is the ordering backwards.
+
+  Every per-item figure is a median over the items now, and the totals the
+  medians came from are not reported at all - one answer, and the one that
+  survives a loaded machine. Seven runs of the documented command, four of them
+  against forty spinning processes, span twelve-fold in wall clock and seven
+  points in build share. Two new tests hold it: one builds the samples a run
+  would have collected, adds the single preempted item, and asserts the reading
+  does not move at all while checking that the mean it replaced moves from 0.20
+  to 0.82;
+  the other pins `median` itself against sample order.
+
+  `examples/gip/backpressure` had the same shape in a test rather than in a
+  report - a rewrite that takes microseconds compared against the same rewrite
+  with 2ms of enforced destination latency, one run each. It takes the fastest of
+  five runs at each latency now and asserts the gap is at least half the sleeping
+  the destination was asked to do, since preemption only ever adds time.
+
 - **`Write` allocated once per call, whatever its size.** The out-parameter the
   write passes to C - `var cerr C.lol_html_str_t` - has its address taken, which
   forces it to the heap: one 16-byte allocation per write, and a byte-at-a-time

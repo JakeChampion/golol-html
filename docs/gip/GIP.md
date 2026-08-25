@@ -186,6 +186,19 @@ that fails when the claim fails rather than a table that always prints. Rules 1,
 2 and 4 hold for every app either way, and the streaming path is not optional in
 a measuring instrument - it is the thing being measured.
 
+If the instrument does have to time something, **report a statistic that
+survives a loaded machine, and never a mean over samples that are microseconds
+long.** One item that loses its core for a millisecond outweighs the other fifty
+nine put together, and where it lands decides the answer: `examples/gip/queue`
+reported the share of a queue's time that went on building rewriters as a mean
+over the items, and on a loaded machine that share ranged from 0.16 to 0.45 for
+a rule set whose median share stayed at 0.17. The median over the same samples held
+within two points, and the slowest single sample in a sixty-item queue measured
+7x to 24x the median. Take the median of the samples, or the fastest of several
+repeats when the cost being timed is enforced rather than observed - preemption
+only ever adds. A test that compares two timings needs the same treatment
+before it is a gate rather than a coin flip.
+
 `main_test.go` must contain at least **three** non-trivial tests: not
 `assert(2+2 == 4)`, but the invariants that would actually break if you got it
 wrong. At least one of the three must be a property over the whole input rather

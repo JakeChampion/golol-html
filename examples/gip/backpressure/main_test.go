@@ -148,21 +148,36 @@ func TestTheLatencyIsPaidPerWrite(t *testing.T) {
 	}
 	doc := strings.Repeat(Unit, 50)
 
-	fast, err := Measure(r, doc, 0, 4096)
-	if err != nil {
-		t.Fatal(err)
+	// The fastest of several runs at each latency rather than one run at each: the rewrite
+	// itself takes microseconds, so a single scheduler preemption is worth more than the
+	// difference being measured, and preemption only ever adds time.
+	best := func(latency time.Duration) (Result, time.Duration) {
+		var out Result
+		fastest := time.Duration(-1)
+		for range 5 {
+			res, err := Measure(r, doc, latency, 4096)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fastest < 0 || res.Duration < fastest {
+				out, fastest = res, res.Duration
+			}
+		}
+		return out, fastest
 	}
-	slow, err := Measure(r, doc, 20*time.Microsecond, 4096)
-	if err != nil {
-		t.Fatal(err)
-	}
+
+	fast, fastBest := best(0)
+	slow, slowBest := best(20 * time.Microsecond)
 	if slow.Writes != fast.Writes {
 		t.Fatalf("the latency changed the write count: %d against %d", slow.Writes, fast.Writes)
 	}
-	// 100 writes at 20µs is 2ms of sleeping, against a rewrite that takes microseconds.
-	if slow.Duration <= fast.Duration {
-		t.Errorf("a destination taking 20µs per write finished in %v against %v for one "+
-			"taking none", slow.Duration, fast.Duration)
+	// The destination slept 20µs for each of its writes, so the difference between the two
+	// runs should be most of that. Half of it is the assertion, which leaves room for a
+	// sleep that overshoots without leaving room for the claim to be false.
+	owed := time.Duration(slow.Writes) * 20 * time.Microsecond
+	if slowBest-fastBest < owed/2 {
+		t.Errorf("%d writes at 20µs each is %v of sleeping, but the run took %v against "+
+			"%v with no latency", slow.Writes, owed, slowBest, fastBest)
 	}
 }
 

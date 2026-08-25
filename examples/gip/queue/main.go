@@ -3,10 +3,10 @@
 // rewriting.
 //
 //	$ queue -workers 4 -items 400 -selectors 50 -size 1024
-//	400 items of 1024 bytes, 4 workers, 50 selectors each
+//	400 items of 1050 bytes, 4 workers, 50 selectors each
 //	  cross-talk       none: every output equals the same document rewritten alone
-//	  wall clock       13.3ms for the queue, 33.4µs per item across 4 workers
-//	  worker time      114.1µs per item, of which building the rewriter 50.4µs (44%)
+//	  wall clock       12.8ms for the queue, 32µs per item across 4 workers
+//	  median item      101µs, of which building the rewriter 40.4µs (40%)
 //	  work done        12620 elements rewritten across the queue
 //	  advice           construction is a noticeable slice; worth checking the selector list
 //
@@ -48,6 +48,55 @@
 // instead of declining: 3.4x at four workers and the same at twelve. Either way the useful
 // number is not the core count.
 //
+// # Why the median item and not the average
+//
+// Because the thing being timed is a few microseconds long and the operating system's
+// scheduler is not. One item that loses its core for a millisecond adds more to the total than
+// the other fifty-nine items put together, and it lands wherever it lands: if it lands in the
+// build, the build looks like the whole cost, and if it lands in the rewrite, the build looks
+// free.
+//
+// The spread that produces, measured on an M3 Pro over sixty 128-byte documents with a
+// one-selector rule set and forty spinning processes for company - the same build, sixty times:
+//
+//	run   median build   95th   slowest   slowest over median
+//	  1        1.708µs   21.5µs   41.5µs                  24x
+//	  2        1.458µs    4.0µs   11.9µs                   8x
+//	  3        4.125µs   28.4µs   92.1µs                  22x
+//	  4        4.041µs   17.4µs   28.2µs                   7x
+//	  5        1.875µs    9.4µs   29.8µs                  16x
+//
+// A mean over those samples is mostly the slowest one. Over twenty such runs the mean build
+// share for a one-selector rule set ranged from 0.16 to 0.45 while the median stayed between
+// 0.16 and 0.18.
+//
+// The same effect shows up in the report itself. Seven runs of the command at the top of this
+// file, the first four on a machine with forty spinning processes and the last three on a quiet
+// one:
+//
+//	wall clock   median item   build share
+//	    40.9ms       235.2µs           34%
+//	    33.8ms       223.3µs           36%
+//	    31.2ms       225.1µs           36%
+//	   146.1ms       274.5µs           36%
+//	    12.0ms        90.6µs           39%
+//	    13.2ms       102.2µs           41%
+//	    12.8ms       101.0µs           40%
+//
+// The wall clock spans twelve-fold and the build share spans seven points, four of which are
+// the load slowing the build and the rewrite by different amounts. That is what a figure worth
+// printing looks like.
+//
+// The mean is not a noisier version of the same number - it is a different number, and which
+// one it is depends on what else the machine was doing. A CI run of this program's own test
+// reported 0.64 for one selector and 0.60 for fifty, which is the ordering backwards. So every
+// per-item figure here is a median over the items, and the totals the medians came from are not
+// reported at all: there is one answer, and it is the one that survives a loaded machine.
+//
+// The median is not free of the machine either - a slower CPU builds slower and rewrites
+// slower - but it is free of the *load*, which is what makes two runs comparable. Ratios of two
+// medians from the same run, which is what [Outcome.BuildShare] is, are the figures to trust.
+//
 // # What a queue does not have to worry about
 //
 // Cross-talk, as long as the options are built per item. Each worker's handlers close over
@@ -62,6 +111,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -113,14 +163,17 @@ type Outcome struct {
 	Workers   int
 	Selectors int
 
-	// Wall is elapsed time for the whole queue. BuildTime and ItemTime are sums across
-	// the workers, so they are comparable with each other and not with Wall: four workers
-	// spend four seconds of item time in one second of wall clock.
+	// Wall is elapsed time for the whole queue, so it is a figure per queue and not per
+	// item: four workers spend four seconds of worker time in one second of wall clock.
 	Wall      time.Duration
-	BuildTime time.Duration
-	ItemTime  time.Duration
 	CrossTalk int
 	Matched   int
+
+	// Builds and Totals hold one sample per item rather than a running total, because the
+	// statistic worth reporting is the median and a total cannot be turned back into one.
+	// See "Why the median item and not the average" above.
+	Builds []time.Duration
+	Totals []time.Duration
 }
 
 // PerItem is the wall-clock time divided by the queue length, which is what a caller sizing a
@@ -132,29 +185,33 @@ func (o Outcome) PerItem() time.Duration {
 	return o.Wall / time.Duration(o.Items)
 }
 
-// BuildShare is the fraction of the work that went on building rewriters rather than
-// rewriting. Both figures are sums over the items, so the ratio is meaningful however many
-// workers were running.
+// BuildShare is the fraction of a typical item's time that went on building the rewriter
+// rather than on rewriting: the median build over the median total, both from this run, so it
+// is meaningful however many workers were running.
 func (o Outcome) BuildShare() float64 {
-	if o.ItemTime == 0 {
+	work := median(o.Totals)
+	if work == 0 {
 		return 0
 	}
-	return float64(o.BuildTime) / float64(o.ItemTime)
+	return float64(median(o.Builds)) / float64(work)
 }
 
-// PerItemBuild and PerItemWork are the averages behind that ratio.
-func (o Outcome) PerItemBuild() time.Duration {
-	if o.Items == 0 {
-		return 0
-	}
-	return o.BuildTime / time.Duration(o.Items)
-}
+// PerItemBuild and PerItemWork are the two medians behind that ratio.
+func (o Outcome) PerItemBuild() time.Duration { return median(o.Builds) }
 
-func (o Outcome) PerItemWork() time.Duration {
-	if o.Items == 0 {
+func (o Outcome) PerItemWork() time.Duration { return median(o.Totals) }
+
+// median sorts a copy and takes the middle sample, the upper of the two for an even count. It
+// does not average the middle pair: the point of the statistic is that it is one of the
+// readings rather than a blend of them.
+func median(samples []time.Duration) time.Duration {
+	if len(samples) == 0 {
 		return 0
 	}
-	return o.ItemTime / time.Duration(o.Items)
+	sorted := make([]time.Duration, len(samples))
+	copy(sorted, samples)
+	slices.Sort(sorted)
+	return sorted[len(sorted)/2]
 }
 
 // Run drives the queue: workers goroutines, each taking items and rewriting them with its own
@@ -251,8 +308,8 @@ func Run(items []Item, workers, selectors int) (Outcome, error) {
 			return out, fmt.Errorf("item %d came back twice", r.n)
 		}
 		seen[r.n] = true
-		out.BuildTime += r.build
-		out.ItemTime += r.total
+		out.Builds = append(out.Builds, r.build)
+		out.Totals = append(out.Totals, r.total)
 		out.Matched += r.matched
 		if r.out != want[r.n] {
 			out.CrossTalk++
@@ -279,7 +336,7 @@ func (o Outcome) String() string {
 	}
 	fmt.Fprintf(&b, "  %-16s %v for the queue, %v per item across %d workers\n", "wall clock",
 		o.Wall.Round(100*time.Microsecond), o.PerItem().Round(100*time.Nanosecond), o.Workers)
-	fmt.Fprintf(&b, "  %-16s %v per item, of which building the rewriter %v (%.0f%%)\n", "worker time",
+	fmt.Fprintf(&b, "  %-16s %v, of which building the rewriter %v (%.0f%%)\n", "median item",
 		o.PerItemWork().Round(100*time.Nanosecond),
 		o.PerItemBuild().Round(100*time.Nanosecond),
 		o.BuildShare()*100)
