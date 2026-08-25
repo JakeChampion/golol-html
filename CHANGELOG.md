@@ -1354,6 +1354,31 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Invalid bytes are lossy to read everywhere and lossy to write only in text.**
+  `ErrInvalidUTF8` said that the document path does not refuse bytes that are not valid
+  UTF-8, and that they pass through unless a text handler is registered. Two things it
+  did not say, both of which decide how a diagnostic tool has to be built.
+
+  Reading is always lossy: every unit kind hands a handler U+FFFD rather than the byte,
+  so no rewrite can see what the document actually held. Writing is lossy for text
+  alone - measured over the five places a byte can sit:
+
+      text, with a text handler          the output has U+FFFD
+      raw text, with a text handler      the output has U+FFFD
+      an attribute value, read           the bytes are kept
+      a comment, read                    the bytes are kept
+      a tag name, read                   the bytes are kept
+
+  because those three are re-emitted from the source and text is re-emitted through the
+  handler's path. And reading something else on the same element does not cost the
+  text: an element handler that reads an attribute leaves a mis-declared text node
+  alone.
+
+  So a tool that reads text to diagnose a document's encoding is the pass that damages
+  it, which is why `examples/gip/mojibake` writes to `io.Discard` unless told to fix,
+  and why "this document is not UTF-8" can only be reported as "the text contains
+  U+FFFD". `ErrInvalidUTF8` says this now and `invalidutf8_test.go` gates it. B158.
+
 - **`html.UnescapeString` is not the parser's decoder for an attribute value.** Three
   places in the documentation say to decide on the decoded form and to get that form
   from the standard library. For text that is right. For an attribute value it is not,
