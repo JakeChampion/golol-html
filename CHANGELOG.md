@@ -1266,6 +1266,37 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/inventory`: list the custom elements a page uses and say which
+  nothing defines.** Definitions come from `customElements.define("name"` in the
+  document's own scripts - accumulated to `IsLastInTextNode`, because script text
+  arrives in chunks and a define call can straddle two of them - or from
+  `-defined` for what a bundle registers. It exits non-zero when anything is
+  undefined.
+
+  Getting the classification right is most of the work, and the specification's
+  rule is narrower than "has a hyphen" in both directions. Eight hyphenated names
+  are reserved and are not custom elements: `annotation-xml`, `color-profile`,
+  `font-face`, `font-face-src`, `font-face-uri`, `font-face-format`,
+  `font-face-name` and `missing-glyph`. And the other direction is the one that
+  costs an afternoon, because HTML lower-cases a tag name:
+
+      source            TagName      a custom element?
+      <my-card>         my-card      yes
+      <MY-CARD>         my-card      yes, the same one
+      <myCard>          mycard       no - no hyphen once lower-cased
+      <my_card>         my_card      no - an underscore is not a hyphen
+
+  So the inventory keeps both names per element: `TagName` is what a definition
+  has to match, and `TagNamePreserveCase` is what tells the reader why their
+  component never upgraded. A name with neither a hyphen nor capitals is not
+  reported at all, since it cannot be told from a typo of a built-in.
+  `<div is="my-div">` counts as a use, and `is=` on an element that is already
+  custom is ignored, as the specification says.
+
+  Ten tests, including the eight reserved names, the three spellings that are one
+  component, definitions found at every chunk size from one byte up, and the
+  fragment trap in B177.
+
 - **`examples/gip/shadow`: give every custom element a declarative shadow root,
   and give it exactly once.** A page can go through twice without gaining two,
   which is the property the whole design is for.
@@ -2244,6 +2275,42 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **One rewriter per document, not one per fragment.** The Streaming section
+  promises that chunk boundaries never affect handler behaviour, which is true and
+  is about chunks of one stream. It does not extend to splitting the work between
+  two rewriters, and nothing said so.
+
+  Measured on `<p>a</p><script>alert(1)</script><p>b</p>` with every script
+  removed, over all forty places the document can be cut in two:
+
+      one rewriter, whole document        saw p script p    <p>a</p><p>b</p>
+      one rewriter, two writes, any cut   saw p script p    <p>a</p><p>b</p>
+      two rewriters, cuts 9 to 15         saw p and p       the script, whole
+      two rewriters, cut 16               saw p script, p   alert(1) as text
+      two rewriters, any other cut        the script is removed
+
+  The seven are the cuts strictly inside the eight bytes of `<script>`. The first
+  fragment ends mid-tag, so no handler of any kind runs for it and the bytes pass
+  through; the second begins mid-name, so its remainder is text and passes through
+  too; and the join reassembles an element neither pass inspected. Cut 16 fails
+  differently - the first pass does remove the script, but its content was in the
+  other fragment, so the payload survives as text beside a stray end tag. Nothing
+  errors in any of it.
+
+  A tag turns out to be the only construct a document can end inside and have
+  nothing report it. `<!-`, `<!--`, `<!`, `<?php` and `<![CDATA[x` each produce a
+  comment with the text so far, `<!DOCTYPE` a doctype, `<script>var a` the element
+  and its text - and `<p`, `<p attr="v"`, `</p` and `<script` produce nothing at
+  all while still being emitted.
+
+  So the section now says to feed a document assembled from pieces to one rewriter
+  as successive writes, and that a rewrite which must work on fragments has to be
+  able to say where a fragment may be cut: element boundaries are safe and byte
+  offsets are not. B177 records it, gated by `fragment_test.go` - which pins which
+  cuts fail and in which of the two ways, so a change upstream that made the tail
+  of a truncated document visible would fail the test rather than leave the
+  documentation wrong.
+
 - **`EndTag.Before` does not lose insertions where `Append` does.** The end-tag
   section documents what happens to every end-of-element operation when the source
   omits an end tag - `Append` and `After` keep one insertion of three,
