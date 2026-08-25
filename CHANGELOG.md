@@ -1197,6 +1197,23 @@
   order they were written.
 
 ### Testing
+- **`earlystop_test.go` gates the prefix guarantee** across the four handler kinds
+  that can stop and four write sizes, together with the error identity through
+  `Write`, through the refused writes after it, and through `Close`; that the
+  stopping position is write-invariant for element, end-tag and comment handlers
+  and is not for text chunks; that counting text *nodes* restores it; that
+  stopping by not writing is not an error; and that no handles survive any of it.
+
+- **`examples/gip/stopwhen` rewrites a stream that never ends** and stops on a
+  condition, either way, reporting what the sink holds and checking - rather than
+  asserting - that it is a rewrite of a prefix. It exits non-zero if that fails.
+
+  Its own generator was wrong first: it wrote the same first-n-bytes chunk over and
+  over, so at a write size that is not a multiple of the repeating unit the
+  "stream" was a sequence of fragments rather than a document. The prefix check
+  caught it, which is the argument for having the program check something instead
+  of printing a table.
+
 - **`userdatacost_test.go` counts handles rather than bytes**, since a retained
   value is exactly one handle on every machine and a peak-memory figure is a sample
   of a moving number. Seven patterns over 2000 elements: reading holds the two
@@ -1590,6 +1607,45 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **How to stop a rewrite early, and what it leaves behind.** Nothing said how to
+  stop, though a rewrite over a stream that does not end has to. There are two
+  ways and the docs described neither.
+
+  Returning an error from a handler stops it where the handler said, and what has
+  already reached the sink turns out to be a stronger thing than a truncation:
+  byte for byte what a fresh rewriter produces from that many bytes of the input.
+  No half-serialised element, no tag cut in the middle, and the unit whose handler
+  stopped is not emitted at all - so the partial output can be kept or served.
+  Measured for every handler kind that can stop, at write sizes from one byte to
+  the whole document. Where the prefix ends:
+
+      an element handler   the bytes before that element's start tag
+      an end-tag handler   the bytes before that end tag
+      a comment handler    the bytes before that comment
+      a text handler       the bytes before that chunk
+
+  The last row is the odd one out, and it matters. A chunk is not a position in
+  the document - how many chunks a text node arrives in depends on the write sizes
+  - so "stop at the fifth chunk" stops in a different place for a different reader
+  upstream: measured at 83 bytes written whole, 64 in 64-byte writes and 23 a byte
+  at a time. Counting to `IsLastInTextNode` instead lands in the same place every
+  time.
+
+  The caller's own sentinel survives all of it. Wrap it, and `errors.Is` finds it
+  in what `Write` returned, in every later `Write` that is refused, and in what
+  `Close` returns - where it sits under `ErrPoisoned`. So the Go idiom of checking
+  only `Close` still tells a caller why its own rewrite stopped.
+
+  The other way to stop is to stop writing and call `Close`: no error, no
+  poisoning, and the output is a rewrite of what was fed. The cost is granularity,
+  since the condition is checked between writes - asking to stop at the third
+  heading of a generated stream stops after the 114th with 4 KB writes, the 4th
+  with 64-byte writes and the 3rd with 7-byte writes. That is the one to reach for
+  when the condition is the caller's; the sentinel is for when it is the
+  document's.
+
+  Written up in the package documentation under "Stopping early" and as B167.
+
 - **`SetUserData` costs a handle per unit, and only `OnEndTag` said so.** Both
   calls ask the library to remember something until the rewrite ends, and both
   allocate outside `MaxMemory` - that limit is lol-html's parsing buffer and this
