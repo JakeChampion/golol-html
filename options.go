@@ -12,10 +12,29 @@ import (
 
 var errNilDst = errors.New("lolhtml: destination writer is nil")
 
+// ErrNilOption is returned by [NewWriter] when the options it was given include a
+// nil one.
+//
+// It is a mistake rather than a condition, and it is an easy one to make: a
+// conditional that leaves an Option unset, a slice built with a gap, a helper that
+// returns a zero value on a path nobody tested. Before this it was a nil pointer
+// dereference inside NewWriter, which is a panic with a stack trace pointing at
+// the library rather than at the call that made it.
+//
+// A nil option is refused rather than skipped, for the same reason an unsupported
+// selector is refused rather than ignored: a rewrite that quietly did less than it
+// was told to is worse than one that did not start. The error says which position
+// was nil, because a caller building options in a loop needs to know which
+// iteration it was.
+var ErrNilOption = errors.New("lolhtml: nil option")
+
 // An Option configures a Writer. Options either register a content handler
 // (OnElement, OnComment, OnText, OnDoctype, OnDocumentEnd, OnDocumentComment,
 // OnDocumentText) or tune the rewriter (WithEncoding, WithMemorySettings,
 // WithStrict, WithGracefulBailOut, WithESITags).
+//
+// A nil Option is a mistake and is refused: [NewWriter] returns [ErrNilOption]
+// naming the position rather than panicking, which is what it used to do.
 //
 // An Option holds no state and can be passed to as many Writers as you like. The
 // function inside it is a different matter: two Writers given the same Option
