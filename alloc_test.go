@@ -470,6 +470,108 @@ func TestSelectorRegistrationCost(t *testing.T) {
 	}
 }
 
+// TestANarrowSelectorIsCheaperThanABroadOneWithASwitch. The Cost section used to
+// advise the opposite - "registering a few handlers with broad selectors and
+// deciding inside them is cheaper than registering many narrow ones" - and the
+// measurement says otherwise, by an order of magnitude, because a broad selector
+// pays a handler invocation for every element of the document rather than for
+// every element the rule is about.
+//
+// Asserted as a ratio rather than as figures: what should not change is which side
+// is cheaper, and by roughly how much.
+func TestANarrowSelectorIsCheaperThanABroadOneWithASwitch(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<html><body>")
+	for i := range 2000 {
+		switch i % 20 {
+		case 0:
+			b.WriteString("<code>x</code>")
+		case 1:
+			b.WriteString("<kbd>y</kbd>")
+		default:
+			b.WriteString(`<p class="a b">some text here</p>`)
+		}
+	}
+	b.WriteString("</body></html>")
+	doc := b.String()
+
+	measure := func(opts func() []lolhtml.Option) float64 {
+		return testing.AllocsPerRun(20, func() {
+			w, err := lolhtml.NewWriter(io.Discard, opts()...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.WriteString(w, doc); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	mark := func(e *lolhtml.Element) error { return e.SetAttribute("translate", "no") }
+	narrow := measure(func() []lolhtml.Option {
+		return []lolhtml.Option{
+			lolhtml.OnElement("code", mark),
+			lolhtml.OnElement("kbd", mark),
+			lolhtml.OnElement("samp", mark),
+		}
+	})
+	list := measure(func() []lolhtml.Option {
+		return []lolhtml.Option{lolhtml.OnElement("code,kbd,samp", mark)}
+	})
+	broad := measure(func() []lolhtml.Option {
+		return []lolhtml.Option{lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+			switch e.TagName() {
+			case "code", "kbd", "samp":
+				return mark(e)
+			}
+			return nil
+		})}
+	})
+
+	if broad < 3*narrow {
+		t.Errorf("the broad selector cost %.0f allocations against %.0f for three "+
+			"narrow ones; the documented advice is that narrow wins by a lot, and "+
+			"if that has changed the Cost section should change with it", broad, narrow)
+	}
+	// The list is one selector rather than three, so it should not be worse.
+	if list > narrow {
+		t.Errorf("a selector list cost %.0f allocations against %.0f for three "+
+			"separate handlers", list, narrow)
+	}
+
+	// And with nothing matching, extra narrow selectors are still far cheaper than
+	// one broad one: the matching cost is real and small.
+	names := make([]string, 50)
+	for i := range names {
+		names[i] = fmt.Sprintf("x-%d", i)
+	}
+	fifty := measure(func() []lolhtml.Option {
+		opts := make([]lolhtml.Option, 0, len(names))
+		for _, n := range names {
+			opts = append(opts, lolhtml.OnElement(n, func(*lolhtml.Element) error { return nil }))
+		}
+		return opts
+	})
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	broadFifty := measure(func() []lolhtml.Option {
+		return []lolhtml.Option{lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+			_ = set[e.TagName()]
+			return nil
+		})}
+	})
+	if broadFifty < 3*fifty {
+		t.Errorf("fifty narrow selectors cost %.0f allocations and one broad one "+
+			"cost %.0f; the documented comparison expects narrow to win by a lot",
+			fifty, broadFifty)
+	}
+}
+
 // TestASecondPassCostsTwice pins the ratio in the two-passes section, which
 // nothing measured. The section used to explain the ratio by saying almost all
 // of the cost is building the rewriter; at 800 elements one pass costs 425

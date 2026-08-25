@@ -145,3 +145,51 @@ func BenchmarkChunkedWrite(b *testing.B) {
 		}
 	}
 }
+
+// selectorCostDoc is a page where about a tenth of the elements are the ones a rule
+// cares about, which is the shape the narrow-versus-broad question is about.
+func selectorCostDoc(elements int) string {
+	var b strings.Builder
+	b.WriteString(`<!DOCTYPE html><html><body>`)
+	for i := range elements {
+		switch i % 20 {
+		case 0:
+			b.WriteString(`<code>x</code>`)
+		case 1:
+			b.WriteString(`<kbd>y</kbd>`)
+		default:
+			b.WriteString(`<p class="a b">some text here</p>`)
+		}
+	}
+	b.WriteString(`</body></html>`)
+	return b.String()
+}
+
+// BenchmarkNarrowSelectors, BenchmarkSelectorList and BenchmarkBroadSelector are
+// the three ways to write one rule, and the reason the Cost section no longer
+// advises the third. Pinned as a comparison in alloc_test.go.
+func BenchmarkNarrowSelectors(b *testing.B) {
+	mark := func(e *lolhtml.Element) error { return e.SetAttribute("translate", "no") }
+	benchmarkRewrite(b, selectorCostDoc(2000),
+		lolhtml.OnElement("code", mark),
+		lolhtml.OnElement("kbd", mark),
+		lolhtml.OnElement("samp", mark))
+}
+
+func BenchmarkSelectorList(b *testing.B) {
+	benchmarkRewrite(b, selectorCostDoc(2000),
+		lolhtml.OnElement("code,kbd,samp", func(e *lolhtml.Element) error {
+			return e.SetAttribute("translate", "no")
+		}))
+}
+
+func BenchmarkBroadSelector(b *testing.B) {
+	benchmarkRewrite(b, selectorCostDoc(2000),
+		lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+			switch e.TagName() {
+			case "code", "kbd", "samp":
+				return e.SetAttribute("translate", "no")
+			}
+			return nil
+		}))
+}
