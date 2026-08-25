@@ -14,7 +14,7 @@ import (
 
 // ErrDetached is returned by a method that mutates a rewritable unit (Element,
 // Comment, TextChunk, Doctype, DocumentEnd, EndTag) after its handler has
-// returned.
+// returned - and by every method on a [Sink] retained past its [StreamFunc].
 //
 // lol-html only guarantees these values are alive for the duration of the
 // handler invocation, so golol-html detaches the Go wrapper on return. Copy out
@@ -39,6 +39,11 @@ import (
 // [Element.HasAttribute] is the only getter that can tell those apart - which is
 // an accident of its signature rather than a design, and worth knowing when
 // choosing between them.
+//
+// A [Sink] is the exception, and the better behaviour: its writes report
+// ErrDetached like any mutator, and so does [Sink.Err], because its signature has
+// room for the answer. So a retained sink cannot be mistaken for a working one -
+// unlike a retained element, whose getters answer as if the document were empty.
 //
 // [Element.Detached] and the same method on the other units answer the question
 // directly, and cost nothing.
