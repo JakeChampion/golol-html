@@ -27,6 +27,14 @@ type Element struct {
 
 // TagName returns the tag name, lowercased. Use TagNamePreserveCase for the
 // spelling as it appeared in the source.
+//
+// ASCII-lowercased, which is what an HTML parser does and is only the same thing
+// for an ASCII name. <DÉTAIL> reports "dÉtail": the D and the TAIL are folded and
+// the É is not. So a name with a non-ASCII letter in it comes back in a spelling
+// nobody wrote, and comparing it against a lower-cased Go literal fails.
+// strings.EqualFold is the fix here, and it is more than a selector can do - a
+// selector is folded the same way, so it matches one of the two spellings and not
+// both. See the package documentation on selectors, and asciicase_test.go.
 func (e *Element) TagName() string {
 	p, err := e.live()
 	if err != nil {
