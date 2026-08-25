@@ -1318,6 +1318,29 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A class or id that starts with a digit is a third escaping case, with the least
+  helpful error.** The escaping section covered the colon and the dot. A digit is a
+  different rule - a CSS identifier cannot begin with one - and lol-html reports it
+  as "The selector is empty", which describes what its parser had left rather than
+  what the caller wrote:
+
+      #1a                     The selector is empty
+      #\31 a                  matches id="1a"
+      #\31a                   parses, matches nothing: \31a is U+031A, one character
+      #\000031a               matches: six hex digits need no terminator
+      [id="1a"]               matches, and needs no escaping at all
+      .2xl\:hidden            The selector is empty: a digit and a colon at once
+      [class~="2xl:hidden"]   matches that one
+
+  Generated ids and utility class names land here regularly, and the missing space
+  after `\31` is the quiet version of the mistake rather than a syntax error.
+
+  `SelectorError` now carries both answers for a rejected selector whose class or
+  id starts with a digit - the hex escape and the attribute-selector form - written
+  plainly so they can be copied, next to the hint it already carried for an
+  unescaped colon. `digitident_test.go` checks that every suggestion the error
+  makes actually matches the element it is suggested for, which is the only test
+  that makes a hint worth having.
 - **An attribute selector with an empty operand matches most of the page, where
   CSS says it matches nothing.** The specification is explicit: a substring
   operator whose value is the empty string "does not represent anything". Measured,
