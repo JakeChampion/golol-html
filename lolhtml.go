@@ -966,6 +966,33 @@
 // rewrite that cannot tell the shapes apart should refuse the ones it cannot, which
 // is what examples/gip/csrf does. Pinned in differential/table_test.go.
 //
+// # An HTML tag name inside an <svg> ends the svg
+//
+// Foreign content is not a container the way an element is. The parser breaks out of
+// SVG and MathML when it meets an HTML tag name, and 44 names do it - b, big,
+// blockquote, body, br, center, code, dd, div, dl, dt, em, embed, h1 to h6, head,
+// hr, i, img, li, listing, menu, meta, nobr, ol, p, pre, ruby, s, small, span,
+// strong, strike, sub, sup, table, tt, u, ul, var - plus font, which breaks out only
+// when it carries a color, face or size attribute:
+//
+//	<svg><rect/><p>x</p><circle/></svg>
+//
+//	in the tree   svg > rect, then p and circle beside the svg, both HTML elements
+//
+// Everything after the offending tag is document content rather than image content.
+// That is the whole problem for a rewrite that inlines a file into an <svg>: a file
+// holding one <p> puts the rest of itself in the page. Measured over the full list,
+// including the font condition, in differential/foreign_test.go.
+//
+// The library's two views of this disagree, and both are reported from the same
+// document at the same moment. [Element.NamespaceURI] follows the break-out and
+// reports HTML for what comes after it. The selector engine does not: "svg circle"
+// and even "svg > circle" match a circle the tree puts outside the svg, because the
+// engine pops its stack on end tags and this was a start tag. So neither a selector
+// nor a namespace check answers "is this still inside the image", and a rewrite that
+// needs to know has to look for the names itself - which is what
+// examples/gip/inlinesvg does before inlining a file at all.
+//
 // # A template is markup that is not on the page
 //
 // Handlers fire inside a <template> exactly as they do anywhere else, at any depth
