@@ -387,6 +387,30 @@ func (e *Element) HasAttribute(name string) (bool, error) {
 // used, so a rewrite that adds one to a document full of bare attributes produces
 // a diff in two styles. A bare attribute already in the input is passed through
 // unchanged and reads back as an empty value.
+//
+// It writes the first copy and leaves the others, which is the opposite choice
+// from [Element.RemoveAttribute] and the more dangerous one:
+//
+//	<a href="first" href="second">
+//	e.SetAttribute("href", "safe")
+//	<a href="safe" href="second">
+//
+// A browser reads the first, so the rewrite took effect there. The original is
+// still in the bytes, and RemoveAttribute's reasoning applies here too: what a
+// browser drops on parse is not necessarily what the next parser in the chain
+// drops. A rewrite that sanitises by changing a value rather than removing it
+// leaves the value it was sanitising.
+//
+// Remove first where that matters:
+//
+//	e.RemoveAttribute("href")      // every copy
+//	e.SetAttribute("href", "safe") // one copy, at the end
+//
+// which costs the attribute its position. That is why this is not done for you:
+// finding out whether a name is duplicated means listing every attribute, on
+// every call to the most-used method in the package, to change the answer for the
+// documents that have a duplicate and move the attribute in all the rest. See "An
+// attribute can appear twice" in the package documentation.
 func (e *Element) SetAttribute(name, value string) error {
 	p, err := e.live()
 	if err != nil {
@@ -440,6 +464,12 @@ type Attribute struct {
 
 // Attributes iterates the element's attributes in source order, yielding
 // lowercased names. Use AttributeList when the original spelling matters.
+//
+// Mutating the element while iterating is safe, and the iteration is over the
+// attributes as they were: setting or removing one inside the loop takes effect
+// on the element and does not disturb the walk, and an attribute added inside the
+// loop is not visited. Measured - adding one per iteration terminates at the
+// original count rather than growing without end.
 //
 // Like AttributeList, this yields repeats of the same name rather than the first
 // only - see "An attribute can appear twice" in the package documentation.

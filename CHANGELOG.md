@@ -505,6 +505,29 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`SetAttribute` writes one copy of a duplicated attribute; `RemoveAttribute`
+  takes them all, and only one of them said so.**
+
+      <a href="first" href="second">
+      e.SetAttribute("href", "safe")
+      <a href="safe" href="second">
+
+  A browser reads the first, so the rewrite took effect there - and
+  `RemoveAttribute`'s own reasoning applies here too: what a browser drops on
+  parse is not necessarily what the next parser in the chain drops. A rewrite that
+  sanitises by changing a value rather than removing it leaves the value it was
+  sanitising. `SetAttribute` now says so, gives the remove-then-set recipe, and
+  says why it is not done for you: finding out whether a name is duplicated means
+  listing every attribute on every call to the most-used method in the package, to
+  change the answer for the documents that have a duplicate and move the attribute
+  in all the rest.
+
+- **Mutating an element while iterating its attributes is safe, and nothing said
+  so.** `Attributes` documented only that the iterator must be consumed inside the
+  handler. Setting or removing inside the loop takes effect and does not disturb
+  the walk, and an attribute added inside the loop is not visited - measured by
+  adding one per iteration, which terminates at the original count rather than
+  growing without end.
 - **What `ContentType.Text` guarantees, stated at the level it holds.** Nothing it
   writes can become a tag - now a property over every document and value the
   generator produces, for the plain path, the streaming path and `EscapeText` used
