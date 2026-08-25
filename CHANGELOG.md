@@ -1266,6 +1266,49 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/islands`: annotate the interactive regions of a page for
+  partial hydration - which ones there are, which are inside which, and what each
+  needs.** Three attributes per island and a manifest a bundler can read.
+
+  The question it most needs to ask has no selector. In CSS "an island not inside
+  another island" is `[data-island]:not([data-island] [data-island])`, and that is
+  rejected. Measured, the whole boundary:
+
+      :not(div)  :not(.a)  :not(#i)  :not([a])  :not([a=v])  :not(*)   accepted
+      :not(div.a)  :not(div, span)                                     accepted
+      :not(:first-child)  :not(:nth-child(2))  :not(:not(div))         accepted
+      :not(div p)  :not(div > p)  :not(div + p)  :not(div ~ p)         rejected
+
+  A combinator is rejected inside `:not()` and nowhere else. The documented rule -
+  a selector works if the rewriter can decide it at the start tag - predicts
+  `:not(div p)` works, because the plain descendant selector `div p` decides
+  exactly that question, at the start tag, and it does work. The error compounds
+  it by naming the pseudo-class rather than the combinator inside it, and
+  following that with advice about escaping colons in tag names. The selector
+  documentation now says all of this, and `TestACombinatorInsideNotIsRejected`
+  pins both the rejection and the message so upstream changing either fails here.
+
+  So nesting comes from a stack, which has two traps of its own that this program
+  exists to demonstrate. A void element marked as an island - `<img
+  data-island="Hero">`, a reasonable thing for a template to emit - would fail the
+  whole rewrite, because `OnEndTag` on an element with no end tag returns an error
+  that fails the run rather than the handler; every push checks `CanHaveContent`
+  first. And an island whose own end tag is omitted swallows what follows it: in
+  `<ul><li data-island="A">x<li data-island="B">y</ul>` the handlers run start A,
+  start B, end B, end A, so both the stack and the descendant selector make B a
+  child of A where the HTML tree has them as siblings. No answer is available to a
+  streaming rewriter, so the program says when the question arose - it compares
+  `EndTag.Name` against the element's own tag and marks every island closed by
+  someone else's end tag.
+
+  Twelve tests. The nesting is cross-checked against the descendant selector over
+  generated documents from one to five deep and one to three wide - and the test
+  is explicit that the two methods share the omitted-end-tag behaviour rather than
+  being independent of it. Props are decoded for the manifest and left exactly as
+  written in the document, over six escapes including `caf&eacute;`. The
+  annotation is identical at read sizes from one byte to four kilobytes, with a
+  reader that fails the test if the size did nothing.
+
 - **`examples/gip/transitions`: give view-transition names to the elements that
   appear on both of two pages.** A transition needs the same name on the same thing
   in both documents, and "the same thing" is the problem: two pages are two
@@ -2173,6 +2216,26 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **The rule for which selectors are supported does not predict `:not(div p)`.**
+  The documentation gives one rule - a selector works if the rewriter can decide
+  it when it sees the start tag - and it covers almost everything. It does not
+  cover a combinator inside `:not()`, which is rejected even though the plain
+  descendant selector decides exactly the same question, at the start tag, and
+  works. The consequence is that there is no way to write "not inside an X" as a
+  selector, and a handler that needs the answer has to keep its own stack.
+
+  The `:not()` section now carries the measured boundary - which arguments are
+  accepted, which are rejected, and that the sibling combinators are unsupported
+  everywhere while the descendant and child ones are unsupported only here.
+
+  It also says what the error looks like, because the message points somewhere
+  else: all four rejections report "Unsupported pseudo-class or pseudo-element in
+  selector", which names `:not()` rather than what is inside it, and then advises
+  escaping a colon in a tag name. Neither half points at the combinator. B175 and
+  `TestACombinatorInsideNotIsRejected` pin the rejection and the message together,
+  so upstream accepting the selector, or improving the message, fails the test
+  rather than leaving the documentation wrong.
+
 - **Whether a table wrapper escapes a paragraph depends on the doctype.** The
   package documentation says a wrapper is two insertions and the parser decides
   what they wrap, and B146 says a block wrapper inside a `<p>` takes the content
