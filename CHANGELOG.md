@@ -505,6 +505,25 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **The fallback for an unrepresentable character has three answers, and
+  `WithEncoding` named one.** It said "A character the target encoding cannot
+  represent is emitted as a numeric character reference rather than dropped or
+  replaced". True for content, attribute values, streamed content and a
+  document-end insertion. `SetTagName` and `Comment.SetText` refuse it instead:
+
+      content, any ContentType   &#128512;
+      an attribute value         &#128512;
+      streamed content           &#128512;
+      appended at document end   &#128512;
+      SetTagName                 refused
+      Comment.SetText            refused
+
+  The refusals are right rather than inconsistent - there is no such thing as a
+  reference in a tag name, and a comment holds characters rather than references,
+  so emitting one would put eight characters where the caller asked for one. The
+  section says so now, and adds what the reference is worth: it is a character
+  only to something that decodes references, which a script and a style do not.
+  Measured for windows-1252 and iso-8859-2 in `encoding_test.go`.
 - **`RemoveAndKeepContent` is a third way into the raw-text hazard.** Unwrapping
   one of the ten elements whose content is not markup turns that content into
   markup:

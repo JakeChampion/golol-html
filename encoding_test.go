@@ -331,3 +331,119 @@ func TestAnInsertedCharsetDoesNotChangeTheBytes(t *testing.T) {
 		t.Errorf("the meta was not inserted: %q", out)
 	}
 }
+
+// TestUnrepresentableCharacterByPosition is the table in WithEncoding: the
+// fallback for a character the document's encoding cannot hold is a numeric
+// reference in four positions and an error in two, and the documentation used to
+// name only the reference.
+func TestUnrepresentableCharacterByPosition(t *testing.T) {
+	const emoji = "😀"
+	const ref = "&#128512;"
+
+	// Every position that takes inserted content, and what it does with a
+	// character windows-1252 and iso-8859-2 cannot represent.
+	inserts := []struct {
+		name string
+		doc  string
+		opt  func() lolhtml.Option
+		// want is the expected output, or refused is set.
+		want    string
+		refused string
+	}{
+		{
+			name: "content as Text", doc: `<p>x</p>`, want: `<p>` + ref + `</p>`,
+			opt: func() lolhtml.Option {
+				return lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+					return e.SetInnerContent(emoji, lolhtml.Text)
+				})
+			},
+		},
+		{
+			name: "content as HTML", doc: `<p>x</p>`, want: `<p>` + ref + `</p>`,
+			opt: func() lolhtml.Option {
+				return lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+					return e.SetInnerContent(emoji, lolhtml.HTML)
+				})
+			},
+		},
+		{
+			name: "an attribute value", doc: `<p>x</p>`, want: `<p title="` + ref + `">x</p>`,
+			opt: func() lolhtml.Option {
+				return lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+					return e.SetAttribute("title", emoji)
+				})
+			},
+		},
+		{
+			name: "streamed content", doc: `<p>x</p>`, want: `<p>` + ref + `</p>`,
+			opt: func() lolhtml.Option {
+				return lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+					return e.StreamSetInnerContent(func(s *lolhtml.Sink) error {
+						return s.WriteString(emoji, lolhtml.Text)
+					})
+				})
+			},
+		},
+		{
+			name: "the document end", doc: `<p>x</p>`, want: `<p>x</p>` + ref,
+			opt: func() lolhtml.Option {
+				return lolhtml.OnDocumentEnd(func(d *lolhtml.DocumentEnd) error {
+					return d.Append(emoji, lolhtml.Text)
+				})
+			},
+		},
+		{
+			name: "a tag name", doc: `<p>x</p>`, refused: "tag name contains a character",
+			opt: func() lolhtml.Option {
+				return lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+					return e.SetTagName("p" + emoji)
+				})
+			},
+		},
+		{
+			name: "comment text", doc: `<!--x-->`, refused: "Comment text contains a character",
+			opt: func() lolhtml.Option {
+				return lolhtml.OnDocumentComment(func(c *lolhtml.Comment) error {
+					return c.SetText(emoji)
+				})
+			},
+		},
+	}
+
+	for _, enc := range []string{"windows-1252", "iso-8859-2"} {
+		for _, in := range inserts {
+			t.Run(enc+"/"+in.name, func(t *testing.T) {
+				out, err := lolhtml.RewriteString(in.doc, lolhtml.WithEncoding(enc), in.opt())
+				if in.refused != "" {
+					if err == nil {
+						t.Fatalf("accepted, giving %q", out)
+					}
+					if !strings.Contains(err.Error(), in.refused) {
+						t.Errorf("error does not mention %q: %v", in.refused, err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				if out != in.want {
+					t.Errorf("got %q, want %q", out, in.want)
+				}
+			})
+		}
+	}
+
+	// In UTF-8 the character is representable, so nothing special happens and
+	// the two refusals do not fire - which is what makes the encoding the
+	// deciding factor rather than the position alone.
+	for _, in := range inserts {
+		out, err := lolhtml.RewriteString(in.doc, lolhtml.WithEncoding("utf-8"), in.opt())
+		if err != nil {
+			t.Errorf("utf-8/%s: refused: %v", in.name, err)
+			continue
+		}
+		if !strings.Contains(out, emoji) {
+			t.Errorf("utf-8/%s: the character is missing from %q", in.name, out)
+		}
+	}
+}

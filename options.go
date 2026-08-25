@@ -506,10 +506,31 @@ func OnDocumentEnd(fn func(*DocumentEnd) error) Option {
 // The encoding is the document's, not your handlers'. Whatever it is, a handler
 // always sees UTF-8: the text of <p>caf\xe9</p> in windows-1252 arrives as the
 // Go string "café". Content you insert is taken as UTF-8 and encoded on the way
-// out, so the output is in the document's encoding throughout. A character the
-// target encoding cannot represent is emitted as a numeric character reference
-// rather than dropped or replaced, so "🎉" inserted into a windows-1252 document
-// comes out as "&#127881;".
+// out, so the output is in the document's encoding throughout.
+//
+// A character the target encoding cannot represent does not have one answer. It
+// depends on the position, because a numeric character reference is only a
+// character where references are decoded:
+//
+//	content, any ContentType   &#128512;
+//	an attribute value         &#128512;
+//	streamed content           &#128512;
+//	appended at document end   &#128512;
+//	SetTagName                 refused: "The tag name contains a character that
+//	                           can't be represented in the document's character
+//	                           encoding."
+//	Comment.SetText            refused, with the same wording for comment text
+//
+// The two refusals are right rather than inconsistent: there is no such thing as
+// a reference in a tag name, and a comment holds characters rather than
+// references, so emitting one there would put the eight characters of
+// "&#128512;" where a caller asked for one. Refusing is the only honest answer,
+// as it is for a comment-closing sequence.
+//
+// So a rewrite that inserts characters from outside the document's repertoire has
+// to expect an error from those two, and to know that the reference the others
+// emit is only a character to something that decodes references - which a script
+// and a style do not. Measured for windows-1252 and iso-8859-2 in encoding_test.go.
 //
 // That fallback is correct wherever a reference is decoded, and inside a <script>
 // or a <style> it is not: the reference stays in the script as the characters it
