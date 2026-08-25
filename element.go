@@ -89,9 +89,10 @@ func (e *Element) TagNamePreserveCase() string {
 // nine words of JavaScript.
 //
 // So a rename across that boundary is only safe when you know what the content
-// is. Where you do not, replace the element instead - [Element.Replace] with
-// content you built - or read the content and decide at the end tag. Pinned in
-// settagname_test.go.
+// is. [IsRawText] answers which side of the boundary a name is on, for the old
+// name and the new one. Where you do not know the content, replace the element
+// instead - [Element.Replace] with content you built - or read the content and
+// decide at the end tag. Pinned in settagname_test.go.
 func (e *Element) SetTagName(name string) error {
 	p, err := e.live()
 	if err != nil {
@@ -649,8 +650,9 @@ func (e *Element) Remove() {
 // allowlist that unwraps everything not on it. Very few allowlists include
 // noembed or xmp, so a payload placed inside one is inert until it is unwrapped -
 // which is the sanitiser doing the work. Where the content of an unknown element
-// might not be markup, remove the element instead, or check the tag name against
-// the raw-text list before unwrapping.
+// might not be markup, remove the element instead, or ask [IsRawText] before
+// unwrapping - the tag name is enough, and the answer is the same list the
+// library checks insertions against.
 //
 // This is the same hazard as [ErrRawTextBreakout] and [Element.SetTagName],
 // reached a third way: nothing is inserted and nothing is renamed, and the

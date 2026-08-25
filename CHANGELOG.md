@@ -3,6 +3,24 @@
 ## Unreleased
 
 ### Added
+- **`IsRawText`.** Ten element names hold content an HTML parser does not read as
+  markup, and the package has always known which: it checks insertions into them
+  and returns `ErrRawTextBreakout`. It also warns, in three places, that the two
+  other ways into that content are the caller's problem - renaming one of them
+  with `SetTagName`, or unwrapping one with `RemoveAndKeepContent`, turns its text
+  into elements without inserting anything - and gave the caller no way to ask
+  which names they are.
+
+  The only thing left was to copy ten names out of a doc comment, which then
+  falls behind the parser silently. `IsRawText(tag)` answers instead, and is
+  measured against the parser by the same test that holds the guard to it: for
+  every element name in the HTML index, whether a `<b>` inside is reported as an
+  element. It covers all ten including `plaintext`, which the breakout check skips
+  because nothing can close one.
+
+  `SetTagName`, `RemoveAndKeepContent`, `ErrRawTextBreakout`, the package
+  documentation and the README now point at it.
+
 - **`Sink.Err`, so a `StreamFunc` can find out that the rewrite has already
   failed.** A sink's methods write into lol-html's buffer rather than to the
   destination, so a nil from `WriteString`, `WriteChunk` or a writer from

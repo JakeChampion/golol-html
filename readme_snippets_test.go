@@ -71,14 +71,24 @@ func snippetContentTypes(e *lolhtml.Element) {
 	e.Before("<b>x</b>", lolhtml.HTML) // <b>x</b>
 }
 
-// snippetEscapers is README block 4.
+// snippetRawTextGuard is README block 4: the shape a sanitiser needs, where the
+// answer decides between two removals rather than between removing and not.
+func snippetRawTextGuard(e *lolhtml.Element) error {
+	if lolhtml.IsRawText(e.TagName()) {
+		e.Remove() // not RemoveAndKeepContent: the content is not markup yet
+		return nil
+	}
+	return nil
+}
+
+// snippetEscapers is README block 5.
 func snippetEscapers(e *lolhtml.Element) error {
 	return e.SetInnerContent(
 		`<a href="`+lolhtml.EscapeAttribute(url)+`">`+lolhtml.EscapeText(label)+`</a>`,
 		lolhtml.HTML)
 }
 
-// snippetStream is README block 5.
+// snippetStream is README block 6.
 func snippetStream(e *lolhtml.Element) error {
 	return e.StreamAppend(func(s *lolhtml.Sink) error {
 		_, err := io.Copy(s.AsWriter(lolhtml.HTML), bigTemplate)
@@ -86,7 +96,7 @@ func snippetStream(e *lolhtml.Element) error {
 	})
 }
 
-// snippetDetached is README block 6: the useless line is the point of it.
+// snippetDetached is README block 7: the useless line is the point of it.
 //
 // The README's version of this did not compile - it declared src and never used
 // it - which is how a snippet nothing builds goes wrong. It now copies the value
@@ -100,12 +110,12 @@ func snippetDetached() lolhtml.Option {
 	})
 }
 
-// snippetEncoding is README block 7.
+// snippetEncoding is README block 8.
 func snippetEncoding() lolhtml.Option {
 	return lolhtml.WithEncoding("windows-1252")
 }
 
-// snippetMemory is README block 8.
+// snippetMemory is README block 9.
 func snippetMemory() lolhtml.Option {
 	return lolhtml.WithMemorySettings(lolhtml.MemorySettings{
 		MaxMemory:       64 << 10,
@@ -198,5 +208,19 @@ func TestTheREADMEsOptionSnippetsBuildAWriter(t *testing.T) {
 	}
 	if _, err := elements[0].HasAttribute("src"); err == nil {
 		t.Error("the retained element still works, so the README's warning is wrong")
+	}
+}
+
+// TestTheREADMEsRawTextGuardRemovesTheWholeElement. The block is a sanitiser
+// choosing between two removals, and the choice is the point: unwrapping a
+// noembed would turn its content into elements.
+func TestTheREADMEsRawTextGuardRemovesTheWholeElement(t *testing.T) {
+	out, err := lolhtml.RewriteString(`a<noembed><img src=x onerror=alert(1)></noembed>b`,
+		lolhtml.OnElement("noembed", snippetRawTextGuard))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "ab" {
+		t.Errorf("got %q, want %q", out, "ab")
 	}
 }

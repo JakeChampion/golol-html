@@ -157,8 +157,8 @@ func TestEveryREADMEGoBlockIsCompiled(t *testing.T) {
 	blocks := readmeGoBlocks(t)
 	// A count rather than "more than none": a change that stops the extraction
 	// working would otherwise leave every check below passing on an empty list.
-	if len(blocks) != 8 {
-		t.Fatalf("found %d Go blocks in the README, expected 8; if a block was "+
+	if len(blocks) != 9 {
+		t.Fatalf("found %d Go blocks in the README, expected 9; if a block was "+
 			"added or removed deliberately, update this number and "+
 			"readme_snippets_test.go with it", len(blocks))
 	}
