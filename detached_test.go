@@ -10,6 +10,7 @@ package lolhtml_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	lolhtml "github.com/JakeChampion/golol-html"
@@ -235,4 +236,44 @@ func errOfBoth(t *testing.T, doc string) (bool, error) {
 		t.Fatal(rerr)
 	}
 	return has, err
+}
+
+// TestARetainedSinkRefusesEveryMethod, which is the seventh unit and the one the list in
+// ErrDetached did not mention. It is also the only one whose getter reports the
+// detachment rather than answering emptily, because Err's signature has room for it.
+func TestARetainedSinkRefusesEveryMethod(t *testing.T) {
+	var kept *lolhtml.Sink
+	out, err := lolhtml.RewriteString(`<p>x</p>`, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+		return e.StreamAppend(func(s *lolhtml.Sink) error {
+			kept = s
+			return s.WriteString("<b>ok</b>", lolhtml.HTML)
+		})
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `<p>x<b>ok</b></p>`; out != want {
+		t.Fatalf("the rewrite gave %q, want %q", out, want)
+	}
+	if kept == nil {
+		t.Fatal("no sink was captured")
+	}
+
+	if err := kept.WriteString("<i>late</i>", lolhtml.HTML); !errors.Is(err, lolhtml.ErrDetached) {
+		t.Errorf("WriteString = %v, want ErrDetached", err)
+	}
+	if err := kept.WriteChunk([]byte("late"), lolhtml.Text); !errors.Is(err, lolhtml.ErrDetached) {
+		t.Errorf("WriteChunk = %v, want ErrDetached", err)
+	}
+	if _, err := kept.AsWriter(lolhtml.HTML).Write([]byte("late")); !errors.Is(err, lolhtml.ErrDetached) {
+		t.Errorf("AsWriter().Write = %v, want ErrDetached", err)
+	}
+	// The getter too, unlike every other unit's: Err has room for the answer.
+	if err := kept.Err(); !errors.Is(err, lolhtml.ErrDetached) {
+		t.Errorf("Err = %v, want ErrDetached", err)
+	}
+	// And nothing it was told to write reached the output.
+	if strings.Contains(out, "late") {
+		t.Errorf("a write through the retained sink reached the output: %q", out)
+	}
 }

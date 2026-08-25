@@ -1354,6 +1354,23 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A retained `Sink` is the seventh unit, and the only one whose getter reports the
+  detachment.** `ErrDetached` listed the six rewritable units and left out the `Sink`
+  handed to a `StreamFunc`, which has the same handler-bounded lifetime. Measured, it is
+  the best-behaved of the seven: `WriteString`, `WriteChunk`, `AsWriter().Write` and
+  `Err` all report `ErrDetached`, so a retained sink cannot be mistaken for a working
+  one.
+
+  Every other unit's getters answer with a zero value and say nothing - which is the
+  documented rule and the surprising half, because a retained element describes an empty
+  document rather than reporting a problem, and `Attribute` returning `("", false)` is
+  indistinguishable from an absent attribute. `Element.HasAttribute` is the only other
+  getter that can tell them apart, an accident of its signature.
+
+  `ErrDetached` now names the Sink and says why it is the exception, and
+  `detached_test.go` covers it. `examples/gip/detached` prints the whole table - forty
+  calls across seven units - so the rule can be read rather than inferred. B164.
+
 - **A second `Close` is quiet, including after a failure.** `Close` says it is safe to
   call more than once, and that if an earlier `Write` failed it reports `ErrPoisoned`
   wrapped around the cause because "checking only Close is the ordinary Go shape, and it
