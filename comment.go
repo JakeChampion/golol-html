@@ -180,4 +180,8 @@ func (c *Comment) UserData() any { return getUserData(&c.unit, commentUserData) 
 // SetUserData attaches a value to this comment, readable by another handler that
 // is given the same comment - an [OnComment] handler and an [OnDocumentComment]
 // one both see it. Go handlers can usually close over the value instead.
+//
+// It costs a handle held until the rewrite ends, and setting it to nil releases
+// that handle immediately; see [Element.SetUserData], where the cost and the
+// mitigation are set out.
 func (c *Comment) SetUserData(v any) error { return setUserData(&c.unit, commentUserData, v) }

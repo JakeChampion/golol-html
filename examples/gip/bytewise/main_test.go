@@ -77,25 +77,13 @@ func TestTheWriteSizeDoesNotChangeTheAllocationCount(t *testing.T) {
 	}
 }
 
-// TestSmallWritesTakeLonger is the other half: what a small write costs is time, because
-// every write is a crossing into C whatever it carries.
-//
-// The measured ratio on the machine this was written on is about eight; the assertion is
-// two, so that a loaded runner does not fail it. A machine where the crossing is more
-// expensive - which is every machine slower than this one - widens the gap rather than
-// closing it.
-func TestSmallWritesTakeLonger(t *testing.T) {
-	c := measureOrFail(t, []byte(Shapes["ordinary"](8<<10)), 1, 0)
-
-	one, whole := c.Measurements[0], c.Measurements[1]
-	if whole.Duration == 0 {
-		t.Skip("this platform's clock cannot resolve a whole-document rewrite of 8 KB")
-	}
-	if one.Duration < whole.Duration*2 {
-		t.Errorf("one-byte writes took %s and one whole write %s: the per-write cost of "+
-			"crossing into C was expected to dominate", one.Duration, whole.Duration)
-	}
-}
+// There is deliberately no test that small writes take longer, though they do - about eight
+// times per byte on the machine this was written on, which is the program's headline. A
+// version of this file asserted it with a generous two-fold threshold and still failed once
+// under the load of `go test ./...`, where the whole module's packages are building and
+// testing beside it. A timing assertion is a flake wherever it runs, and the only honest
+// places for a timing are the program's own output, read by someone who can see the machine
+// it ran on, and a benchmark. What the tests assert is the allocation count, which is exact.
 
 // TestTheCostPerByteHoldsAsTheDocumentGrows - the program's -check mode, run
 // small. This is the claim that replaces the quadratic one the docs used to

@@ -318,6 +318,29 @@ sink, bypassing the now-unusable rewriter. The handover point is the last byte
 you wrote, and the flushed tail can end mid-tag, so append to it rather than
 inserting anything of your own.
 
+### What the limit does not cover
+
+`MaxMemory` bounds lol-html's parsing buffer. Two calls allocate outside it, in
+the binding's handle table, and both hold what they allocate until `Close`:
+
+| Call | Held | Bounded by |
+|---|---|---|
+| `OnEndTag` | one handle per matched element | registering on fewer elements |
+| `SetUserData` | one handle per unit | setting it to nil when done |
+
+Attaching user data to every anchor in a 64 MB document holds about 520 MB of Go
+heap; reading the same elements holds 3.7 MB whatever the document's size. For
+text chunks the unit is the chunk, so the cost follows the caller's write sizes
+rather than the document - one 2000-byte text node is two chunks written whole and
+two thousand written a byte at a time.
+
+`SetUserData(nil)` releases the handle immediately, which is what makes a bounded
+rewrite possible when a value has to reach a later handler.
+`ClearEndTagHandlers` does not: it stops the callbacks and keeps the handle.
+
+`examples/gip/unbounded` measures which patterns keep a rewrite flat as the
+document grows, and `userdatacost_test.go` gates the handle counts.
+
 ## Performance
 
 `go test -bench .` on an Apple M3 Pro, darwin/arm64, rewriting a 16 KB generated
