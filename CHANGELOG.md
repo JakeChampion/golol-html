@@ -1168,6 +1168,25 @@
   order they were written.
 
 ### Testing
+- **`differential/surgery_test.go`, the same edit done two ways.** A streaming rewrite and
+  tree surgery are different machines, and most people think about editing HTML as the
+  second one. This compares them directly: four edits - adding a class to every div,
+  inserting a comment before every image, renaming `b` to `strong`, removing every image -
+  applied by the rewriter and by walking a `golang.org/x/net/html` tree, over six documents,
+  three of which close every element and three of which do not. The comparison is the
+  document a parser builds from each result, written back out, because comparing node
+  structure would report a difference that is not one: removing an element between two runs
+  of text leaves one text node in the stream and two in the tree, and both mean the same
+  document.
+
+  All four agree everywhere. The fifth edit is the documented exception: replacing an
+  element's content agrees with surgery on a list whose items are closed and cannot on one
+  whose items are not, where the streaming edit takes the later items with it - and the
+  test asserts both halves, including that the streaming version really does end up with
+  fewer items. A third case shows the recommended way out: the same edit positioned at the
+  end tag only when the name matches agrees with surgery on the closed lists and declines
+  to do anything on the open one, which is doing less rather than doing something else.
+
 - **`differential/preserving_test.go`, the two halves of "does this rewrite preserve
   meaning".** Six rewrites that should leave the tree exactly as it was - setting an
   attribute, adding a class, renaming `b` to `strong`, inserting a comment before an
