@@ -20,6 +20,23 @@
   arrived - there is no point at which delivery is known, since the rewriter may
   still be holding the content.
 
+- **`ErrIncompleteRune`: a UTF-8 sequence a `StreamFunc` never finishes is no
+  longer silent.** lol-html holds an incomplete sequence waiting for the rest of
+  it, which is what makes `io.Copy` into `Sink.AsWriter` safe across arbitrary
+  chunk boundaries. If nothing finishes it, the bytes go nowhere:
+  `WriteChunk([]byte("ab\xc3"))` produced `ab` with no error, so an insertion
+  from a truncated source was silently shorter than the content. A `WriteString`
+  while a sequence is open does not finish it either - the held bytes become
+  U+FFFD and the string is written after them, which `Sink.WriteChunk` had
+  documented as something not to do without there being any way to notice having
+  done it.
+
+  Both now return `ErrIncompleteRune`, checked when the `StreamFunc` returns
+  rather than inside each write, so splitting a rune stays free. The document
+  path never lost these bytes - a truncated sequence in the input becomes U+FFFD
+  - so this was the one place in the library where content vanished without a
+  word.
+
 - **`NamespaceHTML`, `NamespaceSVG` and `NamespaceMathML`, and
   `Element.NamespaceURI` no longer copies.** There are three possible values,
   they are static in lol-html, and every call was returning a fresh 28- or

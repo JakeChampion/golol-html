@@ -162,7 +162,9 @@ func TestTheSurfaceIsNotAccidentallyGrowing(t *testing.T) {
 	// let errors.Is reach the two conditions a streaming caller acts on.
 	// 137: NamespaceHTML, NamespaceSVG and NamespaceMathML, which are what
 	// NamespaceURI returns and what a caller compares it against.
-	const want = 137
+	// 138: ErrIncompleteRune, which turns a silently dropped partial rune at
+	// the end of a StreamFunc into an error.
+	const want = 138
 
 	names := exportedNames(t)
 	if len(names) != want {
