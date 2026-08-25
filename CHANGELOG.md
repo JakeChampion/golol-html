@@ -1297,6 +1297,34 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **"Registering a few handlers with broad selectors and deciding inside them is
+  cheaper than registering many narrow ones" is backwards.** The Cost section
+  advised it, and the measurement says the opposite by an order of magnitude.
+  Over a 2000-element page where about a tenth of the elements match:
+
+      three narrow selectors, all matching     439 allocations
+      one selector list "code,kbd,samp"        424
+      one "*" handler with a switch          4,228
+
+  and where nothing matches at all, fifty narrow selectors still win:
+
+      fifty narrow selectors, none matching    351 allocations
+      one "*" handler with a fifty-name set  4,031
+      no handlers                               16
+
+  The reason is that the two costs are not the same size. A selector that does not
+  match costs matching, which is real and small; a handler that runs costs a unit
+  wrapper and whatever it reads, and a broad selector makes it run for every
+  element of the document rather than for every element the rule is about.
+
+  The section now says so, with the numbers and the rule that follows: prefer the
+  narrowest selector that says what the rule is, and where one handler has to
+  cover several names, a selector list is both the cheapest and the clearest way to
+  write it. A `*` handler is for when the rule really is about every element.
+
+  `alloc_test.go` gates it as a ratio rather than as figures - what should not
+  change is which side is cheaper - and `bench_test.go` has the three shapes so
+  the numbers can be reproduced.
 - **`SourceLocation` had one sentence, and it is the identity a two-pass rewrite
   runs on.** The documentation recommends reading a document twice wherever a
   decision needs what comes later, and a byte range is what joins the passes - so

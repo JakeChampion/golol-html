@@ -967,8 +967,29 @@
 // Matching cost grows with the number registered as well, on every element -
 // there is no index by tag or class - so a tool that registers one handler per
 // rule in a stylesheet pays for all of them at every element of the document.
-// Registering a few handlers with broad selectors and deciding inside them is
-// cheaper than registering many narrow ones.
+//
+// It is still much cheaper than the alternative. A selector that does not match
+// costs matching; a handler that runs costs a unit wrapper and whatever it reads,
+// so a broad selector that lets the handler decide pays per element of the
+// document rather than per element it cares about. Measured over a 2000-element
+// page where about a tenth of the elements match:
+//
+//	three narrow selectors, all matching     439 allocations
+//	one selector list "code,kbd,samp"        424
+//	one "*" handler with a switch          4,228
+//
+// and where nothing matches at all, fifty narrow selectors still win by an order
+// of magnitude:
+//
+//	fifty narrow selectors, none matching    351 allocations
+//	one "*" handler with a fifty-name set  4,031
+//	no handlers                               16
+//
+// So: prefer the narrowest selector that says what the rule is, and where one
+// handler has to cover several names, a selector list is both the cheapest and the
+// clearest way to write it. A "*" handler is for when the rule really is about
+// every element - keeping a depth counter, say. Gated as a comparison rather than
+// as numbers in alloc_test.go, since the figures move with the toolchain.
 //
 // The numbers above are gated by alloc_test.go as a range rather than a value,
 // because they move with the toolchain: what is asserted is that the marginal
