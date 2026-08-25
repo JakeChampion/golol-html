@@ -5,7 +5,52 @@ package lolhtml
 */
 import "C"
 
-// A Comment is an HTML comment matched by a comment handler.
+// A Comment is a comment token matched by a comment handler, which is not the
+// same thing as a comment.
+//
+// An HTML parser produces a comment token for four different pieces of source
+// syntax, and all four arrive here with their delimiters stripped and nothing to
+// say which they were:
+//
+//	<!--a-->          a comment                       Text "a"
+//	<!bogus>          a bogus comment                 Text "bogus"
+//	<?php echo 1; ?>  a processing instruction        Text "?php echo 1; ?"
+//	<![CDATA[x]]>     a CDATA section in HTML         Text "[CDATA[x]]"
+//
+// The last two are the ones that matter, because they are not comments to
+// whatever reads the document next: the second is a PHP block in a template, and
+// the third is character data in every language that has CDATA - including SVG,
+// where the same bytes are not a comment token at all and their content is
+// reported as text.
+//
+// Sniffing [Comment.Text] does not answer it. A comment containing "?php x ?"
+// reads exactly like the processing instruction, because the difference is in the
+// delimiters and those are gone. What does answer it is how much source the token
+// occupied, from [Comment.SourceLocation], measured against the text:
+//
+//	source            End-Start-len(Text)
+//	<!--a-->          7    a comment, closed by -->
+//	<!--a--!>         8    a comment, closed by --!>
+//	<!--a             4    a comment, closed by the end of the input
+//	<!-->             5    a comment, the short empty form
+//	<!--->            6    the same, one dash longer
+//	<!bogus>          3    a bogus comment
+//	<![CDATA[x]]>     3    a CDATA section, which is a bogus comment in HTML
+//	<?php a ?>        2    a processing instruction
+//	<!bogus           2    a bogus comment, closed by the end of the input
+//	<?a               1    a processing instruction, closed by the same
+//
+// So 7 is "the document spelled this <!--...-->" and everything else is "it did
+// not", which is the test a rewrite that removes or edits comments wants: two of
+// the values collide - a truncated bogus comment and a processing instruction are
+// both 2 - so the distinction that can be made is with the ordinary form rather
+// than between the unusual ones.
+//
+// Editing normalises the delimiters. [Comment.SetText] on any of the four writes
+// <!--text-->, so a processing instruction becomes a comment and the template
+// engine downstream stops seeing it. [Comment.Remove] removes the whole token,
+// whatever it was spelled as, which is the one operation with no surprise in it.
+// Measured in commentshapes_test.go.
 //
 // It is valid only for the duration of the handler that received it; see the
 // package documentation on handler lifetime.
@@ -13,8 +58,13 @@ type Comment struct {
 	unit[*C.lol_html_comment_t]
 }
 
-// Text returns the comment's text, without the <!-- --> delimiters, as raw
-// source text with character references left encoded. See TextChunk.Text.
+// Text returns the comment's text, without the delimiters, as raw source text
+// with character references left encoded - nothing inside a comment is a
+// reference, so there is nothing to decode. See TextChunk.Text.
+//
+// The delimiters removed are whatever the document used, which is not always
+// <!-- and -->: see [Comment] for the four syntaxes that arrive here and how to
+// tell them apart.
 func (c *Comment) Text() string {
 	p, err := c.live()
 	if err != nil {
@@ -49,6 +99,12 @@ func (c *Comment) Text() string {
 // This is the only path that writes a comment's text for you. Building a comment
 // by hand out of [HTML] content has no equivalent guard - see the package
 // documentation on building markup yourself.
+//
+// It also writes the delimiters, as <!-- and -->, whatever the document used. A
+// token spelled <?php echo 1; ?> is a comment token, and setting its text turns
+// it into <!--...-->, which is a comment to a browser and nothing to the template
+// engine that was going to run it. [Comment] has the measured table and the test
+// for telling one from the other before writing.
 func (c *Comment) SetText(text string) error {
 	p, err := c.live()
 	if err != nil {

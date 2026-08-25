@@ -795,11 +795,23 @@
 //
 // The first two can be told apart by their text, which keeps the "?" that opened
 // them. The last two cannot: "<!x>" and "<!--x-->" both have the text "x", so
-// nothing about the comment distinguishes them. [Comment.SourceLocation] does -
-// slice the input at that range and look at whether it starts with "<!--" - and
-// that is the only way. A stripper that has the input to hand can check; one
-// working from a stream cannot, and should match the comments it wants to keep
-// rather than the ones it wants to remove.
+// nothing in the text distinguishes them.
+//
+// The delimiters do, and their length is knowable without the input. A comment's
+// text is reported as raw source bytes - a carriage return and a NUL are passed
+// through, not normalised - so the source range from [Comment.SourceLocation] is
+// the text plus exactly the delimiters:
+//
+//	End - Start - len(Text) == 7   the document spelled it <!--...-->
+//	anything else                  it did not
+//
+// which is the test a stripper wants, and it works from a stream. 3 is a bogus
+// comment or a CDATA section, 2 a processing instruction, 8 a comment closed by
+// "--!>", and 4, 5 and 6 the truncated and short-empty forms; two of the values
+// collide, so what can be told reliably is the ordinary form from the rest rather
+// than the unusual ones from each other. [Comment] has the measured table.
+// Slicing the input at that range and looking for "<!--" is the other way, for a
+// caller who has the input.
 //
 // Conditional comments are not one comment either. The downlevel-revealed form
 //
