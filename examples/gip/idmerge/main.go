@@ -45,6 +45,31 @@
 // <head> content with it. Each document is rewritten on its own and the outputs are joined, which
 // is the only way to keep the parts parseable - and the join is the caller's problem, so this one
 // wraps each part in a <section> and says so.
+//
+// # Every part has to be a whole document, and that is checked
+//
+// Joining separately-rewritten output is the pattern the package documentation warns about, and
+// this program is the pattern. A part that ends inside an unfinished construct swallows whatever
+// is concatenated after it, so the wrapper and the next part disappear into it. Measured, with
+// the check below removed and a first part cut short after class=":
+//
+//	<section data-source="a"><p id="p1">a</p><div class="c</section>…
+//
+//	elements a parser then finds:
+//	  section[data-source=a]  p[id=p1]
+//	  div[class=c</section><section data-source= b"=]
+//	  p[id=p2]
+//
+// Four elements where six were meant, the second part's <section> gone, and its data-source now
+// an attribute of the div. Nothing errors: the merge is a well-formed document that says
+// something else.
+//
+// So a part that does not end cleanly is refused, by name, before anything is written. The test
+// is the one the package documentation gives - append a sentinel element and see whether a
+// handler for it runs - and it costs nothing here, because the collect pass is already reading
+// the whole document and one more selector is all it takes. A string scan for a trailing "<"
+// would be cheaper and wrong: it cannot know that <!DOCTYPE does not begin with a letter, that
+// an open <script> has its last ">" behind it, or that a bare "</" is an unfinished end tag.
 package main
 
 import (
@@ -107,7 +132,16 @@ func NewMerger() *Merger {
 func (m *Merger) Collect(name string, doc string) (*Document, error) {
 	d := &Document{Name: name, Renames: map[string]string{}}
 
-	if _, err := lolhtml.RewriteString(doc,
+	// The sentinel rides along with the collect pass: if the document ends inside an
+	// unfinished tag, comment, doctype or raw-text element, the sentinel is swallowed and
+	// its handler does not run. That is the whole check, and it costs one selector.
+	ended := false
+
+	if _, err := lolhtml.RewriteString(doc+sentinel,
+		lolhtml.OnElement(sentinelTag, func(*lolhtml.Element) error {
+			ended = true
+			return nil
+		}),
 		lolhtml.OnElement("[id]", func(e *lolhtml.Element) error {
 			id := attrDecoded(e, "id")
 			if id == "" {
@@ -149,8 +183,29 @@ func (m *Merger) Collect(name string, doc string) (*Document, error) {
 	); err != nil {
 		return nil, err
 	}
+	if !ended {
+		return nil, &UnfinishedError{Name: name}
+	}
 	m.Documents = append(m.Documents, d)
 	return d, nil
+}
+
+// sentinelTag is a name no document will contain, and sentinel is the markup appended to test
+// whether a document ended cleanly. It is a custom element name so that it cannot be confused
+// with anything a page might have, and it carries no id, so the collect pass ignores it.
+const (
+	sentinelTag = "x-idmerge-end-9f3"
+	sentinel    = "<" + sentinelTag + "></" + sentinelTag + ">"
+)
+
+// UnfinishedError says a part does not end cleanly, so joining it to anything would corrupt both.
+type UnfinishedError struct {
+	Name string
+}
+
+func (e *UnfinishedError) Error() string {
+	return fmt.Sprintf("%s does not end cleanly: it stops inside a tag, a comment, a doctype "+
+		"or a raw-text element, and anything joined after it would be swallowed", e.Name)
 }
 
 // unique returns an unused id built from base.

@@ -213,6 +213,37 @@
   documentation says which of those applies where.
 
 ### Fixed
+- **`examples/gip/idmerge` was the pattern B177 warns about, and it corrupted
+  silently.** It rewrites each input with its own rewriter and concatenates the
+  outputs, which is exactly the join that is not the same as rewriting the whole.
+  A part that ends inside an unfinished construct swallows whatever comes after it,
+  so the wrapper and the next part disappear into it. Measured, on a first part cut
+  short after `class="`:
+
+      <section data-source="a"><p id="p1">a</p><div class="c</section>…
+
+      elements a parser then finds:
+        section[data-source=a]  p[id=p1]
+        div[class=c</section><section data-source= b"=]
+        p[id=p2]
+
+  Four elements where six were meant, the second part's `<section>` gone, and its
+  `data-source` now an attribute of the div. Nothing errored: the merge was a
+  well-formed document that said something else.
+
+  A part that does not end cleanly is refused now, by name, before anything is
+  written - `Merge` writes nothing at all on a bad part, since a partial merge on
+  standard output is worse than none. The check is the one the package
+  documentation gives: append a sentinel element and see whether its handler runs.
+  It costs one selector rather than a pass, because the collect pass is already
+  reading the whole document.
+
+  Three tests: every absorbing construct is refused and every clean ending
+  accepted - including the two that look unfinished and are not, an element left
+  open and a stray end tag - `Merge` writes nothing before refusing, and
+  `TestWhatTheCheckPrevents` measures the corruption itself, so the check is known
+  to be worth its selector rather than assumed to be.
+
 - **A mean over microsecond timings is not a measurement, and neither is a
   median on a coarse clock.** `examples/gip/queue` reported the share of a
   queue's time that went on building rewriters rather than rewriting, and drove
