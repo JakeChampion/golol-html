@@ -40,7 +40,10 @@ func FuzzRewrite(f *testing.F) {
 	// Text chunk counts are deliberately not compared: lol-html splits text at
 	// input chunk boundaries, so a byte-at-a-time write legitimately produces
 	// more text chunks than a single write. Structural handlers - elements,
-	// comments, the doctype - must fire the same number of times either way.
+	// comments, the doctype - must fire the same number of times either way, and
+	// so must the text *nodes*: how many there are and what each says once its
+	// chunks are joined does not depend on the writes. Only the boundaries
+	// between chunks do. See nodeinvariance_test.go for that stated as a table.
 	handlers := func(hits *int, saw *bytes.Buffer) []lolhtml.Option {
 		// saw records what each handler was told, not just that it ran.
 		//
@@ -51,10 +54,18 @@ func FuzzRewrite(f *testing.F) {
 		// identical counts. What a handler sees is the library's other interface,
 		// and this is the only place it is compared across chunkings.
 		//
-		// Text is deliberately not recorded per chunk. Chunk boundaries do split
-		// text nodes - that is the documented behaviour, not a bug - so the
-		// digest would differ legitimately. The text handler contributes its
-		// concatenation at the end instead, via textSeen.
+		// Text is recorded per node rather than per chunk. Chunk boundaries do
+		// split text nodes - that is the documented behaviour, not a bug - so a
+		// per-chunk digest would differ legitimately, and an earlier version of
+		// this harness therefore recorded no text at all, with a comment
+		// promising a concatenation that no code in it ever produced. The node
+		// is the unit that does not move: accumulate to IsLastInTextNode and the
+		// digest is comparable, which puts every text node's content under the
+		// same comparison as everything else a handler sees.
+		// node accumulates the current text node, so that the digest records what
+		// each node said rather than how it happened to be cut up.
+		var node strings.Builder
+
 		note := func(parts ...string) {
 			for i, s := range parts {
 				if i > 0 {
@@ -84,6 +95,14 @@ func FuzzRewrite(f *testing.F) {
 					return nil
 				}
 				return t.Replace(strings.ToUpper(t.Text()), lolhtml.Text)
+			}),
+			lolhtml.OnDocumentText(func(t *lolhtml.TextChunk) error {
+				node.WriteString(t.Text())
+				if t.IsLastInTextNode() {
+					note("textnode", strconv.Quote(node.String()))
+					node.Reset()
+				}
+				return nil
 			}),
 			lolhtml.OnDocumentComment(func(c *lolhtml.Comment) error {
 				*hits++

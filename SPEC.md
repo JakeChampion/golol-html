@@ -361,10 +361,13 @@ now encode the real behaviour:
   behaviour is right - a rewriter must be able to re-emit what it read, and writing a value back
   unchanged round-trips correctly because `SetAttribute` escapes - so the docs were corrected and
   `TestCharacterReferencesAreNotDecoded` pins it down.
-- **Text chunk counts are not chunk-invariant.** lol-html splits text at input chunk boundaries,
-  so writing byte-at-a-time produces more text chunks than one big write. Output is invariant;
-  handler invocation counts are not. `FuzzRewrite` compares output always, and invocation counts
-  only for structural handlers.
+- **Text chunk counts are not chunk-invariant, and nothing else is not.** lol-html splits text at
+  input chunk boundaries, so writing byte-at-a-time produces more text chunks than one big write.
+  Output, structural invocation counts, the number of text nodes and the text of each node are
+  invariant. `FuzzRewrite` compares output, structural counts and the text of each node -
+  accumulated to `IsLastInTextNode`, which is the unit that does not move - over random input;
+  `nodeinvariance_test.go` walks every write size from 1 to 40 over documents including ones that
+  end inside a construct.
 
 **Small writes cost a constant factor, not an asymptotic one.** Each `Write` costs about 100 ns
 of crossing into C on top of the document's own work and allocates nothing, so the number of

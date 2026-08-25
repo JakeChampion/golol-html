@@ -1197,6 +1197,38 @@
   order they were written.
 
 ### Testing
+- **The fuzzer compares the text of every node now, and its comment stops
+  promising something it never did.** `FuzzRewrite` rewrites each input twice, as
+  one write and in pieces, and compares the output, the structural invocation
+  counts and a digest of what every handler was told. Text was left out of the
+  digest for a good reason - chunk boundaries move, so a per-chunk digest differs
+  legitimately - and the comment said the text handler "contributes its
+  concatenation at the end instead, via textSeen". There was no `textSeen`, and
+  nothing in the harness recorded any text. The one part of the library whose
+  chunking is documented as write-dependent was the part with no comparison at
+  all.
+
+  The node is the unit that does not move, so the harness accumulates to
+  `IsLastInTextNode` and notes each node's text into the same digest as
+  everything else. 1.7 million executions at 40,000/sec found no disagreement,
+  which is the first time that claim has been checked against random input rather
+  than a fixed corpus.
+
+- **`nodeinvariance_test.go`: every write size from 1 to 40, over documents that
+  end inside a construct.** `examples/gip/chunkinvariance` already compares a
+  larger corpus and records more per call, at seven chosen write sizes -
+  1, 2, 3, 5, 7, 64, 1024. The gaps matter for a boundary test: a construct eight
+  bytes long is never cut at offset four by any of those. This walks the sizes
+  consecutively over eighteen documents - 720 comparisons - and adds the shapes
+  that end mid-construct, where the last chunk of a text node arrives during
+  `Close` rather than during `Write`:
+
+      <p>trailing text with no end        <script>var a = 1;
+      <div><p>text                        <!--
+      <p>text</p                          bare text
+
+  Nothing moved except the chunk count. The last chunk always arrives.
+
 - **`bytecost_test.go` gates the shape of the write cost**, in allocations rather
   than in time, since allocation counts are identical on every machine and timings
   are not. Four tests: the allocation count does not change with the write size,
@@ -1527,6 +1559,14 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **B4 and `SPEC.md` understated what survives chunking.** Both said "output is
+  invariant; handler invocation counts are not", which reads as though any handler
+  might fire a different number of times. Only a text handler does. The number of
+  text nodes, the text of each one, every structural count, and the output are all
+  the same however the input arrived - which is what the package documentation and
+  the README already said, and what the two gates above now assert. Corrected to
+  match.
+
 - **Byte-at-a-time writing is not quadratic.** The README, the package doc,
   `SPEC.md`, the fuzz harness, two lessons in `GIP.md` and B5 in the
   known-behaviours table all said that writes are quadratic at byte granularity
