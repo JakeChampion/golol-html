@@ -306,6 +306,15 @@ func (e *Element) SourceLocation() SourceLocation {
 // case-insensitively. The second result is false if the attribute is absent,
 // which distinguishes it from an attribute present with an empty value.
 //
+// It does not distinguish either of those from an element that is no longer
+// valid: a detached element reports ("", false) for everything. [HasAttribute]
+// does, because its signature has room for an error, and [Detached] answers
+// directly. See [ErrDetached].
+//
+// The value is live rather than a snapshot: a read after [SetAttribute] or
+// [RemoveAttribute] in the same handler sees the change, unlike [TextChunk.Text],
+// which is always the source.
+//
 // An element can carry the same attribute twice - the HTML parsing specification
 // calls that a parse error and requires a parser to drop all but the first, and
 // lol-html keeps them all. Where that shows up is set out under "An attribute
