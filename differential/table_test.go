@@ -134,3 +134,63 @@ func TestRemovingATableTakesFosteredContentWithIt(t *testing.T) {
 			"difference: %q", tree.String())
 	}
 }
+
+// insertedFieldPath returns the ancestry of an inserted hidden field in the parsed
+// tree, which is the question a rewrite that inserts one has to ask: not "did the
+// markup come out right" but "is the field where a browser will look for it".
+func insertedFieldPath(t *testing.T, doc string) string {
+	t.Helper()
+	out, err := lolhtml.RewriteString(doc, lolhtml.WithStrict(false),
+		lolhtml.OnElement(`form[method="post"]`, func(e *lolhtml.Element) error {
+			return e.Prepend(`<input type="hidden" name="csrf" value="t">`, lolhtml.HTML)
+		}))
+	if err != nil {
+		t.Fatalf("%q: %v", doc, err)
+	}
+	root, err := html.Parse(strings.NewReader(out))
+	if err != nil {
+		t.Fatalf("%q: %v", out, err)
+	}
+	path := "not in the tree"
+	var walk func(*html.Node, []string)
+	walk = func(n *html.Node, trail []string) {
+		if n.Type == html.ElementNode {
+			for _, a := range n.Attr {
+				if a.Key == "name" && a.Val == "csrf" {
+					path = strings.Join(append(trail, "input"), " > ")
+				}
+			}
+			trail = append(trail, n.Data)
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c, trail)
+		}
+	}
+	walk(root, nil)
+	return path
+}
+
+// TestAnInsertionCanLandOutsideTheElementItWasPutIn. The other direction of foster
+// parenting, and the one that bites a rewrite: the bytes say the field is inside
+// the form and the tree says it is beside it.
+func TestAnInsertionCanLandOutsideTheElementItWasPutIn(t *testing.T) {
+	for _, tc := range []struct{ doc, want string }{
+		// Where it was put.
+		{`<form method="post"><p>x</p></form>`, "html > body > form > input"},
+		{`<table><tr><td><form method="post"><p>x</p></form></td></tr></table>`,
+			"html > body > table > tbody > tr > td > form > input"},
+		// Outside the form: a form between a table and its first row is a shape the
+		// parser handles specially, and an insertion into it is fostered out.
+		{`<table><form method="post"><tr><td>x</td></tr></form></table>`,
+			"html > body > table > input"},
+		{`<table><tbody><form method="post"><tr><td>x</td></tr></form></tbody></table>`,
+			"html > body > table > tbody > input"},
+		// Outside everything.
+		{`<select><form method="post"><option>x</option></form></select>`,
+			"html > body > input"},
+	} {
+		if got := insertedFieldPath(t, tc.doc); got != tc.want {
+			t.Errorf("%q\n got %s\nwant %s", tc.doc, got, tc.want)
+		}
+	}
+}

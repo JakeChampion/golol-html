@@ -1318,6 +1318,26 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Foster parenting cuts both ways: an insertion can land outside the element it
+  was put in.** The table section covered reading and removal - content a parser
+  moves out of a table is reported inside it here, and removing the table removes
+  it. The insertion direction was unsaid, and it is the one that bites a rewrite.
+  Measured against golang.org/x/net/html, prepending `<input name="csrf">` to a
+  form:
+
+      <form method=post><p>x</p>            form > input        where it was put
+      <table><tr><td><form method=post>      td > form > input   the same
+      <table><form method=post><tr>          table > input       outside the form
+      <table><tbody><form method=post><tr>   tbody > input       outside the form
+      <select><form method=post>             body > input        outside everything
+
+  The bytes say the field is inside the form and the tree says it is beside it. For
+  a hidden field carrying a token, a nonce on a script, or anything whose position
+  is the whole point, "the markup looks right" is not the test - and a rewrite that
+  cannot tell those shapes apart should refuse the ones it cannot.
+
+  The section now says so, and `differential/table_test.go` pins all five shapes
+  through the oracle.
 - **A doctype can be removed and never written, and `Remove` did not say what
   removing one costs.** `Doctype` has `Name`, `PublicID`, `SystemID`,
   `SourceLocation` and `Remove` - no `Before`, `After` or `Replace`, because
