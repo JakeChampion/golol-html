@@ -1318,6 +1318,34 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A value is only source for the context it came from.** The escaping section said
+  that a value taken from the document is already raw source, so building markup with
+  it means not escaping it again, and `EscapeText` added that "text can usually be
+  written through raw". Measured, that is the unsafe half of the advice.
+
+  Each context lets through the character the other one ends on:
+
+      <span title="<img src=x onerror=alert(1)>">   an attribute may hold a raw "<"
+      <h2>a" onload=alert(1) x="b</h2>             text may hold a raw quote
+
+  Both are inert where they sit - the tree has no img in the first and no attributes
+  on the h2 in the second. Move the title into an element's text unescaped, which is
+  the obvious way to turn an alt into a `<title>`, and the img is an element with a
+  working onerror. Move the heading's text into an attribute unescaped and the new
+  element gets an onload. Measured both directions against x/net/html by counting
+  what the tree has, in `differential/context_test.go`.
+
+  A move needs the destination's terminator escaped and nothing else: the `<` for
+  text, the quote for a double-quoted attribute. That is what `Text` and
+  `SetAttribute` apply, which is why an attribute value going back into an attribute
+  can pass through unchanged, and it is why `EscapeText` and `EscapeAttribute` are
+  for values that are not already source - on one that is, they escape its `&` a
+  second time. The other answer, usually the better one, is not to move it: keep a
+  name in an attribute rather than in a `<title>` child.
+
+  The package documentation's build-markup section and `EscapeText` both say this
+  now, and it is B147.
+
 - **A wrapper is two insertions and the parser decides whether they wrap.** Putting
   a container around an element is `Before` with an opening tag and a closing tag at
   the element's end. Both insertions succeed, the output reads exactly as intended,

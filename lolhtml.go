@@ -825,6 +825,30 @@
 // "&amp;" into "&amp;amp;". Decode it first, or leave it raw and do not escape
 // it; see the section on character references.
 //
+// "Already raw source" is source for the context it came from, and moving a value
+// between contexts is where that bites. Each context lets through the character the
+// other one ends on:
+//
+//	<span title="<img src=x onerror=alert(1)>">   an attribute may hold a raw "<"
+//	<h2>a" onload=alert(1) x="b</h2>             text may hold a raw quote
+//
+// Both are inert where they sit. Move the title into an element's text unescaped -
+// the obvious way to turn an alt into a <title>, or a label into a caption - and the
+// img is an element with a working onerror. Move the heading's text into an
+// attribute unescaped, and the div being built gets an onload. Measured both
+// directions against golang.org/x/net/html in differential/context_test.go, by
+// counting what the tree has rather than by reading the output.
+//
+// So a move needs the destination's terminator escaped and nothing else: the "<"
+// for text, the quote for a double-quoted attribute. That is what [Text] and
+// SetAttribute apply, and it is why an attribute value that has to become an
+// attribute again can go through unchanged. Where the value has to be built into
+// markup by hand, escaping only that character keeps the value's own references
+// intact - EscapeText and EscapeAttribute are for a value that is not already
+// source, and on one that is they escape its "&" a second time. The other answer,
+// and usually the better one, is not to move it: keep a name in an attribute
+// (aria-label rather than a <title> child), which is what examples/gip/sprite does.
+//
 // There is a third context and it has no escaper, because it cannot have one. A
 // comment ends at "-->" or at "--!>", and nothing inside it is a reference, so
 // there is no spelling of those four characters that a comment can hold:

@@ -34,9 +34,14 @@ import "strings"
 // "Configure &amp; run" becomes "Configure &amp;amp; run". For a value read from
 // the document, either leave it raw and do not escape it, or decode it first with
 // html.UnescapeString from the standard library and escape the result. Which of
-// those is right depends on the position it is going into: text can usually be
-// written through raw, while a value going inside quotes you chose yourself
-// cannot, because the source may hold the other quote character.
+// those is right depends on where the value came from as well as where it is
+// going, because each context lets through the character the other one ends on. A
+// value that came from text can be written back into text raw, and needs the quote
+// escaped to go inside quotes you chose yourself. A value that came from an
+// attribute can go into another attribute raw, and needs the "<" escaped to become
+// text - an attribute may hold a raw "<", so a title of "<img src=x
+// onerror=alert(1)>" written into an element's text is an element. Measured both
+// ways in differential/context_test.go.
 //
 // Escaping is not sanitising. A URL is still a URL after escaping, so
 //
