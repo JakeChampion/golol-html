@@ -29,6 +29,34 @@ type TextChunk struct {
 // what it read - but it is easy to trip over when comparing against a plain Go
 // string. Use html.UnescapeString from the standard library when you need the
 // decoded form.
+//
+// # Transforming text and writing it back
+//
+// That is the operation most text handlers perform, and only one of the three
+// obvious spellings is right. Measured on <p>a < b &amp; caf&eacute;</p> with
+// strings.ToUpper as the transform, applied once and then again to its own
+// output:
+//
+//	Replace(f(Text()), Text)              A &lt; B &amp;AMP; CAF&amp;EACUTE;
+//	                                      then A &amp;LT; B &amp;AMP;AMP; ...
+//	Replace(f(Text()), HTML)              A < B &AMP; CAF&EACUTE;
+//	                                      then the same
+//	Replace(f(Unescape(Text())), Text)    A &lt; B &amp; CAFÉ
+//	                                      then the same
+//
+// The first escapes references that were already escaped - on the first pass,
+// not only on the second - so a page rewritten twice shows "&amp;LT;" where it
+// used to show "<".
+//
+// The second is stable and wrong in a quieter way: the transform ran over the
+// source, so "&eacute;" became "&EACUTE;", which is not a character reference at
+// all and renders as those nine characters. It is also [HTML], so anything the
+// transform produces is markup - fine for a transform you wrote, an injection
+// for one driven by data.
+//
+// The third is the one that means what it says. Decode, transform, and let the
+// library escape: the output is correct on the first pass and unchanged by the
+// second.
 func (t *TextChunk) Text() string {
 	p, err := t.live()
 	if err != nil {

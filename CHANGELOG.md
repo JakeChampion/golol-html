@@ -493,6 +493,20 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **The worked example for reading an element's whole text corrupted character
+  references.** It accumulated `TextChunk.Text`, which is source, and wrote the
+  result back as `Text`, which escapes it again. On the `<a href="/x">click
+  <b>here</b></a>` the example was written against, the two are the same; on
+  `<a href="/x">caf&eacute; <b>&amp; more</b></a>` with `strings.ToUpper` it
+  produced `CAF&amp;EACUTE; &amp;AMP; MORE`, which renders as those characters.
+  The example now decodes with `html.UnescapeString` first, and
+  `textroundtrip_test.go` transcribes both versions so the corrected one cannot
+  drift back.
+
+  `TextChunk.Text` gains the three-way comparison behind that: as `Text` without
+  decoding escapes twice, as `HTML` without decoding is stable and mangles the
+  reference into something that is not one, and decode-then-`Text` is the only
+  spelling that is right on the first pass and unchanged by the second.
 - **Nothing said how many times the destination is written to, and it is not what
   a reader would guess.** It is decided by what the rewrite does rather than by
   the document: a start tag a handler mutated is re-serialised piece by piece, so

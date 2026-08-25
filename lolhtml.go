@@ -560,12 +560,13 @@
 // same code looks correct.
 //
 // To act on an element's whole text, accumulate in the text handler and finish in
-// [Element.OnEndTag]:
+// [Element.OnEndTag] - and decode what you accumulated before writing it back,
+// which is the part this example got wrong for a long time:
 //
 //	lolhtml.OnElement("a", func(e *lolhtml.Element) error {
 //		acc.Reset()
 //		return e.OnEndTag(func(t *lolhtml.EndTag) error {
-//			return t.Before(rewrite(acc.String()), lolhtml.Text)
+//			return t.Before(rewrite(html.UnescapeString(acc.String())), lolhtml.Text)
 //		})
 //	}),
 //	lolhtml.OnText("a", func(tc *lolhtml.TextChunk) error {
@@ -573,6 +574,18 @@
 //		tc.Remove()
 //		return nil
 //	})
+//
+// [TextChunk.Text] is source, so the accumulator holds "caf&eacute;" and not
+// "café". Writing that back as [Text] escapes the ampersand a second time, and
+// the page shows the escaping. Measured on <a href="/x">caf&eacute; <b>&amp;
+// more</b></a> with rewrite = strings.ToUpper:
+//
+//	without UnescapeString   CAF&amp;EACUTE; &amp;AMP; MORE
+//	with it                  CAFÉ &amp; MORE
+//
+// The first renders as the literal text "CAF&EACUTE; &AMP; MORE". See
+// [TextChunk.Text] for the two other ways to write text back and why neither is
+// this one.
 //
 // That leaves the descendant elements behind as empty shells - "<b></b>" - since
 // removing text does not remove markup. Add a handler on "a *" calling
