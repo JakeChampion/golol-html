@@ -21,7 +21,9 @@ import (
 // Close finishes the document and flushes the tail of the output, and must be
 // called to get well-formed output.
 //
-// A Writer is not safe for concurrent use.
+// A Writer is not safe for concurrent use, and independent Writers on separate
+// goroutines are fine - as long as their handlers are independent too. See
+// [Option] on reusing one.
 type Writer struct {
 	c        *core
 	closed   bool

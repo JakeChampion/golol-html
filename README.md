@@ -190,7 +190,13 @@ does not unwind through Rust: it is caught at the boundary and re-raised on the
 goroutine that called `Write` or `Close`.
 
 A `Writer` is not safe for concurrent use, but independent `Writer`s on separate
-goroutines are fine.
+goroutines are fine - as long as their handlers are independent too. An `Option`
+holds no state and can be reused, and the function inside it is shared with every
+`Writer` it is given to, so anything it closes over is shared. Building the option
+set once at startup and reusing it per request is the natural thing to do and is
+where this bites: measured, two concurrent rewrites over a shared counter reported
+655 of 800 matches, and the race detector flagged it. Build the options where the
+state lives, once per rewrite.
 
 ## Encodings
 
