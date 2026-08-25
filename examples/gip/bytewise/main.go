@@ -114,7 +114,19 @@ func rewrite(doc []byte, chunk int) error {
 	return nil
 }
 
-// measure runs the rewrite at one write size, repeated runs times.
+// clockFloor is the elapsed time a measurement has to reach before its timing is worth
+// dividing. It is not chosen for accuracy but for portability: the Windows clock ticks about
+// every 15 ms, so a rewrite that takes microseconds reads as exactly zero there however
+// carefully it is timed. Measure until the total is clear of a tick, and the per-run figure
+// is a number rather than a rounding artefact.
+const clockFloor = 50 * time.Millisecond
+
+// maxRuns bounds the growth above, so a slow machine cannot turn a table into a wait.
+const maxRuns = 1 << 14
+
+// measure runs the rewrite at one write size, repeated runs times - and more than that if
+// the clock is too coarse to see the result, doubling until the total elapsed time is worth
+// dividing or maxRuns is reached.
 //
 // Allocations are counted from the runtime's own totals rather than sampled, so the figure
 // is exact for the work done between the two reads: the sole approximation is that a
@@ -130,25 +142,31 @@ func measure(doc []byte, chunk, runs int) (Measurement, error) {
 		return Measurement{}, err
 	}
 
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	start := time.Now()
-	for i := 0; i < runs; i++ {
-		if err := rewrite(doc, chunk); err != nil {
-			return Measurement{}, err
+	for {
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		start := time.Now()
+		for i := 0; i < runs; i++ {
+			if err := rewrite(doc, chunk); err != nil {
+				return Measurement{}, err
+			}
 		}
-	}
-	elapsed := time.Since(start)
-	runtime.ReadMemStats(&after)
+		elapsed := time.Since(start)
+		runtime.ReadMemStats(&after)
 
-	return Measurement{
-		Chunk:    chunk,
-		Bytes:    len(doc),
-		Runs:     runs,
-		Allocs:   float64(after.Mallocs-before.Mallocs) / float64(runs),
-		Duration: elapsed / time.Duration(runs),
-	}, nil
+		if elapsed < clockFloor && runs < maxRuns {
+			runs *= 2
+			continue
+		}
+		return Measurement{
+			Chunk:    chunk,
+			Bytes:    len(doc),
+			Runs:     runs,
+			Allocs:   float64(after.Mallocs-before.Mallocs) / float64(runs),
+			Duration: elapsed / time.Duration(runs),
+		}, nil
+	}
 }
 
 // Curve is the measurements for one document at several write sizes.

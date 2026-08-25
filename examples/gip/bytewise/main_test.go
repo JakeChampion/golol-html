@@ -44,10 +44,18 @@ func TestEveryShapeIsMeasurable(t *testing.T) {
 				t.Fatalf("measured %d write sizes, want 2", len(c.Measurements))
 			}
 			for _, m := range c.Measurements {
-				if m.Allocs <= 0 || m.Duration <= 0 {
-					t.Errorf("chunk %d measured %v allocations in %s, which cannot be right",
-						m.Chunk, m.Allocs, m.Duration)
+				if m.Allocs <= 0 {
+					t.Errorf("chunk %d measured %v allocations, which cannot be right",
+						m.Chunk, m.Allocs)
 				}
+				if m.Runs < 1 {
+					t.Errorf("chunk %d reported %d runs", m.Chunk, m.Runs)
+				}
+				// The duration is deliberately not asserted. A rewrite of a
+				// kilobyte takes microseconds and the Windows clock ticks about
+				// every 15 ms, so a timing of exactly zero there is the platform
+				// rather than a bug - which is what measure's repeat growth is
+				// for, and what the two tests at the end of this file cover.
 			}
 		})
 	}
@@ -80,6 +88,9 @@ func TestSmallWritesTakeLonger(t *testing.T) {
 	c := measureOrFail(t, []byte(Shapes["ordinary"](8<<10)), 1, 0)
 
 	one, whole := c.Measurements[0], c.Measurements[1]
+	if whole.Duration == 0 {
+		t.Skip("this platform's clock cannot resolve a whole-document rewrite of 8 KB")
+	}
 	if one.Duration < whole.Duration*2 {
 		t.Errorf("one-byte writes took %s and one whole write %s: the per-write cost of "+
 			"crossing into C was expected to dominate", one.Duration, whole.Duration)
@@ -275,5 +286,52 @@ func TestARewriteAtEveryWriteSizeProducesTheSameCost(t *testing.T) {
 	}
 	if err := rewrite(nil, 1); err != nil {
 		t.Errorf("an empty document: %v", err)
+	}
+}
+
+// TestACoarseClockDoesNotBreakTheReport. A platform whose clock is coarser than the work
+// reports a duration of zero, and the table has to come out as numbers rather than as
+// divisions by it. This is not hypothetical: it is what Windows did to the first version of
+// this program, where the tests asserted a duration above zero and the CI runner disagreed
+// eight times.
+func TestACoarseClockDoesNotBreakTheReport(t *testing.T) {
+	c := Curve{Bytes: 1000, Measurements: []Measurement{
+		{Chunk: 1, Bytes: 1000, Allocs: 2000, Runs: 1},
+		{Chunk: 0, Bytes: 1000, Allocs: 48, Runs: 1},
+	}}
+
+	out := c.String()
+	if strings.Contains(out, "NaN") || strings.Contains(out, "Inf") {
+		t.Errorf("a zero duration produced %q", out)
+	}
+	for _, m := range c.Measurements {
+		if got := m.NsPerByte(); got != 0 {
+			t.Errorf("a zero duration gave %v ns per byte", got)
+		}
+	}
+
+	// And the program's actual assertion does not consult the clock at all: it is
+	// allocations per byte.
+	small := Curve{Measurements: []Measurement{{Chunk: 1, Bytes: 1000, Allocs: 48}}}
+	large := Curve{Measurements: []Measurement{{Chunk: 1, Bytes: 4000, Allocs: 192}}}
+	if linear, _, _ := Linear(small, large, 1); !linear {
+		t.Error("the linearity check needed a timing")
+	}
+}
+
+// TestTheRepeatCountGrowsUntilTheClockCanSeeIt, which is what makes the timing column
+// meaningful where the clock is coarse. One rewrite of a kilobyte is far under the floor, so
+// the count has to have grown past the one asked for.
+func TestTheRepeatCountGrowsUntilTheClockCanSeeIt(t *testing.T) {
+	m, err := measure([]byte(Shapes["ordinary"](1<<10)), 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Runs <= 1 {
+		t.Errorf("measured one rewrite of a kilobyte in %d run and stopped: no clock "+
+			"resolves that", m.Runs)
+	}
+	if m.Duration <= 0 {
+		t.Errorf("grew to %d runs and still reported %s", m.Runs, m.Duration)
 	}
 }
