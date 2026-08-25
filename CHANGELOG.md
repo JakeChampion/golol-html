@@ -505,6 +505,23 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`ErrDetached` claimed more than it does.** It said it is returned by "any
+  method on a rewritable unit ... called after its handler has returned". Only
+  mutators return it. A getter has nowhere to put an error without a second
+  return value, so a detached one answers with a zero value and says nothing:
+  `TagName` `""`, `CanHaveContent` false, `SourceLocation` `{0, 0}`, `Attribute`
+  `("", false)`, `Attributes` no iterations. `Remove` and `ClearEndTagHandlers`
+  return nothing at all, having no error to give.
+
+  So a detached unit gives plausible answers, and `Element.Attribute` cannot tell
+  "the attribute is absent" from "the element is gone". `HasAttribute` can, purely
+  because its signature has room for an error - an accident rather than a design,
+  and worth knowing when choosing between them. `Detached()` answers directly and
+  costs nothing.
+
+  `detached_test.go` enumerates the surface: 38 mutators and every getter on all
+  six unit types, because a rule stated in prose and checked nowhere is how this
+  one drifted.
 - **A rename is the way round `ErrRawTextBreakout`.** Whether content is markup is
   decided by the element it is in, so `SetTagName` across the raw-text boundary
   reinterprets everything inside:

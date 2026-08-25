@@ -11,13 +11,36 @@ import (
 	"strings"
 )
 
-// ErrDetached is returned by any method on a rewritable unit (Element, Comment,
-// TextChunk, Doctype, DocumentEnd, EndTag) that is called after its handler has
+// ErrDetached is returned by a method that mutates a rewritable unit (Element,
+// Comment, TextChunk, Doctype, DocumentEnd, EndTag) after its handler has
 // returned.
 //
 // lol-html only guarantees these values are alive for the duration of the
 // handler invocation, so golol-html detaches the Go wrapper on return. Copy out
 // whatever you need inside the handler instead of retaining the unit.
+//
+// Not by a getter. A getter has nowhere to put an error without a second return
+// value, so a detached one answers with a zero value and says nothing:
+//
+//	every mutator                 ErrDetached
+//	                              SetAttribute, RemoveAttribute, SetTagName,
+//	                              Before, Append, Replace, OnEndTag, the
+//	                              streaming insertions, SetUserData
+//	every getter                  a zero value and no error
+//	                              TagName "", CanHaveContent false,
+//	                              SourceLocation {0, 0}, Attribute ("", false),
+//	                              Attributes no iterations
+//	Remove, ClearEndTagHandlers   nothing, having no error to give
+//	HasAttribute                  ErrDetached, because its signature has room
+//
+// So a detached unit gives plausible answers. [Element.Attribute] reporting
+// ("", false) is indistinguishable from the attribute being absent, and
+// [Element.HasAttribute] is the only getter that can tell those apart - which is
+// an accident of its signature rather than a design, and worth knowing when
+// choosing between them.
+//
+// [Element.Detached] and the same method on the other units answer the question
+// directly, and cost nothing.
 var ErrDetached = errors.New("lolhtml: rewritable unit used outside its handler")
 
 // errNilStreamFunc reports a streaming insertion with no function to run.
