@@ -6,6 +6,7 @@ package lolhtml
 import "C"
 
 import (
+	"fmt"
 	"io"
 	"runtime"
 	"runtime/cgo"
@@ -25,6 +26,11 @@ type Writer struct {
 	c        *core
 	closed   bool
 	poisoned bool
+	// cause is the error that poisoned the Writer, kept so that every later
+	// refusal can carry it. Without it, a caller who checks only Close - which
+	// is where Go idiom puts the check - learns that something failed and never
+	// what.
+	cause error
 }
 
 // core is the state shared between a Writer, its handler callbacks and its
@@ -109,13 +115,15 @@ func NewWriter(dst io.Writer, opts ...Option) (*Writer, error) {
 //
 // An error from one of your handlers, or from the destination writer, surfaces
 // here. lol-html cannot resume after an error, so the Writer is poisoned and
-// every later Write returns ErrPoisoned.
+// every later Write and the Close return ErrPoisoned wrapped around that first
+// error - so errors.Is and errors.As still reach it, however late it is asked
+// for.
 func (w *Writer) Write(p []byte) (int, error) {
 	switch {
 	case w.closed:
 		return 0, ErrClosed
 	case w.poisoned:
-		return 0, ErrPoisoned
+		return 0, w.poisonErr()
 	case len(p) == 0:
 		return 0, nil
 	}
@@ -131,7 +139,7 @@ func (w *Writer) Write(p []byte) (int, error) {
 	runtime.KeepAlive(p)
 
 	if err := w.c.st.takeDeferred(nativeErrIf(rc != 0, "write", cerr)); err != nil {
-		w.poisoned = true
+		w.poison(err)
 		return 0, err
 	}
 	return len(p), nil
@@ -142,6 +150,10 @@ func (w *Writer) Write(p []byte) (int, error) {
 //
 // The error from the final flush - including any handler error raised while
 // processing the document end - is reported here, so Close must not be ignored.
+//
+// If an earlier Write already failed, Close reports ErrPoisoned wrapped around
+// that first error rather than the bare sentinel: checking only Close is the
+// ordinary Go shape, and it should not lose the reason.
 func (w *Writer) Close() error {
 	if w.closed {
 		return nil
@@ -151,16 +163,36 @@ func (w *Writer) Close() error {
 	defer w.releaseOnPanic()
 
 	if w.poisoned {
-		return ErrPoisoned
+		return w.poisonErr()
 	}
 
 	var cerr C.lol_html_str_t
 	rc := C.golol_rewriter_end(w.c.nt.rw, &cerr)
 	if err := w.c.st.takeDeferred(nativeErrIf(rc != 0, "end", cerr)); err != nil {
-		w.poisoned = true
+		w.poison(err)
 		return err
 	}
 	return nil
+}
+
+// poison marks the Writer unusable and remembers why. takeDeferred hands each
+// error out once, so this is the only place it is kept.
+func (w *Writer) poison(err error) {
+	w.poisoned = true
+	if w.cause == nil {
+		w.cause = err
+	}
+}
+
+// poisonErr is what every later call returns: the sentinel, wrapped around the
+// error that caused it where there is one. A handler panic poisons the Writer
+// without an error - the panic goes to the caller instead - so the sentinel
+// stands alone in that case.
+func (w *Writer) poisonErr() error {
+	if w.cause == nil {
+		return ErrPoisoned
+	}
+	return fmt.Errorf("%w: %w", ErrPoisoned, w.cause)
 }
 
 // takeDeferred picks the error that best explains a failed C call.

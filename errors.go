@@ -25,9 +25,16 @@ var errNilStreamFunc = errors.New("lolhtml: StreamFunc is nil")
 // ErrClosed is returned by Write on a Writer that has already been closed.
 var ErrClosed = errors.New("lolhtml: writer is closed")
 
-// ErrPoisoned is returned by Write on a Writer whose earlier Write or Close
-// failed. lol-html leaves the rewriter unusable after an error, and calling into
-// it again would abort the process, so golol-html refuses instead.
+// ErrPoisoned is returned by Write and Close on a Writer whose earlier Write or
+// Close failed. lol-html leaves the rewriter unusable after an error, and calling
+// into it again would abort the process, so golol-html refuses instead.
+//
+// The refusal wraps the error that caused it, so errors.Is and errors.As reach
+// past the sentinel to the handler error or destination-writer error underneath.
+// That matters because the first failure is reported once, from the call that
+// was running, and the ordinary Go shape - write, then check Close - asks
+// afterwards. A handler panic is the exception: it poisons the Writer on its way
+// to the caller without leaving an error, and the sentinel then stands alone.
 var ErrPoisoned = errors.New("lolhtml: writer is poisoned by an earlier error")
 
 // A NativeError is an error reported by the underlying lol-html library.

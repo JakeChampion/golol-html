@@ -97,9 +97,7 @@ func TestDocumentEndHandlersReleaseTheirHandles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if after := settledHandles(); after != before {
-		t.Errorf("live handles %d before, %d after", before, after)
-	}
+	requireNoHandleLeak(t, before)
 }
 
 // TestEndTagHandlersRunInRegistrationOrder pins the sibling API. OnEndTag and

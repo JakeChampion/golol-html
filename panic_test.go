@@ -101,10 +101,7 @@ func TestPanicLeaksNoHandles(t *testing.T) {
 					t.Fatalf("round %d did not panic", i)
 				}
 			}
-			if after := settledHandles(); after != before {
-				t.Errorf("%d handles leaked over %d rewrites (%d before, %d after)",
-					after-before, rounds, before, after)
-			}
+			requireNoHandleLeak(t, before)
 		})
 	}
 }
@@ -161,11 +158,8 @@ func TestPanicOnAManualWriterIsIdempotentToClose(t *testing.T) {
 			if second != nil {
 				t.Errorf("Close after a recovered panic panicked again: %#v", second)
 			}
-			after := settledHandles()
+			requireNoHandleLeak(t, before)
 			runtime.KeepAlive(w)
-			if after != before {
-				t.Errorf("%d handles leaked (%d before, %d after)", after-before, before, after)
-			}
 		})
 	}
 }
@@ -217,9 +211,7 @@ func TestPanicInOneOfManyStreamingInsertsReleasesThemAll(t *testing.T) {
 		}
 	}
 
-	if after := settledHandles(); after != before {
-		t.Errorf("%d handles leaked (%d before, %d after)", after-before, before, after)
-	}
+	requireNoHandleLeak(t, before)
 }
 
 // TestStreamingHandlerErrorStillReleases is the neighbouring path, which was
@@ -242,7 +234,5 @@ func TestStreamingHandlerErrorStillReleases(t *testing.T) {
 		}
 	}
 
-	if after := settledHandles(); after != before {
-		t.Errorf("%d handles leaked (%d before, %d after)", after-before, before, after)
-	}
+	requireNoHandleLeak(t, before)
 }

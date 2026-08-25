@@ -513,7 +513,13 @@ Nothing gates the following. This is the shopping list.
   `-asan`, whose allocator is not the one that ships, and it compares the slope
   within 0.05 and the base within 8 rather than exactly. Any gate on a measured
   quantity needs the same question asked of it - what is this number's noise, and
-  is the tolerance above it?
+  is the tolerance above it? The handle counter is the third instance and the
+  answer there is a *direction* rather than a tolerance: `LiveHandles` counts the
+  whole process, a leak can only push it up, and a fall is another test's cleanup
+  landing. Draining before the window narrows that and does not close it, because
+  an object still reachable when the window opens can become collectable inside
+  it. `requireNoHandleLeak` asserts growth only; CI found the equality version
+  reporting "1 before, 0 after".
 - ~~**Whether every exported name is exercised at all.**~~ Closed:
   `apisurface_test.go` enumerates the exported declarations from the source and
   fails if a test file does not so much as mention one. It is the crudest
