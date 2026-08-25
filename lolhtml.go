@@ -511,7 +511,9 @@
 // textarea and title, which do decode references - and plaintext, which is raw
 // text that runs to the end of the input and cannot be closed at all. Ten
 // element names in total; the list is measured rather than quoted, in
-// rawtext_test.go.
+// rawtext_test.go, and [IsRawText] answers it for a tag name so a caller who
+// has to decide - a sanitiser unwrapping unknown elements, a text handler under a
+// wide selector - does not have to copy it out of this paragraph.
 //
 // So [Text], which escapes <, > and &, produces content that is inert but no
 // longer says what it said:

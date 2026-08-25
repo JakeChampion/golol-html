@@ -55,20 +55,69 @@ import (
 // and [TextChunk.Replace], which is the more surprising one, because editing a
 // script through a text handler is the obvious way to do it: a text chunk has no
 // way to name the element it is inside, so the check has nothing to look up.
-// Until it does, a text handler has to guard itself, and it knows the tag - it
-// registered the selector.
+// Until it does, a text handler has to guard itself: it knows the tag, because it
+// registered the selector, and [IsRawText] answers for a tag it does not know in
+// advance.
 //
 // A rename is the other way round this. [Element.SetTagName] can turn a script
 // into a div, and its text into markup, without inserting anything at all - so
 // there is nothing for this check to look at. See that method, and
 // [Element.RemoveAndKeepContent], which does it by taking the tags away
-// altogether.
+// altogether. [IsRawText] is the list, for a caller who has to decide.
 //
 // The check is by tag name only, so it does not consider namespaces. In SVG and
 // MathML none of these elements is raw text, and the refusal there is
 // conservative rather than wrong: an inserted "</title>" still ends an
 // <svg><title>, by ordinary tree construction rather than by the tokenizer.
 var ErrRawTextBreakout = errors.New("lolhtml: inserted content would end the raw-text element it is inside")
+
+// IsRawText reports whether an element with this tag name holds content that an
+// HTML parser does not read as markup.
+//
+// Ten names do:
+//
+//	script style                          raw text; character references are not decoded
+//	iframe noembed noframes noscript xmp  the same, and nothing else is special
+//	textarea title                        escapable raw text; references decode
+//	plaintext                             raw text, and it runs to the end of the input
+//
+// The package already uses this list for [ErrRawTextBreakout], which covers nine
+// of the ten: nothing closes a plaintext, so nothing can break out of one. This
+// reports all ten, because the hazards a caller has to handle for itself are
+// about the content not being markup, not about closing tags:
+//
+//	[Element.SetTagName]          renaming one turns its text into markup
+//	[Element.RemoveAndKeepContent] taking the tags away does the same
+//	[TextChunk.Before] and the rest  insertions through a text handler are not checked
+//
+// Each of those says so, and until now said it without giving the caller any way
+// to ask. A tool that renames, unwraps, or rewrites text under a wide selector
+// has to know the list, and the alternative to asking is copying ten names out of
+// a doc comment - which then falls behind the parser silently. The list here is
+// measured against the parser by TestTheGuardCoversEveryRawTextElement, so it
+// cannot.
+//
+// The comparison is by tag name and is case-insensitive for ASCII, so it accepts
+// both what [Element.TagName] reports and what
+// [Element.TagNamePreserveCase] does. It does not consider namespaces: in SVG and
+// MathML none of these elements is raw text, and a <title> inside an <svg> holds
+// ordinary markup. A caller who cares about that distinction has the namespace -
+// see [Element.NamespaceURI].
+func IsRawText(tag string) bool {
+	if isRawTextLower(tag) {
+		return true
+	}
+	lower := strings.ToLower(tag)
+	return lower != tag && isRawTextLower(lower)
+}
+
+func isRawTextLower(tag string) bool {
+	if tag == "plaintext" {
+		return true
+	}
+	_, ok := rawTextElements[tag]
+	return ok
+}
 
 // rawTextElements are the elements whose content an HTML parser does not read as
 // markup and which can be ended from inside. The map is by lower-case tag name,

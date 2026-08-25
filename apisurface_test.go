@@ -164,7 +164,12 @@ func TestTheSurfaceIsNotAccidentallyGrowing(t *testing.T) {
 	// NamespaceURI returns and what a caller compares it against.
 	// 138: ErrIncompleteRune, which turns a silently dropped partial rune at
 	// the end of a StreamFunc into an error.
-	const want = 138
+	// 139: IsRawText, so a caller can ask which elements hold content that is
+	// not markup instead of copying ten names out of a doc comment. The library
+	// already had the list and used it for ErrRawTextBreakout; the two hazards it
+	// does not cover - SetTagName and RemoveAndKeepContent - are the caller's, and
+	// were the caller's without an answer.
+	const want = 139
 
 	names := exportedNames(t)
 	if len(names) != want {

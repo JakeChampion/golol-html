@@ -475,3 +475,114 @@ func TestWhatIsStillNotChecked(t *testing.T) {
 		}
 	}
 }
+
+// TestIsRawTextIsMeasuredAgainstTheParser is the same measurement the guard is
+// held to, applied to the exported answer: for every element name in the HTML
+// index, feed a <b> inside it and see whether the parser reports an element.
+// That is the definition - content is not markup - so IsRawText has to agree with
+// it name for name, including plaintext, which the guard skips because nothing
+// can close it.
+func TestIsRawTextIsMeasuredAgainstTheParser(t *testing.T) {
+	raw := 0
+	for _, tag := range htmlElementNames {
+		inner := 0
+		if _, err := lolhtml.RewriteString("<"+tag+"><b>x</b></"+tag+">",
+			lolhtml.OnElement("b", func(*lolhtml.Element) error { inner++; return nil })); err != nil {
+			t.Fatalf("<%s>: %v", tag, err)
+		}
+		want := inner == 0
+		if got := lolhtml.IsRawText(tag); got != want {
+			t.Errorf("IsRawText(%q) = %v, but the parser %s report a <b> inside one",
+				tag, got, map[bool]string{true: "does", false: "does not"}[!want])
+		}
+		if want {
+			raw++
+		}
+	}
+	// Not vacuous: the index has to contain the names, or agreement means nothing.
+	if raw != 10 {
+		t.Errorf("the parser reported raw text for %d of the %d names in the index, want 10",
+			raw, len(htmlElementNames))
+	}
+}
+
+// TestIsRawTextCoversThePlaintextCase. plaintext is the one name where the
+// exported answer and the guard differ on purpose: its content is not markup, so
+// a rename or an unwrap reinterprets it, and no insertion can close it so the
+// guard has nothing to refuse.
+func TestIsRawTextCoversThePlaintextCase(t *testing.T) {
+	if !lolhtml.IsRawText("plaintext") {
+		t.Error("IsRawText(\"plaintext\") = false, but its content is not markup")
+	}
+	_, err := lolhtml.RewriteString("<plaintext>x",
+		lolhtml.OnElement("plaintext", func(e *lolhtml.Element) error {
+			return e.SetInnerContent("y</plaintext>z", lolhtml.HTML)
+		}))
+	if errors.Is(err, lolhtml.ErrRawTextBreakout) {
+		t.Error("the guard refused an insertion into a plaintext, which nothing can close")
+	}
+}
+
+// TestIsRawTextIgnoresCase, so it takes what either accessor reports.
+// TagNamePreserveCase keeps the spelling from the document, which is where a
+// caller deciding whether to unwrap is most likely to get its name.
+func TestIsRawTextIgnoresCase(t *testing.T) {
+	for _, tag := range []string{"SCRIPT", "Script", "sCrIpT", "PLAINTEXT", "TeXtArEa"} {
+		if !lolhtml.IsRawText(tag) {
+			t.Errorf("IsRawText(%q) = false", tag)
+		}
+	}
+	for _, tag := range []string{"DIV", "Span", "scriptx", "", "  script  ", "script "} {
+		if lolhtml.IsRawText(tag) {
+			t.Errorf("IsRawText(%q) = true; it is a tag name, not a search", tag)
+		}
+	}
+}
+
+// TestIsRawTextAnswersTheQuestionRemoveAndKeepContentAsks. The two hazards the
+// guard does not cover: a rename and an unwrap turn raw text into markup without
+// inserting anything. Guarding on IsRawText is the fix, and this is the
+// measurement that it is one.
+func TestIsRawTextAnswersTheQuestionRemoveAndKeepContentAsks(t *testing.T) {
+	const doc = `<noembed><img src=x onerror=alert(1)></noembed>`
+
+	unguarded, err := lolhtml.RewriteString(doc,
+		lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+			if e.TagName() != "img" {
+				e.RemoveAndKeepContent()
+			}
+			return nil
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(unguarded, "noembed") || !strings.Contains(unguarded, "onerror") {
+		t.Fatalf("unwrapping the noembed should have left its content bare: %q", unguarded)
+	}
+	images := 0
+	if _, err := lolhtml.RewriteString(unguarded,
+		lolhtml.OnElement("img", func(*lolhtml.Element) error { images++; return nil })); err != nil {
+		t.Fatal(err)
+	}
+	if images != 1 {
+		t.Fatalf("the unwrapped content parses as %d images, want 1 - that is the hazard", images)
+	}
+
+	guarded, err := lolhtml.RewriteString(doc,
+		lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+			if lolhtml.IsRawText(e.TagName()) {
+				e.Remove()
+				return nil
+			}
+			if e.TagName() != "img" {
+				e.RemoveAndKeepContent()
+			}
+			return nil
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if guarded != "" {
+		t.Errorf("guarded on IsRawText the noembed should have gone entirely, got %q", guarded)
+	}
+}

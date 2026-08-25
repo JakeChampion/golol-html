@@ -140,6 +140,20 @@ script and style bodies from values you control, and pass untrusted data through
 a data attribute or a `<script type="application/json">` block instead. JSON's
 own `\/` escape exists for exactly this.
 
+Ten element names hold content a parser does not read as markup, and the other
+two ways into that content are not checked at all: renaming one of them with
+`SetTagName`, or unwrapping one with `RemoveAndKeepContent`, turns its text into
+markup without inserting anything. `lolhtml.IsRawText(tag)` is the list, so a
+sanitiser that unwraps everything not on its allowlist can ask instead of
+copying ten names out of a doc comment:
+
+```go
+if lolhtml.IsRawText(e.TagName()) {
+	e.Remove() // not RemoveAndKeepContent: the content is not markup yet
+	return nil
+}
+```
+
 When you have to assemble markup yourself, `EscapeText` and `EscapeAttribute` are
 the escaping the library would have done for you:
 
