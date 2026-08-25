@@ -56,13 +56,27 @@
 // thing it was meant to leave one of.
 //
 // Where they do not both exist, the answer is two passes, and the cost is worth
-// knowing before choosing it. A second pass roughly doubles the fixed allocation
-// count - measured at 27 allocations for one pass and 57 for two, a ratio that
-// does not grow with document size, since almost all of it is building the
-// rewriter. What does grow is the buffer: the document has to be held while the
-// first pass reads it, which is the part that stops it being a streaming
-// rewrite. examples/gip/pagenav does this, with the second pass behind a flag
-// so a caller who already knows the answer stays on one.
+// knowing before choosing it. A second pass roughly doubles the allocation count,
+// at every size:
+//
+//	elements   one pass   two passes
+//	       2         24           52
+//	      40         45           98
+//	     800        425          866
+//
+// The ratio holds at about two everywhere, and the reason is not that the fixed
+// cost of building a rewriter dominates - at 800 elements it plainly does not.
+// It is that the second pass re-parses the whole document and runs every handler
+// again, so the per-element work doubles along with the fixed part. Two passes
+// over a large document are not cheap because the overhead is amortised; they
+// cost twice.
+//
+// What also grows is memory: the document has to be held while the first pass
+// reads it, which is the part that stops it being a streaming rewrite at all.
+// examples/gip/pagenav and examples/gip/glossary both do this, with the second
+// pass behind a flag or skipped entirely when the first pass found nothing to
+// do. Gated as a ratio in alloc_test.go, since the absolute numbers move with
+// the toolchain and the doubling does not.
 //
 // # An end tag is a token, not a fact about the element
 //
