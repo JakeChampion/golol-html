@@ -618,6 +618,25 @@ func (e *Element) IsRemoved() bool {
 // Measured across every shape in endtagposition_test.go, against what the source
 // spells at that position.
 //
+// A handler that only wants to know that the element is over, rather than to
+// write at its position, needs a finer distinction than that guard makes. There
+// are three timings, not two:
+//
+//	<p><em>a</em> b</p>       at </em>, its own tag, exactly where it ends
+//	<p><em>a</p>b             at </p>, an ancestor's tag, exactly where it ends
+//	<ul><li><em>a<li>b</ul>   at </ul>, an ancestor's tag, and "b" was already
+//	                          reported: the <em> ended at the second <li>
+//
+// So a foreign end tag is where the element ended when an ancestor's end tag is
+// what closed it, and later than where it ended when a sibling's start tag was.
+// Nothing in the callback separates those, and the difference matters to anything
+// accumulating - a converter closing an emphasis at the third row's callback
+// wraps the next item's text as well.
+//
+// The only way to be exact is to keep the stack of open elements and apply the
+// specification's implied end tags, which is what examples/gip/markdown and
+// examples/gip/depth do. Pinned in endtagposition_test.go.
+//
 // It can be called more than once to register several handlers, which run in
 // registration order. It fails if the element cannot have content - a void
 // element such as <br> has no end tag to wait for - so check CanHaveContent

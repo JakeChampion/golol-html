@@ -123,6 +123,15 @@
 // the same as everywhere else evidence arrives too late: read the document
 // twice, and let the first pass find out which elements have their own end tags.
 //
+// A handler that only wants to know the element is over, rather than to write at
+// its position, needs a finer distinction than the name gives. A foreign end tag
+// is where the element ended when an ancestor's end tag closed it, and later than
+// where it ended when a sibling's start tag did - in <ul><li><em>a<li>b</ul> the
+// em's callback arrives after "b" has been reported. Nothing in the callback
+// separates those two, so anything accumulating has to keep the stack of open
+// elements itself and apply the implied end tags. See [Element.OnEndTag], and
+// examples/gip/markdown for what that costs.
+//
 // # Handler lifetime
 //
 // The value passed to a handler is valid only until that handler returns.
