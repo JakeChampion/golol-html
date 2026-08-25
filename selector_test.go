@@ -170,6 +170,70 @@ func TestUnsupportedSelectors(t *testing.T) {
 	}
 }
 
+// A combinator inside :not() is rejected, which the rule the documentation gives
+// - supported if the rewriter can decide it at the start tag - does not predict.
+// :not(div p) asks whether an element is inside a div, which is exactly what the
+// plain descendant selector div p decides, at the start tag, and that one works.
+//
+// The sibling combinators are unsupported anywhere, so :not(div + p) and
+// :not(div ~ p) are no surprise. The descendant and child ones are supported
+// everywhere except inside :not().
+//
+// It matters because "not inside an X" is a real thing to want - an annotator
+// looking for outermost regions asks it of every element - and the answer is that
+// there is no selector for it, so a handler has to keep a stack.
+//
+// The error names the pseudo-class rather than what is inside it, which is the
+// part that costs the time. This test pins both the rejection and the message, so
+// upstream accepting it, or saying something more useful, fails here and the
+// documentation gets corrected rather than quietly rotting.
+func TestACombinatorInsideNotIsRejected(t *testing.T) {
+	const doc = `<div><p class="a">1</p></div><p class="a">2</p>`
+
+	rejected := []string{
+		":not(div p)",
+		":not(div > p)",
+		":not(div + p)",
+		":not(div ~ p)",
+		"p:not(div p)",
+		":not(.a .b)",
+	}
+	for _, sel := range rejected {
+		_, err := lolhtml.RewriteString(doc,
+			lolhtml.OnElement(sel, func(*lolhtml.Element) error { return nil }))
+		if err == nil {
+			t.Errorf("%s was accepted; the documentation says it is rejected", sel)
+			continue
+		}
+		if !strings.Contains(err.Error(), "Unsupported pseudo-class or pseudo-element") {
+			t.Errorf("%s: %v", sel, err)
+		}
+	}
+
+	// Everything else :not() takes, so the boundary is pinned on both sides and a
+	// change either way is visible.
+	accepted := []string{
+		":not(div)", ":not(.a)", ":not(#i)", ":not([class])", `:not([class="a"])`,
+		":not(*)", ":not(div.a)", ":not(div, span)", ":not(:first-child)",
+		":not(:nth-child(2))", ":not(:not(div))", ":not(*|div)",
+	}
+	for _, sel := range accepted {
+		if _, err := lolhtml.RewriteString(doc,
+			lolhtml.OnElement(sel, func(*lolhtml.Element) error { return nil })); err != nil {
+			t.Errorf("%s was rejected: %v", sel, err)
+		}
+	}
+
+	// And the combinators themselves are fine outside :not(), which is what makes the
+	// rejection a gap rather than a rule.
+	for _, sel := range []string{"div p", "div > p", ".a .b"} {
+		if _, err := lolhtml.RewriteString(doc,
+			lolhtml.OnElement(sel, func(*lolhtml.Element) error { return nil })); err != nil {
+			t.Errorf("%s was rejected outside :not(): %v", sel, err)
+		}
+	}
+}
+
 // TestNotWithACompoundSelectorIsWrong pins a defect rather than a limitation.
 //
 // :not() is correct with one simple selector. With a compound one it negates

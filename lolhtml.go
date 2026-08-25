@@ -344,7 +344,8 @@
 //	[a]  [a=v]  [a~=v]  [a|=v]         attribute presence and matching
 //	[a^=v]  [a$=v]  [a*=v]
 //	[a=v i]   [a=v s]                  case-sensitivity flags
-//	:not(x)                            one simple selector only, see below
+//	:not(x)                            one simple selector only, and no combinator
+//	                                   inside it at all, see below
 //	:first-child  :nth-child(2n+1)     odd, even and an+b all work, over the
 //	                                   nesting the tokens describe: see structural
 //	                                   selectors above
@@ -558,6 +559,40 @@
 //		}
 //		...
 //	})
+//
+// A combinator inside :not() is a separate matter: it is not wrong, it is
+// rejected, and the rule above does not predict it. "Supported if the rewriter
+// can decide it at the start tag" is satisfied by :not(div p) - whether an
+// element is inside a div is exactly what the plain descendant selector div p
+// decides, at the start tag, and that one works. Measured, the whole boundary:
+//
+//	:not(div)  :not(.a)  :not(#i)         accepted
+//	:not([a])  :not([a=v])  :not(*)       accepted
+//	:not(div.a)  :not(div, span)          accepted, and wrong as described above
+//	:not(:first-child)                    accepted
+//	:not(:nth-child(2))                   accepted
+//	:not(:not(div))                       accepted
+//	:not(div p)                           rejected
+//	:not(div > p)                         rejected
+//	:not(div + p)                         rejected
+//	:not(div ~ p)                         rejected
+//
+// The sibling combinators are unsupported anywhere, so those two are no
+// surprise. The descendant and child ones are supported everywhere except here.
+//
+// The error message does not say so. All four report
+//
+//	Unsupported pseudo-class or pseudo-element in selector.
+//
+// which names :not() rather than what is inside it, and follows it with the
+// advice about escaping a colon in a tag name. Neither part points at the
+// combinator. If a selector with :not() in it is rejected and the colon is not
+// the problem, look for a space or a > inside the parentheses.
+//
+// There is no selector for "not inside an X", then. Keep a stack instead: push
+// at the start tag, pop in the end-tag handler, and read the stack in the
+// handler - examples/gip/islands does exactly that, and has the two further
+// traps that come with it.
 //
 // # An attribute can appear twice
 //
