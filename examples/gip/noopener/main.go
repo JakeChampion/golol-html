@@ -104,8 +104,7 @@ func (h *hardener) classify(err error) error {
 	if err == nil {
 		return nil
 	}
-	var ne *lolhtml.NativeError
-	if errors.As(err, &ne) && ne.MemoryLimitExceeded() {
+	if errors.Is(err, lolhtml.ErrMemoryLimitExceeded) {
 		h.bailedOut = true
 		if h.graceful {
 			// The response is whole; it is simply not fully rewritten.

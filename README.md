@@ -252,7 +252,7 @@ single `Write` is far too low for the `io.Copy` this README recommends, and the
 first sign of it is a bail-out in production.
 
 Exceeding `MaxMemory` fails the rewrite with a `*NativeError` whose
-`MemoryLimitExceeded()` reports true. What reaches the sink depends on
+`errors.Is(err, lolhtml.ErrMemoryLimitExceeded)` is true. What reaches the sink depends on
 `GracefulBailOut` **and on how the input was fed**, which is the part worth
 knowing before choosing a default.
 

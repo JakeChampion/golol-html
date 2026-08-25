@@ -8,6 +8,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ErrDetached is returned by any method on a rewritable unit (Element, Comment,
@@ -50,16 +51,69 @@ func (e *NativeError) Error() string {
 	return "lolhtml: " + e.Op + ": " + e.Message
 }
 
+// ErrMemoryLimitExceeded matches the error lol-html reports when a rewrite
+// exceeds [MemorySettings.MaxMemory]:
+//
+//	if errors.Is(err, lolhtml.ErrMemoryLimitExceeded) {
+//		// the response is truncated; discard it
+//	}
+//
+// It is a match rather than a value: the error a caller receives is a
+// [NativeError] carrying lol-html's own message, and this is what
+// [errors.Is] compares it against.
+//
+// Worth distinguishing because it is one of the two failures a streaming caller
+// has to act on rather than merely report, and because [WithGracefulBailOut]
+// changes what has already reached the sink when it happens.
+var ErrMemoryLimitExceeded = errors.New("lolhtml: the memory limit has been exceeded")
+
+// ErrAmbiguousTag matches the error [WithStrict] produces when the parser
+// reaches a tag whose meaning depends on markup it cannot see:
+//
+//	if errors.Is(err, lolhtml.ErrAmbiguousTag) {
+//		// the response is truncated; discard it
+//	}
+//
+// It is the other failure a streaming caller has to act on, and the alternative
+// was matching lol-html's prose - which this package's own tests were doing,
+// with strings.Contains(ne.Message, "ambiguous").
+var ErrAmbiguousTag = errors.New("lolhtml: strict mode refused an ambiguous tag")
+
+// Is lets errors.Is reach the two conditions a caller branches on. Any other
+// target is not something this error can claim to be, so the answer is no and
+// errors.Is falls back to its own comparison.
+func (e *NativeError) Is(target error) bool {
+	switch target {
+	case ErrMemoryLimitExceeded:
+		return e.Message == memoryLimitExceededMessage
+	case ErrAmbiguousTag:
+		return strings.HasPrefix(e.Message, ambiguousTagPrefix)
+	}
+	return false
+}
+
 // MemoryLimitExceeded reports whether this error is lol-html's memory-limit
-// error, which is worth distinguishing because [WithGracefulBailOut] makes it
-// recoverable at the response level.
+// error.
+//
+// [ErrMemoryLimitExceeded] with [errors.Is] says the same thing and reads the
+// way Go callers expect, including through the wrapping that [ErrPoisoned] adds
+// to a later Close. This remains because it is exported.
 func (e *NativeError) MemoryLimitExceeded() bool {
 	return e.Message == memoryLimitExceededMessage
 }
 
-// lol-html's wording for the memory-limit error, from
-// c-api/src/rewriter.rs -> MemoryLimitExceededError.
+// lol-html's wording for the two errors that are classified rather than merely
+// reported. Both are gated by tests that provoke the real thing, so a reword
+// upstream fails the build rather than silently turning a caller's guard off.
+//
+// From c-api/src/rewriter.rs -> MemoryLimitExceededError.
 const memoryLimitExceededMessage = "The memory limit has been exceeded."
+
+// The ambiguity message names the offending tag - "a text content tag
+// (`<xmp>`)" - so only the part before it is fixed. Measured identical for
+// every shape that triggers it: xmp, style, title and iframe, in <select> and
+// in <frameset>.
+const ambiguousTagPrefix = "The parser has encountered a text content tag ("
 
 // nativeErr converts a shim out-parameter into a Go error, freeing the
 // library-allocated message. It must be called only when the shim reported

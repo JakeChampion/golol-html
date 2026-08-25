@@ -20,6 +20,21 @@
   arrived - there is no point at which delivery is known, since the rewriter may
   still be holding the content.
 
+- **`ErrMemoryLimitExceeded` and `ErrAmbiguousTag`, so `errors.Is` reaches the
+  two failures a streaming caller has to act on.** Both arrive as a
+  `*NativeError` carrying lol-html's own message. The memory one had a
+  `MemoryLimitExceeded()` method, so identifying it took `errors.As`, a type name
+  and a method call; the strict-mode ambiguity had nothing, and this package's own
+  test identified it with `strings.Contains(ne.Message, "ambiguous")`. Both now
+  match through `errors.Is`, including through the wrapping a poisoned `Close`
+  adds. `MemoryLimitExceeded()` stays, because it is exported.
+
+  The matching is still against lol-html's prose, which is the only thing there
+  is; what changed is that it is in one place and provoked by tests rather than
+  repeated in every caller. The ambiguity message names the offending tag, so the
+  match is on the fixed part, checked against all six shapes that produce it and
+  against five that look like they should and do not.
+
 - **`ErrRawTextBreakout`: an insertion that would close the element it is going
   inside is now refused.** `Comment.SetText` has always refused text containing a
   comment-closing sequence; the script and style equivalent was recorded in a test
