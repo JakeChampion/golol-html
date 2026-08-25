@@ -424,6 +424,32 @@
 // neither content type is right inside a <script> or a <style>; and markup you
 // build yourself is the only thing here that is not escaped for you.
 //
+// # What Text guarantees, and what it does not
+//
+// [Text] escapes the three characters that could begin markup, so nothing it
+// writes becomes a tag. That is checkable, and it is checked: over every document
+// and value the generator can produce, an insertion as Text leaves the sequence of
+// tags in the output exactly as it was. properties/text_structure_test.go holds
+// that, and the same for a streamed insertion and for [EscapeText] used by hand.
+//
+// The guarantee is about the markup, not about the tree a browser builds from it.
+// Tree construction responds to the presence of text, so one character can change
+// the tree while adding no tag at all. Measured on a formatting element misnested
+// across a block boundary:
+//
+//	<p><a><div></div></a></p>   tree:  <p><a></a></p><div></div><p></p>
+//	<p><a><div>x</div></a></p>  tree:  <p><a></a></p><div><a></a></div><p></p>
+//
+// The second tree has an <a> the markup does not contain, because inserting a
+// character makes the parser reconstruct the active formatting elements at that
+// point. Appending "x" as Text through this library does the same thing. Pinned in
+// differential/textstructure_test.go, along with the shapes where it does not
+// happen - well-nested documents are unaffected.
+//
+// So "this rewrite cannot change the structure" is true of the bytes and false of
+// the tree, and a program promising the stronger version is promising something
+// the format does not allow.
+//
 // # Two insertions of the same kind
 //
 // Every insertion goes immediately adjacent to the unit, and the one rule has a

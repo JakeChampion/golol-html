@@ -505,6 +505,25 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **What `ContentType.Text` guarantees, stated at the level it holds.** Nothing it
+  writes can become a tag - now a property over every document and value the
+  generator produces, for the plain path, the streaming path and `EscapeText` used
+  by hand, comparing the sequence of tags in and out.
+
+  The guarantee is about the markup and not about the tree, and the difference is
+  measurable. Tree construction responds to the presence of text, so one character
+  can change the tree while adding no tag:
+
+      <p><a><div></div></a></p>    tree: <p><a></a></p><div></div><p></p>
+      <p><a><div>x</div></a></p>   tree: <p><a></a></p><div><a></a></div><p></p>
+
+  The second has an `<a>` the markup does not contain, because inserting a
+  character makes the parser reconstruct the active formatting elements there.
+  Appending "x" as `Text` through this library does the same. So "this rewrite
+  cannot change the structure" is true of the bytes and false of the tree, and a
+  program promising the stronger version is promising something the format does not
+  allow. Pinned in `differential/textstructure_test.go`, with the well-nested
+  shapes where it does not happen.
 - **`Comment.SetText` refuses; its documentation said it escapes.** The sentence
   was "The value is escaped so that it cannot terminate the comment early, so
   untrusted input is safe". The value is rejected:
