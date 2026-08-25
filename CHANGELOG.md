@@ -1354,6 +1354,29 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Two handlers can run inside `Close`, and a panic from there leaves the Writer closed
+  rather than poisoned.** `Close` said the error from the final flush is reported there,
+  "including any handler error raised while processing the document end". The document end
+  is not the only handler that runs inside Close:
+
+      <p>a</p>   every text chunk, including the boundary, arrives during Write
+      <p>a       the boundary chunk arrives during Close
+
+  So a text handler's error - or its panic - can surface from `Close`, and a caller that
+  recovers around `Write` alone has a gap. An end-tag handler for an element nothing
+  closes never runs at all, so it is not a third case.
+
+  And the two kinds of panic leave different states behind. A panic from `Write` poisons
+  the Writer with the bare sentinel, because the panic went to the caller instead of
+  becoming an error. A panic from a handler inside `Close` leaves it *closed*: Close marks
+  it closed before it does anything, so a later `Write` reports `ErrClosed` and a later
+  `Close` reports nil. Either way the native resources are released on the way out of the
+  boundary and the library is unaffected - a new Writer works, and a Writer already
+  mid-document is untouched.
+
+  `Close` carries both now, and `examples/gip/panics` prints the table across all eight
+  handler kinds. B165.
+
 - **A retained `Sink` is the seventh unit, and the only one whose getter reports the
   detachment.** `ErrDetached` listed the six rewritable units and left out the `Sink`
   handed to a `StreamFunc`, which has the same handler-bounded lifetime. Measured, it is
