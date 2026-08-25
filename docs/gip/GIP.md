@@ -175,6 +175,17 @@ tests in `_test.go` and nowhere else:
 4. no new dependency. The root module has no `require` lines and keeps none
    (wontfix W6), so the standard library is what you have.
 
+Rule 3 is for an app that rewrites documents, which is most of them. Some turns
+produce a measuring instrument instead - what a write size costs, which handler
+patterns hold memory, where a rewrite stops when the destination breaks - and
+those have no business inserting content they were not asked to insert. For
+those, rule 3 is the wrong shape and the requirement is instead that the
+measurement be honest: a figure that does not depend on the machine where one
+can be found, the arithmetic checked against a second method, and an exit status
+that fails when the claim fails rather than a table that always prints. Rules 1,
+2 and 4 hold for every app either way, and the streaming path is not optional in
+a measuring instrument - it is the thing being measured.
+
 `main_test.go` must contain at least **three** non-trivial tests: not
 `assert(2+2 == 4)`, but the invariants that would actually break if you got it
 wrong. At least one of the three must be a property over the whole input rather

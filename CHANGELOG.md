@@ -1197,6 +1197,45 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/email`** prepares a page for a mail client: it inlines the
+  stylesheet, absolutises the URLs, and removes what a client would refuse to run.
+  It is the clearest case in the collection of a rewriter being most of a tool and
+  not all of it - selector matching is most of what inlining CSS needs, and
+  specificity, cascade and inheritance are the rest, of which it implements the
+  cascade and says plainly that it does not implement specificity.
+
+  Which rules it can inline is decided by the library rather than by the program: it
+  builds a rewriter per rule and keeps the ones the selector engine accepts, so its
+  list cannot drift from `selector_test.go`'s. A refused rule is reported with the
+  library's own reason - `a:hover` for a pseudo-class, `.row + .row` for a
+  combinator - because a newsletter whose hover styles quietly vanished is
+  somebody's afternoon.
+
+  Three things about the shape are worth reading if you are writing something like
+  it. The stylesheet arrives as the text of a `<style>` element, so nothing before
+  it can be styled - which is why this works on templates, where the sheet is in the
+  head, and the program counts and reports the elements that came first rather than
+  losing them silently. Whether to strip the `<style>` blocks afterwards is a real
+  choice rather than a default: keeping them means the rules that could not be
+  inlined still work in the clients that honour a style block. And the declarations
+  are *prepended* to an element's style attribute, in reverse registration order,
+  because that is the cascade - appending, which is the obvious thing, makes an
+  earlier rule beat a later one and the sheet beat the element's own style.
+
+  Two of its tests are properties rather than cases, and both earned their place.
+  Inlining twice is inlining once - which failed first time round, because appending
+  declarations without checking turned `style="color:red;"` into
+  `style="color:red; color:red;"` on a second pass. And a footer can never become
+  markup, over eight footers including `</body></html><script>alert(1)</script>`,
+  which is what `lolhtml.Text` is for: the document's element list is identical
+  whatever the footer says. The third property is that the output does not depend on
+  how the input was chunked, over six read sizes from one byte up.
+
+  Its own CSS parser had the bug that shallow CSS parsers have: it took the closing
+  brace of the rule inside `@media` as the end of the at-rule and produced a rule
+  whose selector was `}`. Braces are counted now, and the test that would have
+  caught it is in the file.
+
 - **`examples/gip/middleware`** rewrites a handler's HTML on the way out without
   giving up streaming, and measures what the alternative costs. The same handler,
   writing five chunks forty milliseconds apart:
