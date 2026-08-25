@@ -410,13 +410,31 @@ func OnComment(selector string, fn func(*Comment) error) Option {
 // be reported as several chunks, and only the last has IsLastInTextNode set.
 // Accumulate across chunks if you need whole text nodes.
 //
-// The boundaries follow the writes, so a caller does not choose them. What they
-// do not do is split a character; see [TextChunk.Text]. Everything about a
+// A caller does not choose the boundaries: the writes split a node, and so does
+// the tokenizer at a "<" that turns out not to begin a tag - see
+// [TextChunk.Text]. What no boundary does is split a character. Everything about a
 // document that a handler can observe is invariant across write patterns except
 // this - element, comment and doctype calls, their order, tag names, attributes,
 // source locations, end tags, and the text of each node are all the same however
 // the input arrived - measured over 22 documents and seven write patterns in
 // examples/gip/chunkinvariance.
+//
+// Registering this handler is not free even if it does nothing. The text path
+// decodes and re-encodes, so a document holding bytes that are not valid in the
+// declared encoding comes out different for having been looked at:
+//
+//	<p>caf\xe9</p>   no text handler          <p>caf\xe9</p>
+//	                 a text handler, reading   <p>caf\uFFFD</p>
+//	                 a text handler, ignoring  <p>caf\uFFFD</p>
+//
+// The other paths do not do this: a comment handler leaves a comment's bytes
+// alone, and an element handler leaves an attribute's alone, whatever they hold.
+// So "adding a read-only handler cannot change the output" is true of every kind
+// but this one, which matters for instrumentation - a counter, an audit, a
+// linter - added to a rewrite that has to be byte-exact. Where the answer only
+// has to be reported rather than served, write the rewrite's output to
+// io.Discard and the question does not arise. Measured in readonlytext_test.go
+// and as a property in properties/.
 //
 // The last chunk of a node is its own call and carries no bytes, in every shape
 // measured - see [TextChunk.IsLastInTextNode] - so this handler runs at least

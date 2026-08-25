@@ -1318,6 +1318,35 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Registering a text handler is not free even if it does nothing, and the other
+  handlers are.** That a text handler re-encodes undecodable bytes was documented,
+  inside `ErrInvalidUTF8`, as a consequence of talking about invalid UTF-8. What
+  was not said is that this makes "adding a read-only handler cannot change the
+  output" false for exactly one kind of handler, and true for the rest:
+
+      <p>caf\xe9</p>   no text handler             <p>caf\xe9</p>
+                       a text handler, reading      <p>caf\uFFFD</p>
+                       a text handler, ignoring     <p>caf\uFFFD</p>
+
+      <p title="caf\xe9">text</p><!--caf\xe9-->   with all three kinds of
+                       read-only handler registered: unchanged
+
+  Measured both ways: the same undecodable byte survives in an attribute value and
+  in a comment while a text handler is registered, and does not survive in text.
+
+  It matters for instrumentation - a counter, an audit, a linter added to a rewrite
+  that has to be byte-exact - and the answer where the output is a report rather
+  than a document is to write the rewrite's output to `io.Discard`, where the
+  question does not arise. `OnText` now says all of it.
+
+  `readonlytext_test.go` measures five kinds of read-only handler over eight
+  documents, and `properties/properties_test.go` gains the property over generated
+  documents: a rewrite whose handlers only observe gives back the document it was
+  given. That is stronger than the passthrough property next to it, which
+  registers nothing at all.
+
+  Also corrected in passing: `OnText` still said chunk boundaries "follow the
+  writes", which the tokenizer half of that was fixed for in `TextChunk.Text`.
 - **"Registering a few handlers with broad selectors and deciding inside them is
   cheaper than registering many narrow ones" is backwards.** The Cost section
   advised it, and the measurement says the opposite by an order of magnitude.
