@@ -1354,6 +1354,26 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A rewrite cannot convert a document's encoding, and a lost byte has two shapes.**
+  `WithEncoding` said the output is in the document's encoding throughout, and left the
+  consequence for a caller to work out. It is worth stating: there is no
+  output-encoding option, and replacing every text chunk and every attribute with
+  itself leaves the bytes exactly as they were - measured over windows-1252,
+  iso-8859-2, shift_jis, euc-jp and gbk, each of which also round-trips byte for byte
+  through a text handler. So a program that has to convert transcodes the bytes itself,
+  and the rewriter is what proves the result: read both versions, compare what the
+  handlers were given.
+
+  The other half is the failure. A byte the decoder cannot use reaches the output as
+  the three bytes of U+FFFD when the document is declared UTF-8, and as `&#65533;` -
+  seven bytes where the document had one - in a legacy encoding, because U+FFFD is
+  outside a legacy repertoire and a numeric reference is the documented fallback for
+  that. Both only with a text handler registered; with none, the byte passes through
+  either way.
+
+  `WithEncoding` carries both now, and `legacyencoding_test.go` gates them along with
+  the reference-in-source reporting and the insert-beyond-the-repertoire case. B159.
+
 - **Invalid bytes are lossy to read everywhere and lossy to write only in text.**
   `ErrInvalidUTF8` said that the document path does not refuse bytes that are not valid
   UTF-8, and that they pass through unless a text handler is registered. Two things it
