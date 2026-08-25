@@ -1354,6 +1354,25 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A second `Close` is quiet, including after a failure.** `Close` says it is safe to
+  call more than once, and that if an earlier `Write` failed it reports `ErrPoisoned`
+  wrapped around the cause because "checking only Close is the ordinary Go shape, and it
+  should not lose the reason". Both are true of the *first* Close. A later one does
+  nothing and returns nil, which is deliberate - `faults_test.go` asserts it over
+  hundreds of injected fault combinations - and worth stating next to the promise,
+  because the two sentences together read as more than they are.
+
+  The shape that gets caught is an explicit `Close` in an error path together with a
+  deferred one that assigns to the returned error: the deferred call runs second, sees a
+  closed writer, and returns nil for a rewrite that failed. Keep one Close, and let it be
+  the one whose error is checked.
+
+  This turn confirmed the rest of the error state machine rather than changing it. What
+  is new is that it is now in one place: `examples/gip/poisoned` prints the whole table -
+  what the first Write, a later Write and Close return after a handler error, a
+  destination error, a memory bail-out, an ambiguous tag, a handler panic and a clean
+  close, and what each of those left at the destination - and its tests pin every row.
+
 - **`MaxMemory` does not bound the document, and its floor is not a function of the
   write size.** The option said to size the limit with the writes that will actually be
   made, and gave one example. Three measurements sharpen that into something a caller
