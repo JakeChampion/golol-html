@@ -151,6 +151,9 @@ func (t *TextChunk) SourceLocation() SourceLocation {
 }
 
 // Before inserts content immediately before the chunk.
+//
+// Inside a raw-text element this is unguarded: see [TextChunk.Replace] and
+// [CheckRawText].
 func (t *TextChunk) Before(content string, ct ContentType) error {
 	return t.content(content, ct, "text_chunk_before", cfTextChunkBefore)
 }
@@ -159,11 +162,22 @@ func (t *TextChunk) Before(content string, ct ContentType) error {
 //
 // Called twice, the second insertion lands before the first: see the package
 // documentation on two insertions of the same kind.
+//
+// Inside a raw-text element this is unguarded: see [TextChunk.Replace] and
+// [CheckRawText].
 func (t *TextChunk) After(content string, ct ContentType) error {
 	return t.content(content, ct, "text_chunk_after", cfTextChunkAfter)
 }
 
 // Replace replaces the chunk with content.
+//
+// Rewriting the text of a raw-text element - a stylesheet, a script body - means
+// [HTML] rather than [Text], because [Text] escapes the three markup characters and
+// raw text does not decode references: a CSS ">" would come back as "&gt;" and a
+// script's "a < b" as "a &lt; b". And [HTML] here is not checked for a breakout the
+// way the [Element] methods are, because a chunk cannot say what element it is in,
+// so a "</style>" in the content ends the element. Call [CheckRawText] with the tag
+// name the handler asked for.
 func (t *TextChunk) Replace(content string, ct ContentType) error {
 	return t.content(content, ct, "text_chunk_replace", cfTextChunkReplace)
 }

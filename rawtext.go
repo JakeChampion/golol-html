@@ -177,6 +177,38 @@ func checkRawText(tag, content string) error {
 		content[i:min(i+len(lower)+3, len(content))], i, advice)
 }
 
+// CheckRawText reports whether content would end the raw-text element named tag,
+// returning an error wrapping [ErrRawTextBreakout] if it would and nil otherwise.
+// A tag that is not one of the raw-text elements is always nil, and so is
+// [plaintext], which nothing closes.
+//
+// It exists because one set of insertion paths cannot apply this check for you. The
+// [Element] and [EndTag] methods know which element they are writing into and refuse
+// a breakout themselves. A [TextChunk] does not: lol-html hands a chunk over with no
+// way to ask what element it came from, so [TextChunk.Before], [TextChunk.After] and
+// [TextChunk.Replace] with [HTML] write whatever they are given.
+//
+// That is the path a rewrite editing a stylesheet or a script body has to use,
+// because [Text] escapes the three markup characters and raw text does not decode
+// references - so a CSS ">" comes back as "&gt;" and a script's "a < b" as
+// "a &lt; b". A handler registered as OnText("style") knows the tag name it asked
+// for, and can hand it to this:
+//
+//	lolhtml.OnText("style", func(t *lolhtml.TextChunk) error {
+//		// … accumulate to IsLastInTextNode, rewrite the CSS …
+//		if err := lolhtml.CheckRawText("style", css); err != nil {
+//			return err
+//		}
+//		return t.Replace(css, lolhtml.HTML)
+//	})
+//
+// The rule it applies is the tokenizer's, measured rather than assumed: raw text ends
+// at "</" followed by the tag name in any case, followed by ">", "/", ASCII
+// whitespace, or the end of the content - because what follows an insertion is the
+// rest of the document. The error names the offending sequence, its offset, and what
+// to write instead for that element.
+func CheckRawText(tag, content string) error { return checkRawText(tag, content) }
+
 // findClosingTag returns the index of a sequence that would end a raw-text
 // element named tag, or -1.
 //

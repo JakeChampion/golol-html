@@ -165,8 +165,18 @@ e.SetInnerContent(
 
 Both take a literal value, not markup. Everything the library reports is raw
 source with character references still encoded, so escaping a value read from the
-document turns `&amp;` into `&amp;amp;` - decode it first, or leave it raw and do
-not escape it.
+document turns `&amp;` into `&amp;amp;` - decode it first, or leave it raw. Leaving
+it raw is only safe back into the context it came from: an attribute value may hold
+a bare `<`, so a `title` written into an element's text unescaped is markup, and a
+text node may hold a bare `"`, so text written into an attribute ends it. Escape the
+one character the destination ends on, or decode and escape properly.
+
+Rewriting text that is already there is the other way round again. `TextChunk.Replace`
+with `Text` escapes `<`, `>` and `&`, which raw text does not decode - so a
+stylesheet's `.a > .b` comes back as `.a &gt; .b`. Use `HTML` to edit a stylesheet or
+a script body, and call `CheckRawText(tag, content)` first: the `Element` methods
+refuse a breakout for you and the `TextChunk` methods cannot, because a chunk does
+not know what element it is in.
 
 For content that is large or produced incrementally, the `Stream*` methods take
 a callback invoked at the point the content is needed, so nothing has to be

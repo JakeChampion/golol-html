@@ -777,6 +777,18 @@
 // encoding, using an escape the target language understands - "\u65e5" for
 // JavaScript, "\65e5" for CSS - or serve the document as UTF-8, where the
 // question does not arise. Pinned in encoding_test.go.
+// //
+// Rewriting text that is already there has the same two problems and one more.
+// [TextChunk.Replace] with [Text] escapes what raw text must not have escaped, so a
+// stylesheet's ".a > .b" comes back as ".a &gt; .b" - a selector that matches
+// nothing - and a script's "a < b" as "a &lt; b". [HTML] is therefore the right
+// content type for editing a script body or a stylesheet, which reads backwards and
+// is worth knowing. And the breakout guard does not cover it: an [Element] method
+// knows which element it is writing into and refuses a "</script>", while a
+// [TextChunk] does not - lol-html hands a chunk over with no way to ask - so
+// [TextChunk.Before], [TextChunk.After] and [TextChunk.Replace] write it out. A
+// handler registered as OnText("style") knows the tag it asked for and can apply the
+// check itself with [CheckRawText]. Measured in rawtextrewrite_test.go.
 //
 // # A wrapper is two insertions and the parser decides whether they wrap
 //
