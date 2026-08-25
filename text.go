@@ -184,6 +184,11 @@ var textUserData = userDataAccessor[*C.lol_html_text_chunk_t]{
 // UserData returns the value most recently attached by SetUserData, or nil.
 func (t *TextChunk) UserData() any { return getUserData(&t.unit, textUserData) }
 
-// SetUserData attaches a value to this chunk, readable by any later handler
-// that sees it. Go handlers can usually close over the value instead.
+// SetUserData attaches a value to this chunk, readable by another handler that
+// is given the same chunk.
+//
+// The same chunk, not the same text node: each chunk is its own unit, so this is
+// not a place to accumulate across the chunks of one node. Measured - the second
+// chunk of a two-chunk node reads nil. Go handlers can usually close over the
+// value instead.
 func (t *TextChunk) SetUserData(v any) error { return setUserData(&t.unit, textUserData, v) }
