@@ -39,6 +39,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	lolhtml "github.com/JakeChampion/golol-html"
 )
@@ -323,12 +324,21 @@ func link(source string, keys []string, terms Glossary) (string, int) {
 
 // wordBoundary reports whether source[from:to] is a whole word, so that "cat"
 // does not match inside "catalogue".
+//
+// Decoded rather than indexed: source[from-1] is a byte, and the last byte of a
+// multi-byte character is not that character - reading one as a rune makes some
+// of them look like letters, which silently stops a term next to any non-ASCII
+// character from matching.
 func wordBoundary(source string, from, to int) bool {
-	if from > 0 && isWord(rune(source[from-1])) {
-		return false
+	if from > 0 {
+		if r, _ := utf8.DecodeLastRuneInString(source[:from]); isWord(r) {
+			return false
+		}
 	}
-	if to < len(source) && isWord(rune(source[to])) {
-		return false
+	if to < len(source) {
+		if r, _ := utf8.DecodeRuneInString(source[to:]); isWord(r) {
+			return false
+		}
 	}
 	return true
 }
