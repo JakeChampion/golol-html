@@ -1500,6 +1500,52 @@
 // releases its native resources on the way out, so a caller who recovers does
 // not leak them, but Close should still be deferred as a matter of course.
 //
+// # Rewriting an HTTP response
+//
+// A rewrite in a proxy or a middleware is four lines. Deciding which responses to
+// apply it to is the rest of the work, and each of the four headers below is a way
+// to break a site.
+//
+// Content-Encoding first, because it is the one that destroys responses. A
+// compressed body is not text, and what a rewrite does to it depends on something
+// a reader would not expect - whether a text handler is registered:
+//
+//	body                     element handlers only   with a text handler
+//	gzip of a small page                 identical   longer, and not gzip any more
+//	a PNG header                         identical   two bytes longer
+//	256 arbitrary bytes                  identical   482 bytes
+//	valid UTF-8                          identical   identical
+//
+// A text handler decodes and re-encodes, so a byte that is not valid in the
+// declared encoding becomes U+FFFD - three bytes where there was one. With only
+// element handlers nothing decodes and the body passes through untouched, which
+// means the rewrite silently did nothing. Neither reports an error. So either ask
+// upstream not to compress, or decompress before the rewriter and recompress after.
+//
+// Content-Type decides whether this is a document at all. Only text/html; a JSON
+// body survives a rewrite unchanged and that makes the mistake look harmless until
+// a body arrives that is not valid UTF-8.
+//
+// The charset parameter is the encoding the bytes are in, and it is the authority:
+// a meta in the document is ordinary markup to the rewriter. Pass it to
+// [WithEncoding]. A label the library cannot use is a reason to pass the body
+// through rather than to guess, and the way to find out is to build the rewriter -
+// [NewWriter] returns an [EncodingError] both for a label it does not know and for
+// one that is not ASCII-compatible. The second matters here: "utf-16le" is a real
+// encoding and a real Content-Type, and a rewriter cannot work in it at all.
+//
+// Content-Length has to go. The rewrite changes the length, and a Content-Length
+// that disagrees with the body is a protocol error - the client truncates the page
+// or waits for bytes that never come. Nothing in net/http fixes this for you.
+//
+// Then streaming, which is the reason to rewrite in a proxy rather than in a
+// template: flush the response as output arrives, and set FlushInterval on an
+// httputil.ReverseProxy. And a failure partway has already sent a prefix of the
+// page, headers included, so a broken rewrite cannot become a 502 - see "Stopping
+// early" for what the client is left holding.
+//
+// examples/gip/proxy is all of this in one file; lossytext_test.go gates the table.
+//
 // # Stopping early
 //
 // A rewrite over a stream that does not end - or one that only needs its first

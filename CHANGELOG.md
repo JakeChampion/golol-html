@@ -1197,6 +1197,22 @@
   order they were written.
 
 ### Testing
+- **`lossytext_test.go`** gates the table above - six bodies against both handler
+  sets, with the gzip case checked for still being decodable rather than merely for
+  its length - and the encoding labels: `utf-8`, `windows-1252`, `iso-8859-1` and
+  `shift_jis` accepted, `utf-16le`, `utf-16be`, `utf-7` and nonsense refused with an
+  `EncodingError`.
+
+- **`examples/gip/proxy`** is a reverse proxy that rewrites HTML bodies and skips
+  what it must not touch: it asks upstream for `identity`, deletes
+  `Content-Length`, takes the encoding from the charset parameter and falls back to
+  passing the body through when the library refuses the label, flushes so the
+  rewrite streams, forwards `Unwrap` so a websocket upgrade still finds `Hijack`,
+  and logs which of those decided each response. Its tests run a real `httptest`
+  origin through it: HTML rewritten, gzip passed through and still decodable, JSON
+  and CSS and a PNG untouched, a UTF-16 page untouched, and a windows-1252 page
+  rewritten with its accented byte intact.
+
 - **`fixedcost_test.go`** gates the shape of the table: the cost grows with the
   rule set and not with a document that matches nothing, fifty selectors is
   hundreds of allocations before a byte is written, and a Writer refuses a second
@@ -1677,6 +1693,36 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **What a rewrite does to a body that is not text, and why it depends on the
+  handler set.** The text path decodes and re-encodes, so a byte that is not valid
+  in the declared encoding becomes U+FFFD. That was documented as a one-character
+  cost on a Latin-1 page. In a proxy it is not one character:
+
+      body                     element handlers only   with a text handler
+      gzip of a small page                 identical   longer, and not gzip any more
+      a PNG header                         identical   two bytes longer
+      256 arbitrary bytes                  identical   482 bytes
+      JSON, valid UTF-8                    identical   identical
+      a windows-1252 page                  identical   two bytes longer
+
+  Neither column reports an error. So a proxy that forgets `Content-Encoding`
+  either destroys every compressed response or silently rewrites nothing, and which
+  one it does depends on whether it happens to have registered a text handler. That
+  is a bad thing to learn from a user.
+
+  The other headers are written down with it now, in a "Rewriting an HTTP response"
+  section: `Content-Type` decides whether this is a document at all, the charset
+  parameter is the authority on the encoding and belongs in `WithEncoding`,
+  `Content-Length` has to be deleted because the rewrite changes the length, and a
+  failure partway has already sent a prefix of the page - so a broken rewrite
+  cannot become a 502.
+
+  One thing worth knowing for the charset: `NewWriter` refuses `utf-16le` and
+  `utf-16be` with an `EncodingError` for not being ASCII-compatible, alongside the
+  labels it does not know. So a proxy can decide whether it can rewrite a response
+  by trying to build the rewriter, rather than by keeping a list of labels that
+  would drift from the library's. Recorded as B173.
+
 - **What a rewriter costs to build, for a workload that builds one per document.**
   The registration cost was documented in allocations, "paid once per
   `NewWriter`". For a queue of small documents that phrase is the whole story
