@@ -1354,6 +1354,25 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A rename changes how the element's existing content is parsed.** The
+  documentation said that inserted content is not re-parsed, and that renaming a
+  raw-text element turns its text into markup. The general case was missing:
+  `SetTagName` writes over the tag and leaves the content alone, and whoever reads the
+  output applies the new name's content model to it. Measured against x/net/html:
+
+      <div><p>x</p></div>                 renamed to table   the p is fostered out
+      <div><p>x</p><span>y</span></div>   renamed to select  both are gone, text merged
+
+  No error, and the output is exactly the markup that was asked for - the div's tag
+  became a table's tag and nothing else moved in the bytes. So a rename is safe when
+  the new element accepts what the old one held, which is a question about the two
+  content models rather than about the method.
+
+  `SetTagName` and the "inserted content is not re-parsed" section say this now, and
+  `differential/rename_test.go` gates it - including the eleven modernising renames
+  that are safe, and the older fact that a rename writes over an implied end tag
+  belonging to something else. B156.
+
 - **`<image>` is a spelling of `<img>`, and a selector for `img` does not match it.**
   The parser renames one element, carrying the attributes over:
 

@@ -126,6 +126,19 @@ func (e *Element) TagNamePreserveCase() string {
 // end tag is a token and not a fact about the element; see the package
 // documentation, and [Element.OnEndTag] for the name guard that detects it.
 // Measured in removeimplied_test.go.
+//
+// The content inside the element is not looked at again - it was tokenised under the
+// old name and this writes over the tag alone - but whoever parses the output applies
+// the new name's content model to it, and that model can move the content out of the
+// element or throw it away:
+//
+//	<div><p>x</p></div>                 renamed to table   the p is fostered out
+//	<div><p>x</p><span>y</span></div>   renamed to select  both are gone, text merged
+//
+// No error, and the output is exactly the markup that was asked for. So a rename is
+// safe when the new element accepts what the old one held, which is a question about
+// the two content models rather than about this method: examples/gip/modernise renames
+// only within that set. Measured in differential/rename_test.go.
 func (e *Element) SetTagName(name string) error {
 	p, err := e.live()
 	if err != nil {
