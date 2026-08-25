@@ -635,6 +635,27 @@ func (e *Element) Remove() {
 // RemoveAndKeepContent removes the element's tags but keeps its children, so
 // <b>hi</b> becomes hi.
 //
+// "Its children" is what was inside the tags, and unwrapping one of the ten
+// elements whose content is not markup turns that content into markup:
+//
+//	<script>var x = "<img src=x onerror=alert(1)>"</script>
+//	e.RemoveAndKeepContent()
+//	var x = "<img src=x onerror=alert(1)>"
+//
+// and the image is now an element. Measured for script, style, textarea, title,
+// xmp, iframe, noembed, noframes, noscript and plaintext.
+//
+// That matters most for the shape this method invites: a sanitiser with an
+// allowlist that unwraps everything not on it. Very few allowlists include
+// noembed or xmp, so a payload placed inside one is inert until it is unwrapped -
+// which is the sanitiser doing the work. Where the content of an unknown element
+// might not be markup, remove the element instead, or check the tag name against
+// the raw-text list before unwrapping.
+//
+// This is the same hazard as [ErrRawTextBreakout] and [Element.SetTagName],
+// reached a third way: nothing is inserted and nothing is renamed, and the
+// content is reinterpreted all the same. Pinned in settagname_test.go.
+//
 // Appending after this is well defined, and puts the content after the children
 // that were kept.
 func (e *Element) RemoveAndKeepContent() {

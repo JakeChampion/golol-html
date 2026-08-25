@@ -138,3 +138,86 @@ func TestSetTagNameValidation(t *testing.T) {
 		}
 	}
 }
+
+// TestUnwrappingRawTextTurnsItsTextIntoMarkup is the third door into the same
+// hazard: nothing is inserted and nothing is renamed, and the content is
+// reinterpreted because the element that made it text is gone.
+//
+// The shape that matters is a sanitiser with an allowlist that unwraps everything
+// not on it. Few allowlists include noembed or xmp, so a payload inside one is
+// inert until the sanitiser unwraps it.
+func TestUnwrappingRawTextTurnsItsTextIntoMarkup(t *testing.T) {
+	for _, tag := range []string{
+		"script", "style", "textarea", "title", "xmp",
+		"iframe", "noembed", "noframes", "noscript",
+	} {
+		doc := "<" + tag + `><img src=x onerror=alert(1)></` + tag + ">"
+		if n := countElements(t, doc, "img"); n != 0 {
+			t.Fatalf("<%s>: the document already has %d img elements", tag, n)
+		}
+		out, err := lolhtml.RewriteString(doc, lolhtml.OnElement(tag, func(e *lolhtml.Element) error {
+			e.RemoveAndKeepContent()
+			return nil
+		}))
+		if err != nil {
+			t.Fatalf("<%s>: %v", tag, err)
+		}
+		if n := countElements(t, out, "img"); n != 1 {
+			t.Errorf("unwrapping <%s> gave %q with %d img elements, want 1", tag, out, n)
+		}
+	}
+
+	// plaintext has no end tag, and unwrapping it does the same thing.
+	out, err := lolhtml.RewriteString(`<plaintext><img src=x>`,
+		lolhtml.OnElement("plaintext", func(e *lolhtml.Element) error {
+			e.RemoveAndKeepContent()
+			return nil
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := countElements(t, out, "img"); n != 1 {
+		t.Errorf("unwrapping <plaintext> gave %q with %d img elements", out, n)
+	}
+}
+
+// Unwrapping an ordinary element does not reinterpret anything, which is what
+// makes the raw-text list the thing to check rather than unwrapping in general.
+func TestUnwrappingAnOrdinaryElementIsSafe(t *testing.T) {
+	for _, doc := range []string{
+		`<div><img src=x></div>`,
+		`<b>hi</b>`,
+		`<span><em>text</em></span>`,
+	} {
+		before := countElements(t, doc, "img") + countElements(t, doc, "em")
+		out, err := lolhtml.RewriteString(doc,
+			lolhtml.OnElement("div, b, span", func(e *lolhtml.Element) error {
+				e.RemoveAndKeepContent()
+				return nil
+			}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after := countElements(t, out, "img") + countElements(t, out, "em"); after != before {
+			t.Errorf("%q: %d inner elements became %d: %q", doc, before, after, out)
+		}
+	}
+}
+
+// Removing the element instead is the answer, and it takes the content with it.
+func TestRemovingRawTextTakesTheContent(t *testing.T) {
+	out, err := lolhtml.RewriteString(`<p>a</p><script><img src=x></script><p>b</p>`,
+		lolhtml.OnElement("script", func(e *lolhtml.Element) error {
+			e.Remove()
+			return nil
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `<p>a</p><p>b</p>`; out != want {
+		t.Errorf("got %q, want %q", out, want)
+	}
+	if n := countElements(t, out, "img"); n != 0 {
+		t.Errorf("%d img elements survived: %q", n, out)
+	}
+}

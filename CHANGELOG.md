@@ -505,6 +505,23 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`RemoveAndKeepContent` is a third way into the raw-text hazard.** Unwrapping
+  one of the ten elements whose content is not markup turns that content into
+  markup:
+
+      <script>var x = "<img src=x onerror=alert(1)>"</script>
+      e.RemoveAndKeepContent()
+      var x = "<img src=x onerror=alert(1)>"
+
+  and the image is an element. Measured for all ten. Nothing is inserted and
+  nothing is renamed, so neither `ErrRawTextBreakout` nor the note on
+  `SetTagName` covered it.
+
+  The shape that invites it is worth naming: a sanitiser with an allowlist that
+  unwraps everything not on the list. Few allowlists include `noembed` or `xmp`,
+  so a payload placed inside one is inert until the sanitiser unwraps it. The
+  method now says so, and says to remove the element instead or check the tag name
+  first. `ErrRawTextBreakout` points at both doors.
 - **`EscapeAttribute` is not "the escaping `SetAttribute` would have done for
   you", and the section on building markup said it was.** The claim is exact for
   `EscapeText` and `Text` - byte for byte, and asserted as a property. It is not
