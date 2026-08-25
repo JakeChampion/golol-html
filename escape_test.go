@@ -241,3 +241,102 @@ func TestEscapeAllocates(t *testing.T) {
 // sinkString keeps the results above from being optimised away: assigning to a
 // package variable makes the string escape, which is the point.
 var sinkString string
+
+// TestEscapeAttributeIsNotWhatSetAttributeApplies pins the difference between the
+// two, which the package documentation used to describe as the same thing.
+//
+// SetAttribute escapes the double quote alone, because the library writes the
+// quotes. EscapeAttribute escapes five characters, because the markup being built
+// by hand might use single quotes and an unescaped ampersand in it could begin a
+// reference the caller did not write. Both are right for their job, and a value
+// moved from one to the other is escaped twice.
+func TestEscapeAttributeIsNotWhatSetAttributeApplies(t *testing.T) {
+	tests := []struct {
+		value string
+		set   string // what SetAttribute writes
+		esc   string // what EscapeAttribute returns
+	}{
+		{`plain`, `plain`, `plain`},
+		{`a"b`, `a&quot;b`, `a&quot;b`},
+		{`a'b`, `a'b`, `a&#39;b`},
+		{`a<b`, `a<b`, `a&lt;b`},
+		{`a>b`, `a>b`, `a&gt;b`},
+		{`a&b`, `a&b`, `a&amp;b`},
+		// The row that bites: a value read from a document is already source.
+		{`a&amp;b`, `a&amp;b`, `a&amp;amp;b`},
+		// Neither escapes whitespace, which is why the value has to be quoted.
+		{"a b", "a b", "a b"},
+		{"a\nb", "a\nb", "a\nb"},
+	}
+	differed := 0
+	for _, tt := range tests {
+		if got := lolhtml.EscapeAttribute(tt.value); got != tt.esc {
+			t.Errorf("EscapeAttribute(%q) = %q, want %q", tt.value, got, tt.esc)
+		}
+		if got := writtenAttributeValue(t, tt.value); got != tt.set {
+			t.Errorf("SetAttribute(%q) wrote %q, want %q", tt.value, got, tt.set)
+		}
+		if tt.set != tt.esc {
+			differed++
+		}
+	}
+	if differed < 5 {
+		t.Errorf("only %d of the values distinguished the two; this test exists to "+
+			"pin the difference", differed)
+	}
+}
+
+// writtenAttributeValue returns the value SetAttribute put in the output, read
+// back out of the markup.
+func writtenAttributeValue(t *testing.T, value string) string {
+	t.Helper()
+	out, err := lolhtml.RewriteString(`<p></p>`, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+		return e.SetAttribute("x", value)
+	}))
+	if err != nil {
+		t.Fatalf("SetAttribute(%q): %v", value, err)
+	}
+	const open = `x="`
+	i := strings.Index(out, open)
+	if i < 0 {
+		t.Fatalf("no attribute in %q", out)
+	}
+	rest := out[i+len(open):]
+	// The double quote is the one character SetAttribute escapes, so the first
+	// one left is the terminator.
+	j := strings.Index(rest, `"`)
+	if j < 0 {
+		t.Fatalf("unterminated attribute in %q", out)
+	}
+	return rest[:j]
+}
+
+// And the consequence, as a round trip: through SetAttribute a value survives,
+// through EscapeAttribute it gains an escape.
+func TestMovingAValueBetweenTheTwoEscapesItTwice(t *testing.T) {
+	const doc = `<a href="/x?a=1&amp;b=2">t</a>`
+
+	// SetAttribute: read and write it back, unchanged.
+	same, err := lolhtml.RewriteString(doc, lolhtml.OnElement("a", func(e *lolhtml.Element) error {
+		v, _ := e.Attribute("href")
+		return e.SetAttribute("href", v)
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same != doc {
+		t.Errorf("through SetAttribute: got %q, want %q", same, doc)
+	}
+
+	// EscapeAttribute on the same value, into markup built by hand.
+	built, err := lolhtml.RewriteString(doc, lolhtml.OnElement("a", func(e *lolhtml.Element) error {
+		v, _ := e.Attribute("href")
+		return e.Replace(`<a href="`+lolhtml.EscapeAttribute(v)+`">t</a>`, lolhtml.HTML)
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(built, "&amp;amp;") {
+		t.Errorf("expected the reference to be escaped twice: %q", built)
+	}
+}

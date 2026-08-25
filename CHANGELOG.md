@@ -505,6 +505,24 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`EscapeAttribute` is not "the escaping `SetAttribute` would have done for
+  you", and the section on building markup said it was.** The claim is exact for
+  `EscapeText` and `Text` - byte for byte, and asserted as a property. It is not
+  for the attribute pair:
+
+      value      SetAttribute   EscapeAttribute
+      a"b        a&quot;b       a&quot;b
+      a'b        a'b            a&#39;b
+      a<b        a<b            a&lt;b
+      a&b        a&b            a&amp;b
+      a&amp;b    a&amp;b        a&amp;amp;b
+
+  Both are right for their job - `SetAttribute` writes the quotes so it only has
+  to escape those, while hand-built markup might use either quote and a bare `&`
+  in it could begin a reference the caller did not write - and the difference means
+  a value read from a document round-trips through one and is escaped again by the
+  other. The section carries the table now, and `escape_test.go` asserts the
+  difference rather than assuming it.
 - **`SetAttribute` writes one copy of a duplicated attribute; `RemoveAttribute`
   takes them all, and only one of them said so.**
 

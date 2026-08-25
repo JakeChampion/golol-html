@@ -604,10 +604,29 @@
 //
 // When you do have to build markup - a wrapper, a template, an element that does
 // not exist yet and so has no handler to hold it - [EscapeText] and
-// [EscapeAttribute] are the escaping SetAttribute and Text would have done for
-// you. EscapeText is byte for byte what the library applies for Text, which is
-// asserted against the library rather than assumed, so a value built into markup
-// keeps the guarantee it would have had:
+// [EscapeAttribute] do that escaping for you.
+//
+// EscapeText is byte for byte what the library applies for [Text], asserted
+// against the library rather than assumed, so a value built into markup keeps the
+// guarantee it would have had.
+//
+// EscapeAttribute is not the same as what SetAttribute applies, and the
+// difference is the point rather than an oversight. SetAttribute escapes the
+// double quote alone, because the library writes the quotes and knows which ones
+// they are. EscapeAttribute escapes five characters:
+//
+//	value      SetAttribute   EscapeAttribute
+//	a"b        a&quot;b       a&quot;b
+//	a'b        a'b            a&#39;b
+//	a<b        a<b            a&lt;b
+//	a&b        a&b            a&amp;b
+//	a&amp;b    a&amp;b        a&amp;amp;b
+//
+// because the markup being built might use single quotes, and because an
+// unescaped "&" in it could begin a reference the caller did not write. The last
+// row is the one to watch: a value that came from the document is already source,
+// so SetAttribute passes it through and EscapeAttribute escapes it again. Pinned
+// in escape_test.go, which asserts the difference rather than assuming it.
 //
 //	e.Replace(`<div data-x="`+EscapeAttribute(title)+`">`+EscapeText(s)+`</div>`, HTML)
 //
