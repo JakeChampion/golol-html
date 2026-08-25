@@ -1266,6 +1266,43 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/transitions`: give view-transition names to the elements that
+  appear on both of two pages.** A transition needs the same name on the same thing
+  in both documents, and "the same thing" is the problem: two pages are two
+  documents, and nothing in either says which element corresponds to which.
+
+  A source offset cannot be the identity, which is worth stating because the
+  library's offsets are so nearly right for it. They are absolute and stable, which
+  is what makes them an identity *within* a document - `examples/gip/article` leans
+  on exactly that - and meaningless between two, where the same header is at byte 210
+  in one page and 1804 in the other.
+
+  So the identity comes from the content: the chain of open elements, each with its
+  tag, its id or first class, and its position among siblings of the same shape.
+  Computable while streaming, because it only ever needs what is already open. Only
+  the *first* class is part of the shape, so a page that adds `is-active` between
+  versions has not changed the element.
+
+  The path is a fact about the source rather than about the tree - a rewriter reports
+  the elements the document contains, not the ones a tree builder would add, so a
+  fragment beginning with `<body>` has a path starting at `body` and a full page has
+  one starting at `html`. That is what makes the comparison work between pages from
+  the same templates, and it is the limit too: a page that gains a wrapping `<div>`
+  has different paths for everything inside it, and this cannot tell that from a page
+  that replaced its content. The report says how many paths matched rather than
+  claiming they are the right ones.
+
+  Two things it has to be careful about, both lessons from earlier turns. The
+  declaration is *prepended* to any existing style attribute, because the cascade
+  takes the last declaration for a property and an element's own style should keep
+  winning. And a page that already named an element is left alone, since it knows
+  something this program does not.
+
+  The name has to be a CSS custom-ident: it cannot begin with a digit and cannot be
+  `none` or another CSS-wide keyword, so a class of `3-col` becomes `vt-3-col` and
+  the keywords are prefixed - and every name is made unique within the document,
+  because two elements sharing one animate as a single thing.
+
 - **`examples/gip/split`: cut a document into parts at a heading level, and make
   each part stand on its own.** A rewriter writes to one destination and a split
   needs several, so the destination is a writer that forwards to whichever part is
