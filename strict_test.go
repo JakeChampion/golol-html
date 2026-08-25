@@ -29,19 +29,35 @@ var ambiguousTags = []string{
 	"title", "style", "iframe", "xmp", "plaintext", "noembed", "noframes", "noscript",
 }
 
+// ambiguousInFrameset is the frameset list, which is not the select list with one
+// name removed: <noframes> is legal there, and <script> and <textarea> - both fine
+// in a <select> - are ambiguous. Measured by trying every element name in the HTML
+// index, in TestTheAmbiguousSetIsExactlyThese.
+var ambiguousInFrameset = []string{
+	"title", "style", "iframe", "xmp", "plaintext", "noembed", "noscript",
+	"script", "textarea",
+}
+
+// htmlElementNamesForStrict is every element name in the HTML specification's
+// index, so the two lists above can be measured rather than trusted.
+var htmlElementNamesForStrict = strings.Fields(`
+a abbr acronym address applet area article aside audio b base basefont bdi bdo big
+blockquote body br button canvas caption center cite code col colgroup data datalist
+dd del details dfn dialog dir div dl dt em embed fieldset figcaption figure font
+footer form frame frameset h1 h2 h3 h4 h5 h6 head header hgroup hr html i iframe img
+input ins isindex kbd keygen label legend li link listing main map mark marquee menu
+meta meter nav nobr noembed noframes noscript object ol optgroup option output p
+param picture plaintext pre progress q rb rp rt rtc ruby s samp script search section
+select slot small source span strike strong style sub summary sup table tbody td
+template textarea tfoot th thead time title tr track tt u ul var video wbr xmp`)
+
 // Inside a <frameset> the same list applies except <noframes>, which is legal
 // there and so is not ambiguous.
 func ambiguousIn(container string) []string {
-	if container != "frameset" {
-		return ambiguousTags
+	if container == "frameset" {
+		return ambiguousInFrameset
 	}
-	out := make([]string, 0, len(ambiguousTags)-1)
-	for _, t := range ambiguousTags {
-		if t != "noframes" {
-			out = append(out, t)
-		}
-	}
-	return out
+	return ambiguousTags
 }
 
 // safeInSelect do not trigger it: script is explicitly allowed, and the others
@@ -233,4 +249,76 @@ func TestLenientModeMissedRegionEndsAtTheClosingTag(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestTheAmbiguousSetIsExactlyThese measures the two lists rather than trusting
+// them: every element name in the HTML index, inside each context.
+//
+// The frameset list used to be written here as the select list minus <noframes>,
+// which is what WithStrict's documentation said too, and the sweep is what
+// showed it was two names short.
+func TestTheAmbiguousSetIsExactlyThese(t *testing.T) {
+	for _, tc := range []struct {
+		context string
+		want    []string
+	}{
+		{"select", ambiguousTags},
+		{"frameset", ambiguousInFrameset},
+	} {
+		want := map[string]bool{}
+		for _, tag := range tc.want {
+			want[tag] = true
+		}
+		var got []string
+		for _, tag := range htmlElementNamesForStrict {
+			doc := fmt.Sprintf("<%s><%s>x", tc.context, tag)
+			_, err := lolhtml.RewriteString(doc, lolhtml.WithStrict(true))
+			ambiguous := errors.Is(err, lolhtml.ErrAmbiguousTag)
+			if ambiguous {
+				got = append(got, tag)
+			}
+			if ambiguous != want[tag] {
+				t.Errorf("<%s> inside <%s>: ambiguous = %v, want %v",
+					tag, tc.context, ambiguous, want[tag])
+			}
+		}
+		if len(got) != len(tc.want) {
+			t.Errorf("inside <%s>, %d names are ambiguous (%v); the documented list has %d",
+				tc.context, len(got), got, len(tc.want))
+		}
+	}
+}
+
+// TestNoOtherContextHasIt, for every name in the index, in four containers that
+// are not the two.
+func TestNoOtherContextHasIt(t *testing.T) {
+	for _, container := range []string{"div", "table", "template", "optgroup"} {
+		for _, tag := range htmlElementNamesForStrict {
+			doc := fmt.Sprintf("<%s><%s>x", container, tag)
+			if _, err := lolhtml.RewriteString(doc, lolhtml.WithStrict(true)); errors.Is(err, lolhtml.ErrAmbiguousTag) {
+				t.Errorf("<%s> inside <%s> triggered the guard", tag, container)
+			}
+		}
+	}
+}
+
+// TestWhatEndsTheAmbiguousContextDiffersByContext, which is the other half of the
+// correction: the four tags that end it in a <select> end nothing in a <frameset>.
+func TestWhatEndsTheAmbiguousContextDiffersByContext(t *testing.T) {
+	for _, ender := range []string{"select", "textarea", "input", "keygen"} {
+		doc := fmt.Sprintf("<select><%s><title>x", ender)
+		if _, err := lolhtml.RewriteString(doc, lolhtml.WithStrict(true)); err != nil {
+			t.Errorf("<%s> did not end the select context: %v", ender, err)
+		}
+		doc = fmt.Sprintf("<frameset><%s><title>x", ender)
+		if _, err := lolhtml.RewriteString(doc, lolhtml.WithStrict(true)); !errors.Is(err, lolhtml.ErrAmbiguousTag) {
+			t.Errorf("<%s> ended the frameset context; the documentation says only "+
+				"<noframes> does: %v", ender, err)
+		}
+	}
+	// <noframes> is what ends it there, being the one legal member of the list.
+	if _, err := lolhtml.RewriteString("<frameset><noframes><title>x",
+		lolhtml.WithStrict(true)); err != nil {
+		t.Errorf("<noframes> did not end the frameset context: %v", err)
+	}
 }
