@@ -1266,6 +1266,52 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/split`: cut a document into parts at a heading level, and make
+  each part stand on its own.** A rewriter writes to one destination and a split
+  needs several, so the destination is a writer that forwards to whichever part is
+  current and the handler that meets a heading tells it to move on. From the
+  rewriter's side this is one document, which is what keeps the parse right.
+
+  What makes a part standalone is the tags that were open when the cut happened. A
+  heading three levels inside `<html><body><article>` starts a part whose text is
+  inside nothing at all unless those three are written again - so each part begins
+  with the ancestors' start tags, attributes included, and ends with their end tags
+  in reverse. An element handler is all that takes: the tag and its attributes at the
+  start tag, the pop at the end tag, no tree and no second pass.
+
+  Three things it got wrong first, all of them lessons the library documents.
+
+  The tag-balance test read `e.TagName()` inside the end-tag callback and got an
+  empty string every time, so it reported every part as unbalanced. The element is
+  detached by then - which the documentation says, under user data - and the name has
+  to be captured before the handler is registered. The library was right and the
+  test was wrong, which took a debugging pass to establish.
+
+  And "does this part have anything in it" cannot be answered by counting bytes. The
+  wrapper's own start tags are written to a part before the first heading arrives, so
+  a byte count says a part holding `<body>` and nothing else has content, and a
+  document beginning with a heading gets an empty first part. It is answered by
+  whether text or a completed element arrived instead.
+
+  And the reopened tag was double-escaped. An attribute value from `AttributeList` is
+  raw source, so `class="a&amp;b"` is seven characters and writing them back
+  unchanged round-trips - while escaping them properly, which is what the first
+  version did, produces `class="a&amp;amp;b"` and a part whose class is not the class
+  it had. The rule is `SetAttribute`'s: escape only the double quote, because only it
+  would end the attribute. That leaves one thing a reopened tag cannot preserve - a
+  value written in single quotes can hold a literal double quote, and there is no way
+  to write that inside double quotes - so the tag preserves the attribute *values*
+  rather than their spelling, which is what a parser and a stylesheet see.
+
+  The byte budget moves the cut to the next heading rather than cutting mid-element,
+  because a part that ends inside a tag is not a part - and it is counted at the
+  destination rather than at the input, since the output is what a caller is sizing
+  and the two differ whenever a handler edits anything.
+
+  Its property is that no text is lost or duplicated: every character of the
+  document's text is in exactly one part, in order, over four documents including one
+  with no headings and one that begins with a heading nested in a div.
+
 - **`examples/gip/idmerge`: concatenate documents and keep every id unique,
   rewriting the references as well as the ids.** It is two passes per document and
   not by choice: a table of contents at the top of a page points at headings further
