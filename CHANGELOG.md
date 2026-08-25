@@ -1318,6 +1318,30 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **An attribute selector with an empty operand matches most of the page, where
+  CSS says it matches nothing.** The specification is explicit: a substring
+  operator whose value is the empty string "does not represent anything". Measured,
+  three of the six operators disagree:
+
+      [a=""]     an empty value                        as specified
+      [a|=""]    an empty value, or one starting "-"   as specified
+      [a*=""]    nothing                               as specified
+      [a^=""]    every non-empty value                 the specification says nothing
+      [a$=""]    every non-empty value                 the specification says nothing
+      [a~=""]    every value with no words in it       the specification says nothing
+
+  Which matters because a selector is a string, and strings get interpolated: a
+  rewrite that builds `a[href^="<prefix>"]` from configuration and is handed an
+  empty prefix rewrites every link on the page rather than none. The `i` and `s`
+  flags make no difference. An operand omitted altogether - `a[href^=]` - is a
+  `SelectorError`, which is the one shape that fails loudly, and it is one keystroke
+  from the shape that does not.
+
+  The library cannot refuse it, because it does not parse selectors: lol-html does,
+  and this is what it decides. What it can do is say so, and say the only thing
+  that helps - check the value before building the selector.
+  `emptyoperand_test.go` measures all six operators, both quotings, both flags and
+  the omitted-operand refusal.
 - **`WithEncoding` refuses four of the standard's encodings, and named one.** The
   documentation said "a non-ASCII-compatible encoding is refused" and listed the
   UTF-16 family. Measured across every canonical name in the WHATWG Encoding
