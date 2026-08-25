@@ -505,6 +505,23 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **"Independent `Writer`s on separate goroutines are fine" is a statement about
+  the `Writer`.** An `Option` holds no state and can be passed to as many
+  `Writer`s as you like - and the function inside it is shared with all of them,
+  so anything it closes over is shared too. Building the option set once at
+  startup and reusing it per request is the obvious thing for a server to do, and
+  it is where this goes wrong: measured, four goroutines sharing one counting
+  handler over 200 links each reported **655 of 800** matches, and the race
+  detector flagged two races.
+
+  `Option`, `Writer` and the README now say so, with the two shapes that work:
+  build the options where the state lives, once per rewrite, or synchronise what
+  they share. The cost of building them again is about seven allocations per
+  distinct selector, which the cost section already measures.
+
+  `sharedhandler_test.go` tests both correct shapes rather than the broken one -
+  a test that races would fail the `-race` build it exists to inform - and records
+  the measured numbers in a comment.
 - **The fallback for an unrepresentable character has three answers, and
   `WithEncoding` named one.** It said "A character the target encoding cannot
   represent is emitted as a numeric character reference rather than dropped or

@@ -16,6 +16,26 @@ var errNilDst = errors.New("lolhtml: destination writer is nil")
 // (OnElement, OnComment, OnText, OnDoctype, OnDocumentEnd, OnDocumentComment,
 // OnDocumentText) or tune the rewriter (WithEncoding, WithMemorySettings,
 // WithStrict, WithGracefulBailOut, WithESITags).
+//
+// An Option holds no state and can be passed to as many Writers as you like. The
+// function inside it is a different matter: two Writers given the same Option
+// share that function, so anything it closes over is shared too. Building the
+// option set once and reusing it per request is the obvious thing for a server to
+// do, and it is where this goes wrong:
+//
+//	count := 0
+//	opts := []lolhtml.Option{lolhtml.OnElement("a", func(*lolhtml.Element) error {
+//		count++
+//		return nil
+//	})}
+//	// two rewrites on two goroutines, both using opts
+//
+// Measured: 655 of 800 matches counted, and the race detector reports it. A
+// Writer being safe on its own goroutine is a statement about the Writer.
+//
+// So build the options where the state lives - a function called once per rewrite,
+// returning both - or synchronise what they share. The cost of building them again
+// is around seven allocations per distinct selector; see the section on cost.
 type Option interface {
 	apply(*config)
 }
