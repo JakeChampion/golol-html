@@ -835,6 +835,32 @@
 // handler registered as OnText("style") knows the tag it asked for and can apply the
 // check itself with [CheckRawText]. Measured in rawtextrewrite_test.go.
 //
+// # A table wrapper inside a paragraph depends on the doctype
+//
+// The rule below - that a wrapper is two insertions and the parser decides what they
+// wrap - has one case whose answer is not a property of the markup at all. A <table>
+// start tag closes an open <p> in a standards-mode document and not in a quirks-mode
+// one, so wrapping content that sits inside a paragraph puts the table beside the
+// paragraph or inside it depending on whether the document has a doctype. Measured
+// against x/net/html:
+//
+//	wrapper     no doctype (quirks)   <!doctype html>
+//	<table>     stays in the <p>      leaves the <p>
+//	<div>       leaves                leaves
+//	<section>   leaves                leaves
+//	<ul>        leaves                leaves
+//	<span>      stays                 stays
+//
+// Every other wrapper is mode-independent: a block one leaves the paragraph in both
+// modes, an inline one stays in both. The table is the exception, and it is the
+// wrapper a converter to email markup uses for everything - on documents that
+// frequently have no doctype or a doctype from 1999, which is also quirks. So the
+// same input gives two different trees and nothing reports it.
+//
+// Either put the wrapper somewhere a paragraph is not open, or know the document's
+// mode. examples/gip/tablelayout refuses the conversion inside a paragraph and says
+// how many it refused; differential/tablewrap_test.go has the matrix.
+//
 // # A wrapper is two insertions and the parser decides whether they wrap
 //
 // Putting a container around an element is [Element.Before] with an opening tag and

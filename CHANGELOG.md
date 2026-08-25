@@ -1197,6 +1197,23 @@
   order they were written.
 
 ### Testing
+- **`differential/tablewrap_test.go`** has the matrix: five wrappers against two
+  document modes, with x/net/html saying where each landed, plus a legacy doctype
+  behaving like none, plus the five contexts where a wrapper lands exactly where it
+  was put, plus the half that holds either way - the content is inside the wrapper
+  even when the wrapper is not where it was meant to be. One assertion is about the
+  table itself: that exactly one of the five wrappers is mode-dependent, so the
+  test fails if another one starts to be.
+
+- **`examples/gip/tablelayout`** converts a div-based page into the table markup an
+  email client renders, and refuses the conversions whose result would depend on the
+  doctype: a row inside a paragraph is left as it is and counted, and the report says
+  the document's mode so a reader can tell whether the refusal mattered. Empty cells
+  get a non-breaking space, as the character via `lolhtml.Text` rather than as
+  `&nbsp;`, since the escaping is the library's job. Its properties are that the
+  output does not depend on the read size, over six sizes from one byte, and that
+  converting twice converts nothing the second time.
+
 - **`examples/gip/email`** prepares a page for a mail client: it inlines the
   stylesheet, absolutises the URLs, and removes what a client would refuse to run.
   It is the clearest case in the collection of a rewriter being most of a tool and
@@ -1760,6 +1777,32 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Whether a table wrapper escapes a paragraph depends on the doctype.** The
+  package documentation says a wrapper is two insertions and the parser decides
+  what they wrap, and B146 says a block wrapper inside a `<p>` takes the content
+  out of it. Both are right, and `<table>` is an exception whose answer is not a
+  property of the markup at all: a table start tag closes an open paragraph in a
+  standards-mode document and not in a quirks-mode one. Measured against
+  x/net/html:
+
+      wrapper     no doctype (quirks)   <!doctype html>
+      <table>     stays in the <p>      leaves the <p>
+      <div>       leaves                leaves
+      <section>   leaves                leaves
+      <ul>        leaves                leaves
+      <span>      stays                 stays
+
+  Every other wrapper is mode-independent: a block one leaves in both modes, an
+  inline one stays in both. A legacy doctype - `HTML 4.01 Transitional` - is quirks
+  too, so it behaves like having none.
+
+  It matters where table wrappers are the technique rather than an accident, which
+  is converting a page to the markup an email client renders - on documents that
+  frequently have no doctype at all. The same input gives two different trees and
+  nothing reports it.
+
+  Documented as its own section before the wrapper one, and as B174.
+
 - **What a rewrite does to a body that is not text, and why it depends on the
   handler set.** The text path decodes and re-encodes, so a byte that is not valid
   in the declared encoding becomes U+FFFD. That was documented as a one-character
