@@ -123,6 +123,28 @@ type MemorySettings struct {
 	// some boundary and verbatim after it, but not broken, and you can keep
 	// serving by writing subsequent bytes straight to your own sink. The
 	// rewriter itself is still unusable afterwards.
+	//
+	// Two things about that boundary. It can be at the very beginning: the buffer
+	// requirement is decided early, so a limit that is too small for a document
+	// usually fails on the first write rather than part way through. Measured on a
+	// 2.6 KB document of 201 paragraphs fed in 64-byte writes, with a handler
+	// setting an attribute on each:
+	//
+	//	                  output   paragraphs rewritten
+	//	MaxMemory 560     0 bytes    0    default: nothing reached the destination
+	//	MaxMemory 560    64 bytes    0    graceful: one write, verbatim
+	//	MaxMemory 900   5425 bytes 201    no bail-out
+	//
+	// So "rewritten up to some boundary" can mean "rewritten up to byte zero", and
+	// the error surfaces in both modes either way.
+	//
+	// And what the flush contains is input, not output. For a rewrite that adds
+	// something - a lazy-loading attribute, a class - continuing to serve is a page
+	// that is merely unimproved. For a rewrite that removes or neutralises
+	// something - a sanitiser, a token, an autoplay attribute, a tracking script -
+	// continuing to serve is serving the thing the rewrite existed to stop. There
+	// the truncated response is the safer failure, which is the opposite of the way
+	// this option reads. Measured in gracefulbailout_test.go.
 	GracefulBailOut bool
 }
 
