@@ -853,6 +853,23 @@
 // A table extractor should therefore take cell content from cells rather than
 // text from the table, which is what examples/gip/tablecsv does.
 //
+// The third thing that follows is the one that bites a rewrite rather than a
+// reader: an insertion goes where the markup says, and tree construction may put
+// it somewhere else. Measured against golang.org/x/net/html, prepending
+// <input name="csrf"> to a form:
+//
+//	<form method=post><p>x</p>                 form > input     where it was put
+//	<table><tr><td><form method=post>          td > form > input  the same
+//	<table><form method=post><tr>              table > input     outside the form
+//	<table><tbody><form method=post><tr>       tbody > input     outside the form
+//	<select><form method=post>                 body > input      outside everything
+//
+// The bytes say the field is inside the form and the tree says it is beside it. For
+// a hidden field carrying a token, a nonce on a script, or anything else whose
+// position is the whole point, "the markup looks right" is not the test - and a
+// rewrite that cannot tell the shapes apart should refuse the ones it cannot, which
+// is what examples/gip/csrf does. Pinned in differential/table_test.go.
+//
 // # Removal suppresses output, not handler calls
 //
 // [Element.Remove] takes the element and its content out of the output. It does
