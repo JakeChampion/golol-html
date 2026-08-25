@@ -1041,6 +1041,37 @@
 // rewrite that cannot tell the shapes apart should refuse the ones it cannot, which
 // is what examples/gip/csrf does. Pinned in differential/table_test.go.
 //
+// # <image> is a spelling of <img>
+//
+// The parser renames one element. An <image> start tag in HTML content builds an img
+// element, carrying every attribute it had - so a browser fetches the file and runs
+// its onerror - while the rewriter reports what the document spelled:
+//
+//	<image src="x.png" onerror="alert(1)">
+//
+//	in the tree      img src="x.png" onerror="alert(1)"
+//	here             TagName() == "image", and "img" matches nothing
+//
+// So every rewrite keyed on img has a hole in it: a sanitiser stripping event
+// handlers, a URL rewriter, a mixed-content checker. The fix is to match both names
+// and to check [Element.NamespaceURI] on the second, because SVG has an image element
+// of its own that keeps its name and is not an img at all:
+//
+//	OnElement("img,image", func(e *Element) error {
+//		if e.TagName() == "image" && e.NamespaceURI() != NamespaceHTML {
+//			return nil // an SVG image
+//		}
+//		…
+//	})
+//
+// Renaming it with [Element.SetTagName] is the tidiest answer where a rewrite is
+// editing the document anyway: the output then says what the browser was going to
+// build. Nothing else on the obsolete list is renamed - center, font, marquee,
+// acronym, applet, keygen, isindex and the rest all reach the tree under their own
+// names - so this is one alias rather than a habit. Measured against
+// golang.org/x/net/html in differential/imagealias_test.go, and reported by
+// examples/gip/deprecated.
+//
 // # An HTML tag name inside an <svg> ends the svg
 //
 // Foreign content is not a container the way an element is. The parser breaks out of
