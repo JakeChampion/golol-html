@@ -1422,6 +1422,46 @@
 // poisoned and every later Write returns [ErrPoisoned]. A Writer that panics
 // releases its native resources on the way out, so a caller who recovers does
 // not leak them, but Close should still be deferred as a matter of course.
+//
+// # Stopping early
+//
+// A rewrite over a stream that does not end - or one that only needs its first
+// few kilobytes - has two ways to stop, and they answer different questions.
+//
+// Return an error from a handler when the condition is a place in the document.
+// The error identity survives: wrap a sentinel, and errors.Is finds it in what
+// Write returns and in what Close returns, the latter under [ErrPoisoned]. Every
+// later Write is refused and still carries the cause, so a caller in a loop does
+// not have to break out of it on the first error.
+//
+// What has reached the sink at that point is more than a truncation. It is byte
+// for byte what a fresh rewriter produces from that many bytes of the input: no
+// half-serialised element, no tag cut in the middle, and the unit whose handler
+// stopped is not emitted at all. So the partial output can be kept or served.
+// Where the prefix ends depends on which handler stopped:
+//
+//	an element handler   the bytes before that element's start tag
+//	an end-tag handler   the bytes before that end tag
+//	a comment handler    the bytes before that comment
+//	a text handler       the bytes before that chunk
+//
+// The last row is the exception to the rest of this section, because a chunk is
+// not a position in the document: how many chunks a text node arrives in depends
+// on the caller's write sizes, so "stop at the fifth chunk" stops in a different
+// place for a different reader upstream. Count to [TextChunk.IsLastInTextNode]
+// and the position is the document's again. Measured in earlystop_test.go.
+//
+// Stop writing and call Close when the condition is the caller's rather than the
+// document's - enough data, long enough, a budget spent. Close reports nil, the
+// output is a rewrite of what was fed, and nothing is poisoned. The cost is
+// granularity: the condition is checked between writes, so the rewrite overshoots
+// by up to one write's worth of document. examples/gip/stopwhen runs both
+// mechanisms over a stream that never ends and prints what each leaves behind.
+//
+// Either way Close has to be called, and either way it releases everything: the
+// handles a rewrite held are gone afterwards whether it ended at the document's
+// end, at a handler's error, or in the middle of a stream nobody intends to
+// finish reading.
 package lolhtml
 
 /*
