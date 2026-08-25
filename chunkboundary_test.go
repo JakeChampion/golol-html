@@ -2,8 +2,9 @@ package lolhtml_test
 
 // Where a text chunk can begin and end.
 //
-// The boundaries follow the writes, so they are not a caller's choice. The claim
-// is that they always fall between characters - which makes a per-character
+// The boundaries are not a caller's choice: the writes split a node, and so does
+// the tokenizer - see textchunks_test.go for that half. The claim here is that
+// wherever they fall, they fall between characters - which makes a per-character
 // transform safe per chunk, and is the opposite of the rule for content going
 // into a sink, where a partial sequence is accepted and joined to the next write.
 

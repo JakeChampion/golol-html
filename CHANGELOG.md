@@ -1297,6 +1297,27 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Chunk boundaries do not only follow the writes.** `TextChunk.Text` said "where
+  the chunk boundaries fall is not a caller's choice - they follow the writes,
+  which follow whatever reader is upstream", which reads as a promise that
+  controlling the writes controls the chunking. The tokenizer splits a text node
+  as well, at a `<` that turns out not to begin a tag, and hands that character
+  over as a chunk by itself:
+
+      <p>3 < 4 and 5 < 6</p>    "3 "  "<"  " 4 and 5 "  "<"  " 6"  ""
+
+  Six chunks for one text node, from one write. So prose with a bare `<` in it -
+  arithmetic, a code sample outside a `<code>` element - arrives in more pieces
+  than a caller sizing the work by writes would expect, and the Cost section's
+  "a text handler sees two chunks per text node" is a floor rather than a figure.
+
+  Both now say so. Measured with it: a `&lt;`, a `&`, a NUL and a CRLF split
+  nothing; `<!`, `</` and `<?` end the text node instead, each of them beginning a
+  comment token; and length alone never splits a node, so 1 MB of text in one
+  write is still two chunks. The advice does not change - accumulate to
+  `IsLastInTextNode` - but the reason it is not optional does.
+  `textchunks_test.go` holds the measurements, and `chunkboundary_test.go`'s
+  header no longer says the writes are the whole story.
 - **`SetAttribute` lower-cases a name it is adding, and keeps the document's
   spelling when it is updating.** Which means an SVG attribute can be changed and
   cannot be introduced:
