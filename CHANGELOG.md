@@ -505,6 +505,19 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A table can contain things that a parser says are not in it.** Content that
+  cannot be inside a table is moved to just before it by a parser - foster
+  parenting - and there is no tree here to move anything in, so it is reported
+  inside the table and emitted there. The output is byte-identical, because a
+  browser reading it fosters the content out again, so nothing looks wrong.
+
+  Two consequences, both measured against `x/net/html`: a text handler on the
+  table is given text that is not in the table, and `Element.Remove` on the table
+  removes that content where a tree-based edit keeps it -
+  `<p>before</p><table>stray<tr><td>a</table><p>after</p>` becomes
+  `<p>before</p><p>after</p>` here and `<p>before</p>stray<p>after</p>` in a
+  tree. There is a package-doc section and a note on `Element.Remove`, and
+  `differential/table_test.go` pins five shapes.
 - **`Element.SetUserData` named the one thing it cannot do.** It said the value
   is "readable by any later handler that sees the same element - most usefully an
   end-tag handler". An end-tag handler cannot read it: `EndTag` has no user data,

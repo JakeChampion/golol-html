@@ -553,6 +553,12 @@ func (e *Element) content(content string, ct ContentType, op string, fn contentO
 // item of <ul><li>a<li>b<li>c</ul> removes all three, with no error: see the
 // package documentation on end tags being tokens.
 //
+// Nor is it the same thing as everything a parser would say is inside it. A
+// table is the case: content a parser moves out of one - text between <table>
+// and the first <tr>, for instance - is inside it here, so removing the table
+// removes content a tree-based edit would keep. See the package documentation on
+// a table containing things that are not in it.
+//
 // Handlers still run for the content being removed, and their edits are
 // discarded with it. Content inserted inside the element after this call is not
 // discarded, which is a corner worth reading about: see the package
