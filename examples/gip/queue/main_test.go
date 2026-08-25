@@ -112,10 +112,17 @@ func TestTheClockCanResolveWhatWeAskItTo(t *testing.T) {
 
 // TestTheAllocationShareBarelyMovesBetweenRuns, which is why the assertions further down rest on
 // it: it is a count rather than an interval, so it has no clock in it and no scheduler either.
-// Barely rather than not at all - the tolerance is one allocation, because the malloc counter
-// includes the runtime's own and those depend on the state of the heap. Measured, the figure for
-// one worker and for four differs by at most one in four hundred, in either direction, where the
-// timing it replaced ranged two and a half fold.
+//
+// Barely rather than not at all, and the size of "barely" is the same one alloc_test.go writes
+// down for the same reason: a count is reproducible for a given input and toolchain, but the
+// fixed part of it is not identical every time, because the malloc counter includes the
+// runtime's own allocations and those depend on the state of the heap. This machine moves by one
+// in four hundred; the macOS and Linux arm64 runners moved by two in four hundred and fifty.
+// Eight is the tolerance the root gate uses, so it is the one used here.
+//
+// What the gate actually needs is the share, and that is asserted an order of magnitude tighter:
+// the three shares it compares are 0.33 and 0.80 apart, so 0.01 separates signal from noise
+// thirty times over. The timing this replaced ranged two and a half fold.
 func TestTheAllocationShareBarelyMovesBetweenRuns(t *testing.T) {
 	items := makeItems(30, 128)
 	first, err := Run(items, 1, 50)
@@ -126,8 +133,9 @@ func TestTheAllocationShareBarelyMovesBetweenRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if math.Abs(first.AllocsBuild-second.AllocsBuild) > 1 ||
-		math.Abs(first.AllocsFull-second.AllocsFull) > 1 {
+	const tolerance = 8
+	if math.Abs(first.AllocsBuild-second.AllocsBuild) > tolerance ||
+		math.Abs(first.AllocsFull-second.AllocsFull) > tolerance {
 		t.Errorf("one worker counted %.0f of %.0f allocations and four counted %.0f of %.0f",
 			first.AllocsBuild, first.AllocsFull, second.AllocsBuild, second.AllocsFull)
 	}
