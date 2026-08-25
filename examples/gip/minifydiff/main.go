@@ -349,9 +349,14 @@ func (p *projector) element(e *lolhtml.Element) error {
 	b.WriteByte('<')
 	b.WriteString(name)
 	attrs := e.AttributeList()
-	sort.Slice(attrs, func(i, j int) bool { return attrs[i].Name < attrs[j].Name })
+	sort.Slice(attrs, func(i, j int) bool {
+		return attrs[i].NamePreserveCase < attrs[j].NamePreserveCase
+	})
 	for _, a := range attrs {
-		fmt.Fprintf(&b, " %s=%q", a.Name, a.Value)
+		// The source spelling, not the lower-cased name: in SVG and MathML the
+		// case is part of the attribute, so a minifier that turned viewBox into
+		// viewbox has changed the document and this has to say so.
+		fmt.Fprintf(&b, " %s=%q", a.NamePreserveCase, a.Value)
 	}
 	if e.IsSelfClosing() {
 		b.WriteByte('/')

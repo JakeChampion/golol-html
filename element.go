@@ -69,6 +69,11 @@ func (e *Element) TagNamePreserveCase() string {
 
 // SetTagName renames the element. The matching end tag, if any, is renamed too.
 //
+// The name is written as given: "sPan" produces <sPan>, unlike
+// [Element.SetAttribute], which lower-cases a name it is adding. The first
+// character has to be an ASCII letter - a digit or a non-ASCII letter is an error
+// - and the characters that could end a tag are refused, as they are there.
+//
 // Renaming can change what the element's content means, because whether content
 // is markup is decided by the element it is in. Renaming one of the raw-text
 // elements to an ordinary one turns its text into markup:
@@ -379,6 +384,38 @@ func (e *Element) HasAttribute(name string) (bool, error) {
 }
 
 // SetAttribute sets the named attribute, adding it if absent.
+//
+// The name's case is not kept when the attribute is being added: it is
+// lower-cased, and there is no way to write a name with a capital in it that was
+// not already in the document. Updating one that is there keeps the document's
+// spelling, so the two directions differ:
+//
+//	<svg viewBox="0 0 1 1">    SetAttribute("viewBox", "0 0 9 9")  ->  viewBox="0 0 9 9"
+//	<svg>                      SetAttribute("viewBox", "0 0 9 9")  ->  viewbox="0 0 9 9"
+//
+// In HTML that is nothing: attribute names are matched case-insensitively, and
+// [Attributes] lower-cases them for the same reason. In SVG and MathML it is a
+// silent breakage, because there the names are case-sensitive - viewbox is not
+// viewBox, and a browser ignores it. The spec's list of the ones that need a
+// capital runs to about sixty names, viewBox, preserveAspectRatio,
+// gradientTransform, patternUnits, refX, textLength, stdDeviation and
+// zoomAndPan among them.
+//
+// So a rewrite that reads an SVG attribute, computes a new value and writes it
+// back works, and the same code adding the attribute to an element that did not
+// have it produces one a browser will not read. Where the attribute has to be
+// added, the tag has to be written: [Element.Replace] with markup you build, or
+// the value carried into the document some other way. [Attribute.NamePreserveCase]
+// is the read side of the same problem, and is how a rebuild keeps the spelling.
+//
+// The name is checked, and the characters it refuses are the ones that could end
+// the attribute or start another: a space, a tab, a newline, "/", "=", ">", and
+// the empty name. Those return an error rather than producing markup, so a name
+// taken from a document cannot break the tag it is written into. What it accepts
+// includes the merely odd - a quote, an apostrophe, a "<", a leading digit - each
+// of which reads back as part of the name. [Element.SetTagName] is stricter: it
+// requires the first character to be an ASCII letter, and it does not lower-case
+// what it is given. Measured in attrnamecase_test.go.
 //
 // The value is raw attribute-value source, the mirror of what Attribute
 // reports, so it needs no escaping from the caller: a value read from one

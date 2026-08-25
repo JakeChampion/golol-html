@@ -373,3 +373,24 @@ func TestWhyTheEndTagHasToBeWrittenBack(t *testing.T) {
 		t.Errorf("got %q, want %q", out, "<h1>a b<p>after</p>")
 	}
 }
+
+// TestAnSVGInsideAHeadingKeepsItsAttributeCase. The rebuild goes through
+// AttributeList and not the Attributes iterator, because the iterator lower-cases
+// names: in SVG a viewbox is not a viewBox, and a browser ignores it. This is a
+// rebuild of markup the program did not write, so the spelling is not the
+// program's to normalise.
+func TestAnSVGInsideAHeadingKeepsItsAttributeCase(t *testing.T) {
+	const doc = `<h1>Chart <svg viewBox="0 0 1 1" preserveAspectRatio="none"></svg> for last year</h1>`
+	got, res := run(t, doc)
+	if res.Joined != 1 {
+		t.Fatalf("Joined = %d, want 1 - the rebuild did not happen", res.Joined)
+	}
+	for _, want := range []string{`viewBox="0 0 1 1"`, `preserveAspectRatio="none"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output %q lost %s", got, want)
+		}
+	}
+	if strings.Contains(got, "viewbox") {
+		t.Errorf("output %q lower-cased an SVG attribute name", got)
+	}
+}
