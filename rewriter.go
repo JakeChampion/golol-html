@@ -149,6 +149,11 @@ func NewWriter(dst io.Writer, opts ...Option) (*Writer, error) {
 // forwarded to the destination writer as it becomes available, which may happen
 // during this call or a later one.
 //
+// The destination can be another Writer, since a Writer is an io.Writer: that is
+// a streaming second pass, which is what it takes to act on markup an earlier
+// stage produced. Close the stages upstream first, because each one flushes into
+// the next. See the package documentation on two passes.
+//
 // An error from one of your handlers, or from the destination writer, surfaces
 // here. lol-html cannot resume after an error, so the Writer is poisoned and
 // every later Write and the Close return ErrPoisoned wrapped around that first

@@ -1197,6 +1197,17 @@
   order they were written.
 
 ### Testing
+- **`pipeline_test.go`** gates the composition: two stages annotate what the first
+  produced where one pass does not, the peak heap does not grow with the input,
+  piping costs what buffering costs and produces identical bytes, closing upstream
+  first is the order and the wrong one reports `ErrClosed`, an error in any of three
+  stages reaches the caller, and the downstream stage sees elements after the first
+  write rather than at `Close`.
+
+- **`examples/gip/pipeline`** runs a document through two stages and prints the
+  one-pass result beside the piped one, so the difference is visible rather than
+  described; `-wrong-order` closes the stages backwards and shows what that costs.
+
 - **`sinkwrites_test.go`** counts how the output was divided rather than what it
   said: a passthrough is one write, a selector matching nothing is one, a handler
   that does nothing is two per match, reading an attribute is the same, editing
@@ -1633,6 +1644,47 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A second pass does not have to hold the document.** The two-pass section
+  explained the cost of running a rewrite twice - about double the allocations -
+  and then said "the document has to be held while the first pass reads it, which
+  is the part that stops it being a streaming rewrite at all". That is true of a
+  second pass that needs what the first pass learned: a table of contents, a
+  canonical URL derived from the body. It is not true of a second pass that is
+  just another rewrite, and that is the common case, because acting on markup an
+  earlier handler produced is exactly what a second pass is for.
+
+  A `Writer` is an `io.Writer`. So a rewriter can be another rewriter's
+  destination, and then both stages run at once:
+
+      second, _ := lolhtml.NewWriter(dst, annotate...)
+      first, _  := lolhtml.NewWriter(second, insert...)
+      io.Copy(first, src)
+      first.Close()
+      second.Close()
+
+  Measured against the buffered form over 400 anchors:
+
+      one pass, both handlers            831 allocations   document held: no
+      piped, one handler each           1645               no
+      buffered, one handler each        1655               yes, all of it
+
+  Same doubling, same output byte for byte, and the peak heap above the baseline
+  stays flat as the input grows - 2.8 MB piping 1 MB, 3.5 MB piping 4 MB, 3.5 MB
+  piping 16 MB. The downstream stage sees bytes before the upstream stage has been
+  given the whole document, which is what a buffered second pass cannot do.
+
+  Two things about the shape were nowhere. **Close upstream first**, because each
+  stage's `Close` flushes into the next: measured on `<p>a</p`, closing the
+  downstream stage first loses `</p` and the upstream `Close` reports `ErrClosed`.
+  A document that ends cleanly has nothing to flush, so the wrong order looks fine
+  on the documents most tests use. And **an error in any stage reaches the caller
+  through every stage above it with its identity intact** - `errors.Is` finds a
+  third stage's sentinel in what the first stage's `Write` returned - so a pipeline
+  needs no error plumbing of its own.
+
+  Written up in the package documentation's two-pass section, on `Writer.Write`,
+  and as B170.
+
 - **What splits the output is matching, not editing.** The cost section said the
   number of writes a destination receives "is decided by what the rewrite does",
   and illustrated it with a mutation: one attribute set turning one write into
