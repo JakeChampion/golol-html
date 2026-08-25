@@ -3,6 +3,34 @@
 ## Unreleased
 
 ### Added
+- **`ErrInvalidUTF8`, because a value from outside the program can fail the whole
+  rewrite.** Every path that takes content or a name refuses bytes that are not
+  valid UTF-8: the `ContentType` insertions, `SetAttribute` for name and value,
+  `SetTagName`, `Comment.SetText`, and both sink writes. That is a rewrite that
+  fails, not an insertion that fails, so a page personalised from a request header
+  is one Latin-1 name away from not being served - `X-Name: caf\xe9` is an
+  ordinary thing for an old client to send.
+
+  The document path refuses nothing. The same bytes pass through untouched with no
+  text handler, and come back as U+FFFD with one, which is why this is easy to
+  miss while testing: a rewrite can carry bytes it cannot write.
+
+  Until now the only sign was lol-html's own wording ("invalid utf-8 sequence of 1
+  bytes from index 1", or "Invalid UTF-8" from the chunk writer), so a caller who
+  wanted to repair the value rather than fail the page had to match on message
+  text. `errors.Is(err, lolhtml.ErrInvalidUTF8)` now answers, and the
+  classification is made on this side: when a write fails, the argument it was
+  given is checked, so a reword upstream cannot turn the guard off. A trailing
+  partial sequence in `Sink.WriteChunk` is deliberately not this error - that is
+  the case `WriteChunk` exists for - and one still open when the `StreamFunc`
+  returns is still `ErrIncompleteRune`.
+
+  `strings.ToValidUTF8` and `utf8.ValidString` are the two answers, and which one
+  is right is the caller's decision, which is why this is an error rather than a
+  silent replacement. `invalidutf8_test.go` measures every path, both directions,
+  and the negative cases: a raw-text breakout and a forbidden attribute name are
+  not reported as encoding failures.
+
 - **`IsRawText`.** Ten element names hold content an HTML parser does not read as
   markup, and the package has always known which: it checks insertions into them
   and returns `ErrRawTextBreakout`. It also warns, in three places, that the two

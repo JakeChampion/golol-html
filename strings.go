@@ -64,7 +64,7 @@ func withContent[P comparable](unit P, content string, isHTML bool, op string, f
 	rc := fn(unit, p, n, C.bool(isHTML), &cerr)
 	runtime.KeepAlive(content)
 	if rc != 0 {
-		return nativeErr(op, cerr)
+		return nativeErrFor(op, cerr, content)
 	}
 	return nil
 }
@@ -79,7 +79,7 @@ func withName[P comparable](unit P, value string, op string, fn nameOp[P]) error
 	rc := fn(unit, p, n, &cerr)
 	runtime.KeepAlive(value)
 	if rc != 0 {
-		return nativeErr(op, cerr)
+		return nativeErrFor(op, cerr, value)
 	}
 	return nil
 }

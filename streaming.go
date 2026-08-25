@@ -146,7 +146,9 @@ func (s *Sink) Err() error {
 // WriteString writes s to the sink, escaping it when ct is Text.
 //
 // s must be complete, valid UTF-8. Use WriteChunk for content split at
-// arbitrary byte boundaries.
+// arbitrary byte boundaries. Bytes that are not valid UTF-8 are refused and
+// match [ErrInvalidUTF8], which is worth handling for anything that came from
+// outside the program.
 func (s *Sink) WriteString(str string, ct ContentType) error {
 	p, err := s.live()
 	if err != nil {
@@ -166,7 +168,7 @@ func (s *Sink) WriteString(str string, ct ContentType) error {
 	rc := C.golol_sink_write_str(p, sp, sl, C.bool(ct.isHTML()), &cerr)
 	runtime.KeepAlive(str)
 	if rc != 0 {
-		return nativeErr("streaming_sink_write_str", cerr)
+		return nativeErrFor("streaming_sink_write_str", cerr, str)
 	}
 	s.trackTail(str)
 	return nil
@@ -193,7 +195,7 @@ func (s *Sink) WriteChunk(b []byte, ct ContentType) error {
 		C.bool(ct.isHTML()), &cerr)
 	runtime.KeepAlive(b)
 	if rc != 0 {
-		return nativeErr("streaming_sink_write_utf8_chunk", cerr)
+		return nativeErrForChunk("streaming_sink_write_utf8_chunk", cerr, s.tail[:s.tailLen], b)
 	}
 	s.trackTail(string(b))
 	return nil
