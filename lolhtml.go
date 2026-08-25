@@ -162,12 +162,14 @@
 // taken from a missing end tag is at least silent, and this one runs the handler on
 // an element that is not there.
 //
-// The child combinator cannot be fooled this way, because the start tag that ended
-// the element is also the parent of whatever comes next. Where the thing being
-// looked for can only be a child, "a > b" is both the more precise question and the
-// safe one - examples/gip/captions asks "video > track" for that reason - and where
-// it cannot, the answer is the caller's own stack of open elements with the implied
-// end tags applied.
+// The child combinator cannot be fooled into over-matching this way, because the
+// start tag that ended the element is also the parent of whatever comes next. Where
+// the thing being looked for can only be a child, "a > b" is the more precise
+// question - examples/gip/captions asks "video > track" for that reason. It fails the
+// other way instead, under-matching when the omitted end tag is the one being
+// selected through: see the next section. Where neither combinator will do, the
+// answer is the caller's own stack of open elements with the implied end tags
+// applied.
 //
 // A handler that only wants to know the element is over, rather than to write at
 // its position, needs a finer distinction than the name gives. A foreign end tag
@@ -177,6 +179,43 @@
 // separates those two, so anything accumulating has to keep the stack of open
 // elements itself and apply the implied end tags. See [Element.OnEndTag], and
 // examples/gip/markdown for what that costs.
+//
+// # Structural selectors count tokens, not children
+//
+// The selector engine pushes on a start tag and pops on an end tag, so the tree it
+// matches against is the nesting the tokens describe. HTML lets a document leave most
+// end tags out, and then the nesting is not the page's: the second list item is inside
+// the first rather than beside it. Every selector that depends on position or
+// parentage answers a different question from the one it looks like:
+//
+//	<ul><li>a<li>b<li>c</ul>          with </li> spelled
+//
+//	ul > li            1 of 3          3
+//	li > li            2               0
+//	li:first-child     all 3           1
+//	li:nth-child(2)    none            1
+//	li:nth-of-type(2)  none            1
+//
+// So a rewrite keyed on position is right on the pages written one way and wrong on
+// the pages written the other, and a document that mixes the two - some items closed,
+// some not - is partly right, which is harder to notice. Measured over that list, over
+// a list whose items hold an element, and over paragraphs, table cells, table rows and
+// definition lists, in differential/structural_test.go.
+//
+// It is not an off-by-one that could be corrected for. The count is of whatever the
+// tokens nested, so in <ul><li><img><li><img></ul> the selector "li:nth-child(2)"
+// matches the second item - as the second child of the first item, after the image.
+// The same selector on the same list with its end tags matches the same element for
+// the right reason. Nothing in the callback distinguishes those two.
+//
+// What to do about it depends on what the position was for. Numbering, striping and
+// "every third" want a counter in a handler, incremented per match, which counts the
+// elements the rewrite actually sees; that is what examples/gip/shard uses a hash for
+// instead, needing stability rather than position. Selecting the *first* of something
+// is the one position that survives, since ":first-child" over-matching still includes
+// the element a page would call first. And a rewrite that must be exact about position
+// on documents it did not write has the same answer as everything else here: buffer
+// the input, and let a first pass find out what the tree is.
 //
 // # Handler lifetime
 //
@@ -280,7 +319,9 @@
 //	[a^=v]  [a$=v]  [a*=v]
 //	[a=v i]   [a=v s]                  case-sensitivity flags
 //	:not(x)                            one simple selector only, see below
-//	:first-child  :nth-child(2n+1)     odd, even and an+b all work
+//	:first-child  :nth-child(2n+1)     odd, even and an+b all work, over the
+//	                                   nesting the tokens describe: see structural
+//	                                   selectors above
 //	:first-of-type  :nth-of-type(n)
 //	*|name                             any namespace
 //

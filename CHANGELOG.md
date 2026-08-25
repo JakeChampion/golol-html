@@ -1318,6 +1318,37 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Structural selectors count tokens, not children.** The engine pushes on a start
+  tag and pops on an end tag, so it matches against the nesting the tokens describe.
+  HTML lets a document leave most end tags out, and then that nesting is not the
+  page's - the second list item is inside the first rather than beside it:
+
+      <ul><li>a<li>b<li>c</ul>          with </li> spelled
+
+      ul > li            1 of 3          3
+      li > li            2               0
+      li:first-child     all 3           1
+      li:nth-child(2)    none            1
+      li:nth-of-type(2)  none            1
+
+  The tree has three items in one list either way, checked against x/net/html. So a
+  rewrite keyed on position is right on the pages written one way and wrong on the
+  pages written the other, and a document that closes some items and not others is
+  partly right, which is harder to notice.
+
+  It is not an off-by-one that could be corrected for: the count is of whatever the
+  tokens nested. In `<ul><li><img><li><img></ul>`, `li:nth-child(2)` matches the
+  second item as the second child of the first item, after the image - the same
+  selector matching the same element for a different reason than it would on the
+  closed form. Paragraphs, table cells, table rows and definition lists all behave
+  this way, and paragraphs are the most common markup there is.
+
+  New package documentation section with what to do instead - a counter in a handler,
+  or a buffered first pass - a note in the supported-selectors list, and a
+  correction to last turn's claim that the child combinator cannot be fooled: it
+  cannot over-match, and it under-matches here. `differential/structural_test.go`
+  gates every row. B151.
+
 - **Handlers on one element share the element, and the documentation said the
   opposite.** The selectors section explained that matching is settled before any
   handler runs - an edit never changes which handlers fire - and then drew the wrong
