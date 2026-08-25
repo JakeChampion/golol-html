@@ -593,6 +593,25 @@
 // "&amp;" into "&amp;amp;". Decode it first, or leave it raw and do not escape
 // it; see the section on character references.
 //
+// There is a third context and it has no escaper, because it cannot have one. A
+// comment ends at "-->" or at "--!>", and nothing inside it is a reference, so
+// there is no spelling of those four characters that a comment can hold:
+//
+//	e.Append("<!-- "+title+" -->", lolhtml.HTML)
+//
+//	title = `--><img src=x onerror=alert(1)><!--`
+//	// <!-- --><img src=x onerror=alert(1)><!-- -->
+//
+// and the image is an element. Both closing sequences work, measured in
+// differential/comment_test.go. Passing the value through [EscapeText] does stop
+// it - "--&gt;" is not a closing sequence - and it also changes what the comment
+// says, since a comment holds characters rather than references. So the choice is
+// between a comment that is wrong and one that is dangerous, which is why
+// [Comment.SetText] refuses instead: it is the only path that writes a comment's
+// text for you, and it rejects a closing sequence rather than escaping one. Where
+// the comment already exists, use it. Where it does not, remove the sequence from
+// the value yourself and say in the comment that you did.
+//
 // # Reading an element's whole text
 //
 // [OnText] fires for every text chunk inside the matched element, including text

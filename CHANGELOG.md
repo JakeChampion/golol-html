@@ -505,6 +505,27 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`Comment.SetText` refuses; its documentation said it escapes.** The sentence
+  was "The value is escaped so that it cannot terminate the comment early, so
+  untrusted input is safe". The value is rejected:
+
+      c.SetText("--><img src=x>")
+      lolhtml: comment_text_set: Comment text shouldn't contain a
+      comment-closing sequence.
+
+  Nothing breaks out either way, and the difference is what a caller has to
+  handle: passing arbitrary text fails the rewrite instead of producing a
+  sanitised comment. The doc now says so, and says why refusing is the only honest
+  option - a comment ends at `-->` or `--!>` and holds characters rather than
+  references, so there is no escaped spelling of those that a comment can hold and
+  still mean.
+
+- **Building a comment by hand has no guard, and the section about building markup
+  by hand did not mention comments.** `Append("<!-- "+title+" -->")` with a title
+  containing `-->` or `--!>` lets an element out; `EscapeText` stops that and
+  changes what the comment says. So the section now covers the third context, and
+  says the answer there is different in kind: remove the sequence from the value,
+  or use `SetText` on a comment that already exists.
 - **The `# Cost` section explained the two-pass ratio with a reason that points
   the wrong way.** It said a second pass roughly doubles the allocation count,
   "a ratio that does not grow with document size, since almost all of it is

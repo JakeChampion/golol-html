@@ -23,8 +23,32 @@ func (c *Comment) Text() string {
 	return takeStr(C.lol_html_comment_text_get(p))
 }
 
-// SetText replaces the comment's text. The value is escaped so that it cannot
-// terminate the comment early, so untrusted input is safe.
+// SetText replaces the comment's text, and refuses a value that would end the
+// comment early:
+//
+//	c.SetText("--><img src=x>")
+//	// lolhtml: comment_text_set: Comment text shouldn't contain a
+//	// comment-closing sequence.
+//
+// Refused, not escaped - which this documentation used to say, along with the
+// conclusion that untrusted input is therefore safe to pass. It is safe in the
+// sense that nothing breaks out, and it fails the rewrite: a caller handing this
+// arbitrary text has to expect an error and decide what to do about it, not
+// expect a sanitised comment.
+//
+// There is no escaping that would work. A comment ends at "-->" or at "--!>", and
+// nothing inside a comment is a character reference, so there is no spelling of
+// those four characters that a comment can hold and still mean. Refusing is the
+// only honest option, which is the same reason [ErrRawTextBreakout] refuses an
+// insertion into a script.
+//
+// Measured: "-->", "--!>", "->", "a-->b", "a--!>b" and "<!-->" are refused;
+// "--", "--!", "<!--" and "a--b" are accepted, and each of those round-trips as
+// one comment.
+//
+// This is the only path that writes a comment's text for you. Building a comment
+// by hand out of [HTML] content has no equivalent guard - see the package
+// documentation on building markup yourself.
 func (c *Comment) SetText(text string) error {
 	p, err := c.live()
 	if err != nil {
