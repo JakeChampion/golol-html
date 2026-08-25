@@ -1318,6 +1318,44 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A `<template>` is markup that is not on the page, and prepending into one can
+  delete its content.** The package documentation said nothing about templates,
+  which left two things to find out the hard way.
+
+  The first is what fires. Handlers fire inside a template exactly as anywhere
+  else, at any depth of nesting, and a descendant selector crosses the boundary -
+  `template video` matches and so does a bare `video`. But the content is inert
+  until a script clones it, so a match there is a rewrite of a blueprint: a report
+  saying "6 videos" for a page with two and a carousel template is wrong twice
+  over. The selector cannot tell you which side of the boundary you are on, so a
+  program that cares needs a depth counter.
+
+  The second is that the content parses by the template's own rules. Measured
+  against x/net/html:
+
+      <template><tr><td>x</td></tr></template>   template > tr > td > "x"
+      <div><tr><td>x</td></tr></div>             div > "x": both tags dropped
+
+  A `td` handler fires in both, so a handler call is not evidence that a cell
+  exists. And a template inside a table is not fostered out, which sounds like the
+  safe place to insert until you measure it:
+
+      <table><template><tr><td>x</td></tr></template></table>
+
+      Prepend("<input>", HTML)   table > template > input > "x"   the rows are gone
+      Append("<input>", HTML)    table > template > tr > td > "x" > input
+      Prepend("<!--c-->", HTML)  table > template > tr > td > "x"
+      Prepend("hello", Text)     table > template > "hello" > tr > td > "x"
+
+  The rows are parsed in a mode that the first inserted element ends, so prepending
+  one throws them away - the parser's rule, not the insertion's fault, since the
+  same bytes written by hand lose them too. It is the exact mirror of foster
+  parenting: in a table the insertion moves and the content survives, in a template
+  the insertion stays and the content can go.
+
+  New package documentation section, a warning on `Element.Prepend`, and
+  `differential/template_test.go` measuring all of it.
+
 - **A graceful bail-out serves unrewritten input, and its rewritten prefix can be
   empty.** `MemorySettings.GracefulBailOut` said that the rewriter flushes what it
   has instead of discarding it, which sounds like a strictly better failure. It is
