@@ -1168,6 +1168,27 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/streamvsmemory`, which runs a rewrite both ways and says what differs.**
+  The in-memory shape is the one people test with - `RewriteString` is the shortest way to
+  try a rewrite - and three of the differences it hides are worth having a tool for:
+
+      output            identical (1671 bytes)
+      element handlers  42 both ways
+      text handlers     80 in memory, 87 streamed
+      text nodes        40 both ways
+      comment handlers  40 both ways
+      memory floor      1024 both ways
+
+  The output and the element, comment, doctype and text-*node* counts are guarantees; the
+  text-*chunk* count is not, because a text node's chunk boundaries follow the writes. The
+  memory floor is where the two shapes really part company, and `-floor` measures it for
+  both, since a limit chosen in memory can be far too small when streamed.
+
+  Nothing in the library changed. The tests pin which lines are guarantees, that smaller
+  writes give more chunks and the same node count, that a differing chunk count is not a
+  failure, and that the in-memory floor is not enough for the streamed shape on a document
+  big enough to show it.
+
 - **`examples/gip/observe`, a rewriter that changes nothing and proves it.** The
   properties module already asserts that a read-only rewrite is the identity over
   generated documents; this is the same claim as a tool, over a caller's own document,
