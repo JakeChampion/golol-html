@@ -701,6 +701,14 @@
 // order. Anything you insert has to be safe before it goes in - use [Text] for
 // values you did not author, and see the section on inserting into a script for
 // where even that is not enough.
+// //
+// The same rule reaches the content that was already there, through
+// [Element.SetTagName]: a rename writes over the tag and leaves the content alone,
+// and whoever parses the output applies the new name's content model to it. Renaming
+// a div that holds a paragraph to a table fosters the paragraph out of it, and
+// renaming it to a select deletes the paragraph and a span beside it, merging their
+// text. So a rename is safe when the new element accepts what the old one held. See
+// differential/rename_test.go.
 //
 // # Inserting into a script or a style
 //
