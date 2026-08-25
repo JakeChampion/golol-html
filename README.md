@@ -263,11 +263,16 @@ Neither setting is simply the safe one:
 
 - **strict on**: the rewrite fails from `Write` or `Close`, and whatever was
   already emitted has reached the sink. Truncated response; discard it.
-- **strict off**: the rewrite succeeds and the content after the ambiguous tag
-  is treated as text, so no handler runs for it. For a sanitiser that is a
-  bypass - `<select><xmp><script>alert(1)</script>` comes out verbatim, with no
-  error and no handler invocation. The unseen region runs to the closing tag, or
-  to the end of the document if there is not one.
+- **strict off**: the rewrite succeeds and the ambiguous element is treated as a
+  raw-text element, so its content is text rather than markup. For a sanitiser that is
+  a bypass - `<select><xmp><script>alert(1)</script>` comes out verbatim. The region
+  runs to the closing tag, or to the end of the document if there is not one.
+
+  It is not silence, though, and the difference is worth knowing: the ambiguous element
+  itself fires an element handler, everything after a *closed* ambiguous tag is markup
+  as usual, and the missed markup arrives as **text**. So a rewrite that cannot use
+  strict mode can still refuse the document - a run of text holding `<script` is the
+  signal - and `examples/gip/strictmode` prints exactly what each mode sees.
 
 ## Memory limits
 
