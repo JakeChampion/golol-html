@@ -447,3 +447,96 @@ func TestUnrepresentableCharacterByPosition(t *testing.T) {
 		}
 	}
 }
+
+// standardEncodings is every canonical encoding name in the WHATWG Encoding
+// Standard's index, written out because the point of the list is to be complete:
+// a rewrite that accepts a label from a Content-Type header needs to know which
+// ones it can be given.
+var standardEncodings = strings.Fields(`
+utf-8 ibm866 iso-8859-2 iso-8859-3 iso-8859-4 iso-8859-5 iso-8859-6 iso-8859-7
+iso-8859-8 iso-8859-8-i iso-8859-10 iso-8859-13 iso-8859-14 iso-8859-15
+iso-8859-16 koi8-r koi8-u macintosh windows-874 windows-1250 windows-1251
+windows-1252 windows-1253 windows-1254 windows-1255 windows-1256 windows-1257
+windows-1258 x-mac-cyrillic gbk gb18030 big5 euc-jp iso-2022-jp shift_jis
+euc-kr replacement utf-16be utf-16le x-user-defined
+`)
+
+// refused is the four the rewriter will not take, and why it says it will not.
+var refused = map[string]string{
+	"utf-16le":    "ASCII-compatible",
+	"utf-16be":    "ASCII-compatible",
+	"iso-2022-jp": "ASCII-compatible",
+	"replacement": "Unknown",
+}
+
+// TestEveryStandardEncodingIsAcceptedOrRefusedForAReason walks the whole index, so
+// the documented list of refusals cannot fall behind the library.
+func TestEveryStandardEncodingIsAcceptedOrRefusedForAReason(t *testing.T) {
+	if len(standardEncodings) != 40 {
+		t.Fatalf("the index has %d names here; the documentation says 40", len(standardEncodings))
+	}
+	accepted := 0
+	for _, name := range standardEncodings {
+		_, err := lolhtml.RewriteString("<p>a</p>", lolhtml.WithEncoding(name))
+		want, isRefused := refused[name]
+		switch {
+		case !isRefused:
+			if err != nil {
+				t.Errorf("%s was refused: %v", name, err)
+				continue
+			}
+			accepted++
+		case err == nil:
+			t.Errorf("%s was accepted; the documentation says it is refused", name)
+		case !strings.Contains(err.Error(), want):
+			t.Errorf("%s was refused with %v, want a %q reason", name, err, want)
+		}
+	}
+	if accepted != 36 {
+		t.Errorf("%d of the %d encodings were accepted; the documentation says 36",
+			accepted, len(standardEncodings))
+	}
+}
+
+// TestTheUTF16LabelMeansLittleEndianAndIsRefusedToo, which is what a caller reading
+// a Content-Type header is most likely to be handed.
+func TestTheUTF16LabelMeansLittleEndianAndIsRefusedToo(t *testing.T) {
+	for _, label := range []string{"utf-16", "UTF-16", "unicodeFEFF", "iso-10646-ucs-2"} {
+		_, err := lolhtml.RewriteString("<p>a</p>", lolhtml.WithEncoding(label))
+		if err == nil {
+			t.Errorf("%q was accepted", label)
+			continue
+		}
+		if !strings.Contains(err.Error(), "ASCII-compatible") {
+			t.Errorf("%q was refused with %v, want the ASCII-compatibility reason", label, err)
+		}
+	}
+}
+
+// TestLabelsAreMatchedTheStandardsWay: whitespace stripped and nothing else
+// normalised, which is the difference between passing a header value straight in
+// and having to tidy it up first.
+func TestLabelsAreMatchedTheStandardsWay(t *testing.T) {
+	for _, tc := range []struct {
+		label string
+		ok    bool
+	}{
+		{"utf-8", true},
+		{"UTF-8", true},
+		{" utf-8 ", true},
+		{"\tutf-8\n", true},
+		{"utf8", true},
+		{"iso8859-1", true},
+		{"iso88591", true},
+		{"latin1", true},
+		{"utf_8", false},
+		{"utf 8", false},
+		{"8859_1", false},
+		{"", false},
+	} {
+		_, err := lolhtml.RewriteString("<p>a</p>", lolhtml.WithEncoding(tc.label))
+		if (err == nil) != tc.ok {
+			t.Errorf("%q: accepted = %v, want %v (%v)", tc.label, err == nil, tc.ok, err)
+		}
+	}
+}

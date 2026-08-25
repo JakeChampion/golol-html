@@ -1318,6 +1318,29 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`WithEncoding` refuses four of the standard's encodings, and named one.** The
+  documentation said "a non-ASCII-compatible encoding is refused" and listed the
+  UTF-16 family. Measured across every canonical name in the WHATWG Encoding
+  Standard's index, 36 of the 40 work and four do not:
+
+      utf-16le  utf-16be   not ASCII-compatible, as documented
+      iso-2022-jp          not ASCII-compatible, and not documented
+      replacement          refused as unknown
+
+  `iso-2022-jp` is the one that matters, because it is the one a real page
+  declares. Its bytes look ASCII until an escape sequence switches the charset,
+  after which they are not - so it cannot be rewritten in a stream either, and a
+  caller pointing this at a Japanese page finds out from an error rather than from
+  the documentation. `replacement` is a real label whose purpose is to decode
+  nothing safely, and is reported as unknown rather than as incompatible.
+
+  Two notes on label matching went in with it, for a caller passing a value straight
+  from a Content-Type header: leading and trailing whitespace is stripped, so
+  " utf-8 " works, and nothing else is normalised, so "utf_8" and "utf 8" are
+  unknown labels while "iso8859-1" and "iso88591" are windows-1252.
+
+  `encoding_test.go` walks the whole index, so the documented list cannot fall
+  behind the library, and checks that each refusal gives the reason it should.
 - **Registering a text handler is not free even if it does nothing, and the other
   handlers are.** That a text handler re-encodes undecodable bytes was documented,
   inside `ErrInvalidUTF8`, as a consequence of talking about invalid UTF-8. What
