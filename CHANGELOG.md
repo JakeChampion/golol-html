@@ -1354,6 +1354,29 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`html.UnescapeString` is not the parser's decoder for an attribute value.** Three
+  places in the documentation say to decide on the decoded form and to get that form
+  from the standard library. For text that is right. For an attribute value it is not,
+  and the difference lands on URLs:
+
+      <a href="?a=1&copy=2">
+
+      a browser has          ?a=1&copy=2
+      html.UnescapeString    ?a=1(c)=2
+
+  A named reference without its semicolon is not a reference in an attribute when the
+  character after it is `=` or ASCII alphanumeric - the rule the specification keeps
+  for the URLs the web already had. Measured against x/net/html over `&copy=`,
+  `&notit=`, `&amp=`, `&lt=` and `&noti`, all of which reach a browser unchanged and
+  all of which the standard library decodes; with the semicolon, or at the end of a
+  value, or before a character that is neither, the two agree. In text they agree
+  everywhere.
+
+  So a filter deciding on that decoded form is deciding about a URL nobody will
+  request, and a rewrite that decodes, edits and re-encodes produces a different one.
+  `Element.Attribute`, `EscapeText` and the package documentation now say so, and
+  `differential/attrrefs_test.go` pins the table and the next-character rule. B157.
+
 - **A rename changes how the element's existing content is parsed.** The
   documentation said that inserted content is not re-parsed, and that renaming a
   raw-text element turns its text into markup. The general case was missing:

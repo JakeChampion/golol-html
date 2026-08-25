@@ -573,7 +573,18 @@
 // therefore correct; comparing one against a decoded Go string is not.
 //
 // The rule: decide on the decoded form, rewrite the raw one. Use
-// html.UnescapeString for the first and leave the value alone for the second.
+// html.UnescapeString for the first and leave the value alone for the second - with
+// the caveat below, because for an attribute value that decoder is not the parser's.
+//
+// One more difference, and it runs the other way: html.UnescapeString decodes more of
+// an attribute value than a browser does. A named reference without its semicolon is
+// not a reference in an attribute when the next character is "=" or ASCII
+// alphanumeric, so "?a=1&copy=2" keeps its copy parameter in a browser and grows a
+// copyright sign in the standard library. A filter deciding on that decoded form is
+// deciding about a URL nobody will request, and a rewrite that decodes, edits and
+// re-encodes produces a different one. In text the two agree; the rule is an attribute
+// rule. Measured in differential/attrrefs_test.go, and implemented in
+// examples/gip/references.
 //
 // Getting that the wrong way round is how a filter acquires a hole, because a
 // browser decodes before it acts. These three hrefs all execute:
