@@ -2297,11 +2297,28 @@
   other fragment, so the payload survives as text beside a stray end tag. Nothing
   errors in any of it.
 
-  A tag turns out to be the only construct a document can end inside and have
-  nothing report it. `<!-`, `<!--`, `<!`, `<?php` and `<![CDATA[x` each produce a
-  comment with the text so far, `<!DOCTYPE` a doctype, `<script>var a` the element
-  and its text - and `<p`, `<p attr="v"`, `</p` and `<script` produce nothing at
-  all while still being emitted.
+  Two things are going on and the section now keeps them apart. A tag is the only
+  construct a document can end inside and have nothing report it: `<!-`, `<!--`,
+  `<!`, `<?php` and `<![CDATA[x` each produce a comment with the text so far,
+  `<!DOCTYPE` a doctype, `<script>var a` the element and its text, while `<p`,
+  `<p attr="v`, `</p` and `<script` produce nothing at all and are still emitted. A
+  stray end tag is unreported too, and harmless.
+
+  Which unfinished constructs *swallow* what follows is a wider set, and the same
+  one `DocumentEnd.Append` already documents: a tag, a comment, a doctype, or any
+  open raw-text element. An element merely left open is not one of them, because
+  more content is simply more content. That set is what decides whether a join is
+  safe, and the handler blindness is what makes the tag case silent as well as
+  wrong.
+
+  A caller who has to accept fragments from elsewhere can test one instead of
+  trusting it, without reimplementing the tokenizer: append a sentinel element,
+  rewrite, and see whether the sentinel's handler runs. Asking the same question by
+  scanning for a `<` after the last `>` fails in the direction that matters - over
+  a fixed set of 4000 generated fragments it calls 1007 of them safe when they are
+  not, and never over-reports, because it cannot know that `<!DOCTYPE` does not
+  begin with a letter, that an open `<script>` has its last `>` behind it, or that
+  a bare `</` at the end is an unfinished end tag.
 
   So the section now says to feed a document assembled from pieces to one rewriter
   as successive writes, and that a rewrite which must work on fragments has to be

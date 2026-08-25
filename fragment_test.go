@@ -217,3 +217,138 @@ func count(t *testing.T, doc string) (elements, text, comments, doctypes int, ou
 	}
 	return elements, text, comments, doctypes, out
 }
+
+// Which unfinished constructs swallow what is written after them, which is the question that
+// decides whether a fragment is safe to join. It is a wider set than the blind one above, and
+// the same set the documentation for DocumentEnd.Append describes, for the same reason: an
+// unfinished construct has no end until one arrives, and the next thing written becomes part of
+// it.
+//
+// The test is the one a caller can use, and it reimplements nothing - see the scan test below
+// for why that matters.
+func TestWhichUnfinishedConstructsSwallowWhatFollows(t *testing.T) {
+	swallows := func(doc string) bool {
+		const sentinel = `<x-sentinel-9f3></x-sentinel-9f3>`
+		seen := false
+		if _, err := lolhtml.RewriteString(doc+sentinel,
+			lolhtml.OnElement("x-sentinel-9f3", func(*lolhtml.Element) error {
+				seen = true
+				return nil
+			})); err != nil {
+			t.Fatalf("%q: %v", doc, err)
+		}
+		return !seen
+	}
+
+	for _, doc := range []string{
+		// A tag, of either kind.
+		"<p", "<p attr", `<p attr="v`, "</p", "</",
+		// A comment, a bogus comment, a doctype.
+		"<!-- c", "<!-- c --", "<!", "<?php", "<!DOCTYPE",
+		// Any open raw-text element.
+		"<script>", "<script>var a", "<style>p{", "<textarea>x", "<title>t",
+	} {
+		if !swallows(doc) {
+			t.Errorf("%q does not swallow what follows it", doc)
+		}
+	}
+
+	for _, doc := range []string{
+		// An element left open is not an unfinished construct: more content is
+		// simply more content.
+		"<ul><li>a", "<p>a", "<div>",
+		// A stray end tag closes nothing and absorbs nothing.
+		"</div>", "</p>",
+		// And the ordinary cases.
+		"<p>a</p>", "<!DOCTYPE html>", "<script>var a</script>", "a < b", "a <", "text", "",
+	} {
+		if swallows(doc) {
+			t.Errorf("%q swallowed the sentinel", doc)
+		}
+	}
+}
+
+// TestAScanForTheLastAngleBracketMissesMostOfIt, which is why the check above appends a sentinel
+// instead. The obvious string test - a "<" after the last ">" followed by a letter - is wrong in
+// one direction, which is the dangerous one for a safety check: it says "safe" when it is not.
+// Measured over a fixed set of 4000 generated fragments, it misses 1007 of them and never
+// over-reports.
+func TestAScanForTheLastAngleBracketMissesMostOfIt(t *testing.T) {
+	byScan := func(doc string) bool {
+		lt := strings.LastIndexByte(doc, '<')
+		if lt < 0 || lt < strings.LastIndexByte(doc, '>') {
+			return false
+		}
+		rest := doc[lt+1:]
+		if rest != "" && rest[0] == '/' {
+			rest = rest[1:]
+		}
+		if rest == "" {
+			return false
+		}
+		c := rest[0]
+		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+	}
+	bySentinel := func(doc string) bool {
+		const sentinel = `<x-sentinel-9f3></x-sentinel-9f3>`
+		seen := false
+		if _, err := lolhtml.RewriteString(doc+sentinel,
+			lolhtml.OnElement("x-sentinel-9f3", func(*lolhtml.Element) error {
+				seen = true
+				return nil
+			})); err != nil {
+			t.Fatalf("%q: %v", doc, err)
+		}
+		return !seen
+	}
+
+	pieces := []string{
+		`<p id="x">`, `</p>`, `text`, `<!-- c -->`, `<br>`, `<div class="a b">`, `</div>`,
+		`<script>var a="<b>"</script>`, `<!DOCTYPE html>`, `a < b`, `<?php ?>`, ` `,
+		`<ul><li>a<li>b</ul>`, `<svg><rect/></svg>`, `<p a="1" b='2'>`, `&amp;`,
+	}
+	// A fixed sequence rather than a random one, in int64 arithmetic, so the counts below
+	// are the same on every platform.
+	var seed int64 = 1
+	next := func(n int) int {
+		seed = (seed*1103515245 + 12345) & 0x7fffffff
+		return int(seed % int64(n))
+	}
+
+	var missed, overReported int
+	for range 4000 {
+		var b strings.Builder
+		for range next(5) + 1 {
+			b.WriteString(pieces[next(len(pieces))])
+		}
+		full := b.String()
+		doc := full[:next(len(full)+1)]
+		switch {
+		case bySentinel(doc) && !byScan(doc):
+			missed++
+		case byScan(doc) && !bySentinel(doc):
+			overReported++
+		}
+	}
+	if missed != 1007 || overReported != 0 {
+		t.Errorf("the scan missed %d and over-reported %d of 4000, want 1007 and 0",
+			missed, overReported)
+	}
+
+	// The three shapes that account for it, each a thing the scan cannot know.
+	for _, tt := range []struct {
+		doc, why string
+	}{
+		{`<!DOCTYPE`, "a doctype does not begin with a letter"},
+		{`<script>var a="`, "an open raw-text element has its last > behind it"},
+		{`<br><svg><rect/></`, "a bare </ at the end is an unfinished end tag"},
+	} {
+		if !bySentinel(tt.doc) {
+			t.Errorf("%q: the tokenizer says it is safe, so this case is wrong", tt.doc)
+		}
+		if byScan(tt.doc) {
+			t.Errorf("%q: the scan caught it, so it no longer shows that %s",
+				tt.doc, tt.why)
+		}
+	}
+}
