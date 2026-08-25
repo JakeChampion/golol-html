@@ -348,8 +348,11 @@ func (e *Element) SourceLocation() SourceLocation {
 // directly. See [ErrDetached].
 //
 // The value is live rather than a snapshot: a read after [SetAttribute] or
-// [RemoveAttribute] in the same handler sees the change, unlike [TextChunk.Text],
-// which is always the source.
+// [RemoveAttribute] sees the change, unlike [TextChunk.Text], which is always the
+// source. That holds across handlers as well as within one - a second handler
+// matching the same element reads what the first one wrote, which is how an
+// attribute gets rewritten twice; see the package documentation on selectors being
+// settled before handlers run.
 //
 // An element can carry the same attribute twice - the HTML parsing specification
 // calls that a parse error and requires a parser to drop all but the first, and

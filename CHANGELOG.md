@@ -1318,6 +1318,36 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Handlers on one element share the element, and the documentation said the
+  opposite.** The selectors section explained that matching is settled before any
+  handler runs - an edit never changes which handlers fire - and then drew the wrong
+  conclusion from it: "a rewrite cannot act on what another handler produced: that
+  needs a second pass."
+
+  It can, and this is how an asset URL gets hashed twice:
+
+      OnElement("img[src]", ... SetAttribute("src", v+"?v=1")),
+      OnElement("[src]",    ... SetAttribute("src", v+"?v=2")),
+
+      <img src="/a.js">  ->  <img src="/a.js?v=1?v=2">
+
+  Both selectors matched, both handlers ran in registration order, and each did its
+  job on the other's output. Swapping the registrations swaps the result, so there is
+  order-dependence in what comes out even though there is none in what fires. A
+  renamed tag reads the same way: a later handler asking `TagName` gets the new name.
+
+  What a later handler cannot do is *match* on the edit - a class an earlier handler
+  added does not fire a `.new` selector, and a renamed tag does not fire a handler on
+  the new name - so acting on produced markup still needs a second pass. That was the
+  true half of the old sentence.
+
+  Two smaller measurements came with it: removing an attribute and setting it again
+  moves it to the end of the tag, and setting one and removing it again leaves the
+  tag byte-identical.
+
+  The package documentation and `Element.Attribute` now say this, and
+  `handlerstate_test.go` gates it. B150.
+
 - **`MaxMemory` is bounded by the biggest token a handler is given, not by the
   document.** The option already said that how much a document needs depends on how
   it is written, with one page needing 1024 in a single Write and 8192 in 256-byte

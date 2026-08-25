@@ -229,9 +229,31 @@
 // un-fire it, so a handler on ".a" still runs even if an earlier handler took the
 // attribute away.
 //
-// That is worth relying on. There is no cascade, no order-dependence in which
-// handlers run, and no way for a rewrite to trigger itself. It also means a
-// rewrite cannot act on what another handler produced: that needs a second pass.
+// That is worth relying on: there is no cascade and no way for a rewrite to trigger
+// itself, so the set of handlers that will run is fixed by the document before any
+// of them does anything.
+//
+// What they read is a different matter. Handlers on one element share the element,
+// and a later one sees an earlier one's edits - its attribute values and its tag
+// name:
+//
+//	OnElement("img[src]", ... SetAttribute("src", v+"?v=1")),
+//	OnElement("[src]",    ... SetAttribute("src", v+"?v=2")),
+//
+//	<img src="/a.js">  ->  <img src="/a.js?v=1?v=2">
+//
+// Both selectors matched, both handlers ran in registration order, and each did its
+// job on the other's output. Swapping the two registrations swaps the result, so
+// there is order-dependence in what comes out even though there is none in what
+// fires. Two selectors that can match the same element and write the same attribute
+// are the shape to watch for: examples/gip/bust uses one handler and one selector
+// list for exactly that reason.
+//
+// What a later handler cannot do is match on the edit - a class an earlier handler
+// added does not make a ".new" selector fire, and a renamed tag does not make a
+// handler on the new name fire, though the later handler sees the new name when it
+// asks. Acting on produced *markup* still needs a second pass. Measured in
+// handlerstate_test.go.
 //
 // Between kinds, every selector-associated handler runs before every
 // document-level handler for the same unit, whatever order the options were
