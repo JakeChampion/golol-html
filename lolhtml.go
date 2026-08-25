@@ -444,6 +444,31 @@
 // so writing "a&b" produces an attribute whose value is "a&b" to a parser, and
 // writing back the "a&amp;b" you were given round-trips exactly.
 //
+// # Source is not only undecoded, it is unpreprocessed
+//
+// References are the well-known half. The other half is that HTML normalises some
+// bytes before the tokenizer ever sees them, and a rewriter that re-emits what it
+// read cannot do that and still be a rewriter. So four more things differ between
+// what a handler is handed and what a parser has, measured against
+// golang.org/x/net/html in differential/preprocess_test.go:
+//
+//	a CR or a CRLF          is a LF to a parser, in text, in a comment and in an
+//	                        attribute value; reported here as written
+//	a NUL in element content is dropped by a parser; reported here as written
+//	a NUL in raw text or a comment  is U+FFFD to a parser
+//	a NUL in an attribute value     is kept as a NUL
+//	a leading LF in <pre>, <listing> or <textarea>  is dropped by a parser - one
+//	                        of them, not all; reported here as written
+//
+// Two consequences. A comparison against a value that came from a browser, a DOM
+// or another parser can fail on bytes neither side chose: "a\r\nb" here is "a\nb"
+// there. And a value written into an attribute is read back changed if it contains
+// a CR - to write one, write "&#13;", which is a reference and survives.
+//
+// A rewrite that only copies values around is unaffected, because both sides are
+// source. One that compares, hashes, or reports what a page says has to decide
+// which form it means, the same way it does for references.
+//
 // # Inserting content
 //
 // Four things about insertion are worth knowing before relying on any of it,
@@ -1008,8 +1033,11 @@ const (
 	//
 	// It escapes nothing else. A quote, an apostrophe and a backtick pass
 	// through, which is correct for element content. So does a NUL, as a literal
-	// zero byte: any parser reading the result replaces it with U+FFFD, so a
-	// value containing one does not survive a round trip.
+	// zero byte, and what a parser then does with it depends on where it landed:
+	// measured, a NUL in element content is dropped, one in raw text or a comment
+	// becomes U+FFFD, and one in an attribute value is kept. None of those is the
+	// value that was written, so a NUL does not survive a round trip; see the
+	// package documentation on source being unpreprocessed.
 	Text ContentType = iota
 
 	// HTML inserts content as raw markup, parsed as part of the document. The

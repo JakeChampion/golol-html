@@ -1297,6 +1297,35 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Source is not only undecoded, it is unpreprocessed.** "Character references
+  are not decoded" covers the well-known half of what "raw source" means. HTML also
+  normalises bytes before the tokenizer sees them, and a rewriter that re-emits
+  what it read cannot do that and still be a rewriter - so four more things differ
+  between what a handler is handed and what a parser has. Measured against
+  golang.org/x/net/html:
+
+      a CR or a CRLF                    is a LF to a parser, in text, in a comment
+                                        and in an attribute value
+      a NUL in element content          is dropped by a parser
+      a NUL in raw text or a comment    is U+FFFD
+      a NUL in an attribute value       is kept
+      one leading LF in <pre>,
+      <listing> or <textarea>           is dropped - one of them, not all
+
+  Every one of them is reported here as written. Two consequences: a comparison
+  against a value that came from a browser, a DOM or another parser can fail on
+  bytes neither side chose, and a value written into an attribute is read back
+  changed if it holds a CR - `&#13;` is how to write one that survives.
+
+  This also corrects a claim on `ContentType` `Text`, which said a NUL in inserted
+  content "any parser reading the result replaces it with U+FFFD". That is true in
+  raw text and in a comment, and wrong in the two commonest places: element content
+  drops it and an attribute value keeps it. It still does not survive a round trip,
+  which was the point of the sentence.
+
+  `differential/preprocess_test.go` measures all of it, including the reassuring
+  half: a rewrite that only copies values around is exact, because both sides are
+  source.
 - **"Case-insensitively" means ASCII, and three places said it without the
   qualifier.** The selector section, the case-flag paragraph and
   `Element.TagName` all described folding as though it applied to a name; HTML
