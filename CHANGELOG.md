@@ -213,31 +213,64 @@
   documentation says which of those applies where.
 
 ### Fixed
-- **A mean over microsecond timings is not a measurement.**
-  `examples/gip/queue` reported the share of a queue's time that went on building
-  rewriters rather than rewriting, and drove its advice off that share. The figure
-  was a mean over the items, so one item that lost its core to the scheduler
-  outweighed the other fifty-nine and decided the answer. Measured on sixty
-  128-byte documents with a one-selector rule set, on a loaded machine:
+- **A mean over microsecond timings is not a measurement, and neither is a
+  median on a coarse clock.** `examples/gip/queue` reported the share of a
+  queue's time that went on building rewriters rather than rewriting, and drove
+  its advice off that share. It timed each item with `time.Since` and averaged.
+  Two separate things were wrong with that, and CI found both.
 
-      statistic   build share, lowest to highest, twenty runs
-      mean               0.16 to 0.45
-      median             0.16 to 0.18
+  The first is that an item is a few microseconds and the scheduler is not. One
+  item that loses its core outweighs the other fifty-nine, and where the pause
+  lands decides the answer. Sixty 128-byte documents, one selector, on a loaded
+  machine - the same build, sixty times:
 
-  The slowest single build in a sixty-item queue measured 7x to 24x the median.
-  CI caught it as a flaky test: the program's own assertion that fifty selectors
-  spend a larger share on construction than one selector does failed with 60% for
-  fifty and 64% for one, which is the ordering backwards.
+      run   median build   95th   slowest   slowest over median
+        1        1.708µs   21.5µs   41.5µs                  24x
+        2        1.458µs    4.0µs   11.9µs                   8x
+        3        4.125µs   28.4µs   92.1µs                  22x
+        4        4.041µs   17.4µs   28.2µs                   7x
+        5        1.875µs    9.4µs   29.8µs                  16x
 
-  Every per-item figure is a median over the items now, and the totals the
-  medians came from are not reported at all - one answer, and the one that
-  survives a loaded machine. Seven runs of the documented command, four of them
-  against forty spinning processes, span twelve-fold in wall clock and seven
-  points in build share. Two new tests hold it: one builds the samples a run
-  would have collected, adds the single preempted item, and asserts the reading
-  does not move at all while checking that the mean it replaced moves from 0.20
-  to 0.82;
-  the other pins `median` itself against sample order.
+  Over twenty runs the mean build share ranged from 0.16 to 0.45 where the median
+  of the same samples held between 0.16 and 0.18. The macOS runner reported 0.64
+  for one selector against 0.60 for fifty, which is the ordering backwards.
+
+  The second is that the median does not save it. On the Windows runner every
+  per-item figure came out as exactly zero: the clock ticks more coarsely than an
+  item takes, so sixty readings of a hundred microseconds each read zero. The
+  mean had been hiding that - a sum of mostly-zero readings with the occasional
+  tick in it is not zero, so it looked like a measurement.
+
+  So there is no per-item stopwatch left. The queue runs twice, once doing the
+  work and once building a rewriter per item and closing it without writing, and
+  the timed share is the ratio of two whole-queue intervals - milliseconds,
+  thousands of ticks even on a coarse clock, fastest of three passes each.
+  Checked against the method it replaced, one worker, quiet machine, both
+  counting Close as overhead:
+
+      documents          selectors   two queues   per-item medians
+      400 x 1050 bytes          50        0.458              0.461
+      400 x 150 bytes           50        0.839              0.852
+      400 x 150 bytes            1        0.253              0.272
+      200 x 32 KB               50        0.027              0.028
+
+  And the report carries a second share that needs no clock at all: the mallocs
+  an item cannot avoid over the mallocs it makes. Eight runs of the test against
+  forty spinning processes moved the allocation shares not at all - 0.963, 0.636
+  and 0.158 for the three configurations - while the time share for a 32 KB
+  document moved sevenfold, 0.005 to 0.034. The counted share is not the time
+  share and does not pretend to be, since allocation misses the per-byte
+  parsing, but over six combinations of size and rule set it ranks them in
+  exactly the same order. So the gate is on the counted share, the timed share is
+  checked only where the clock can resolve it, and the test logs which one it
+  skipped. The report prints the measured clock tick and refuses to advise when
+  the queue is too short for it.
+
+  Counting has its own tolerance, measured rather than assumed: with the
+  measurement pinned to one processor and the answer rounded to whole
+  allocations, the same input still moves by up to one allocation in four
+  hundred, because the malloc counter includes the runtime's own. That is the
+  tolerance the test asserts.
 
   `examples/gip/backpressure` had the same shape in a test rather than in a
   report - a rewrite that takes microseconds compared against the same rewrite

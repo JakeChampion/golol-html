@@ -1,9 +1,12 @@
 package main
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
+
+	lolhtml "github.com/JakeChampion/golol-html"
 )
 
 // TestNoCrossTalk is the property the program checks: every output is what that document
@@ -73,94 +76,179 @@ func itoa(n int) string {
 	return string(b)
 }
 
-// TestOneSlowItemBarelyMovesTheReading, which is why the reported figures are medians. This
-// test does no timing of its own: it builds the samples a run would have collected, adds the
-// one preempted item that a loaded machine hands out, and checks the reading holds. With a mean
-// the same outlier moves the build share from 20% to 82%, which is the distance between two of
-// advice's three answers.
-func TestOneSlowItemBarelyMovesTheReading(t *testing.T) {
-	quiet := Outcome{Items: 60}
-	for range 60 {
-		quiet.Builds = append(quiet.Builds, 2*time.Microsecond)
-		quiet.Totals = append(quiet.Totals, 10*time.Microsecond)
-	}
-	loud := Outcome{Items: 60, Builds: append([]time.Duration(nil), quiet.Builds...),
-		Totals: append([]time.Duration(nil), quiet.Totals...)}
-	loud.Builds[17] += 2 * time.Millisecond
-	loud.Totals[17] += 2 * time.Millisecond
-
-	if quiet.BuildShare() != loud.BuildShare() {
-		t.Errorf("one slow item moved the share from %.3f to %.3f",
-			quiet.BuildShare(), loud.BuildShare())
+// TestTheClockCanResolveWhatWeAskItTo, which is the first thing that went wrong here: the
+// Windows runner reported every per-item figure as exactly zero, because its clock ticks more
+// coarsely than an item takes. So the tick is measured, it is in the report, and a queue too
+// short for it gets a sentence instead of a number.
+func TestTheClockCanResolveWhatWeAskItTo(t *testing.T) {
+	tick := clockTick()
+	t.Logf("this platform's clock ticks every %v", tick)
+	if tick <= 0 {
+		t.Fatalf("clockTick() = %v", tick)
 	}
 
-	// And the mean it replaced would have moved a long way, so the change is worth its
-	// keep rather than a distinction without a difference.
-	mean := func(o Outcome) float64 {
-		var build, total time.Duration
-		for i := range o.Builds {
-			build += o.Builds[i]
-			total += o.Totals[i]
+	// One item is a few microseconds of work, so this is unresolvable on any clock coarser
+	// than that and the report has to say so rather than print 0%.
+	short, err := Run(makeItems(1, 64), 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if short.Wall < 20*short.Tick {
+		if short.Resolvable() {
+			t.Errorf("a queue of one item taking %v is resolvable at a tick of %v",
+				short.Wall, short.Tick)
 		}
-		return float64(build) / float64(total)
+		if !strings.Contains(short.String(), "too coarse") {
+			t.Errorf("an unresolvable queue printed advice anyway:\n%s", short.String())
+		}
 	}
-	if quiet, loud := mean(quiet), mean(loud); loud-quiet < 0.3 {
-		t.Errorf("the mean moved from %.3f to %.3f, so this outlier does not "+
-			"demonstrate the problem", quiet, loud)
+
+	// The tick belongs in the report either way, because a reader comparing two machines
+	// needs to know which of them could see what.
+	if !strings.Contains(short.String(), "clock tick") {
+		t.Errorf("the report does not say what the clock tick was:\n%s", short.String())
 	}
 }
 
-// TestTheMedianIgnoresTheOrderTheSamplesArrivedIn, since a queue hands them back in whatever
-// order the workers finish and the statistic must not depend on that.
-func TestTheMedianIgnoresTheOrderTheSamplesArrivedIn(t *testing.T) {
-	rising := []time.Duration{1, 2, 3, 4, 5}
-	falling := []time.Duration{5, 4, 3, 2, 1}
-	shuffled := []time.Duration{3, 1, 5, 2, 4}
-	for _, samples := range [][]time.Duration{rising, falling, shuffled} {
-		if got := median(samples); got != 3 {
-			t.Errorf("median(%v) = %v", samples, got)
+// TestTheAllocationShareBarelyMovesBetweenRuns, which is why the assertions further down rest on
+// it: it is a count rather than an interval, so it has no clock in it and no scheduler either.
+// Barely rather than not at all - the tolerance is one allocation, because the malloc counter
+// includes the runtime's own and those depend on the state of the heap. Measured, the figure for
+// one worker and for four differs by at most one in four hundred, in either direction, where the
+// timing it replaced ranged two and a half fold.
+func TestTheAllocationShareBarelyMovesBetweenRuns(t *testing.T) {
+	items := makeItems(30, 128)
+	first, err := Run(items, 1, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Run(items, 4, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(first.AllocsBuild-second.AllocsBuild) > 1 ||
+		math.Abs(first.AllocsFull-second.AllocsFull) > 1 {
+		t.Errorf("one worker counted %.0f of %.0f allocations and four counted %.0f of %.0f",
+			first.AllocsBuild, first.AllocsFull, second.AllocsBuild, second.AllocsFull)
+	}
+	if math.Abs(first.AllocShare()-second.AllocShare()) > 0.01 {
+		t.Errorf("the share moved from %.4f to %.4f", first.AllocShare(), second.AllocShare())
+	}
+	if first.AllocsBuild == 0 || first.AllocsFull == 0 {
+		t.Fatalf("counted %.0f of %.0f allocations", first.AllocsBuild, first.AllocsFull)
+	}
+	if first.AllocsBuild > first.AllocsFull {
+		t.Errorf("building alone allocated %.0f and the whole item %.0f",
+			first.AllocsBuild, first.AllocsFull)
+	}
+}
+
+// TestTheOverheadPassDiffersOnlyByTheWrite, since the whole method rests on that: if the two
+// passes differed in any other way, their ratio would not be the cost of rewriting.
+func TestTheOverheadPassDiffersOnlyByTheWrite(t *testing.T) {
+	items := makeItems(40, 256)
+
+	// The overhead pass writes nothing, so it must find no matches at all - if it did, it
+	// would be doing the rewriting too and the ratio would mean nothing.
+	_, matched, crossTalk, err := drive(items, 2, 4, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched != 0 {
+		t.Errorf("the overhead pass rewrote %d elements", matched)
+	}
+	if crossTalk != 0 {
+		t.Errorf("the overhead pass reported %d cross-talk", crossTalk)
+	}
+
+	want := make([]string, len(items))
+	for i, item := range items {
+		opts, _ := options(4)
+		got, err := lolhtml.RewriteString(item.Doc, opts...)
+		if err != nil {
+			t.Fatal(err)
 		}
+		want[i] = got
 	}
-	if got := median(nil); got != 0 {
-		t.Errorf("median(nil) = %v", got)
+	_, matched, crossTalk, err = drive(items, 2, 4, want)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := median([]time.Duration{7}); got != 7 {
-		t.Errorf("median of one sample = %v", got)
+	if matched == 0 {
+		t.Error("the work pass rewrote nothing")
 	}
-	// An even count takes a reading rather than averaging two of them.
-	if got := median([]time.Duration{2, 4}); got != 4 {
-		t.Errorf("median of two samples = %v", got)
+	if crossTalk != 0 {
+		t.Errorf("the work pass reported %d cross-talk", crossTalk)
+	}
+}
+
+// TestTheFastestPassIsTheOneKept, since noise can only lengthen an interval.
+func TestTheFastestPassIsTheOneKept(t *testing.T) {
+	samples := []time.Duration{9 * time.Millisecond, 3 * time.Millisecond, 40 * time.Millisecond}
+	if got := fastest(samples); got != 3*time.Millisecond {
+		t.Errorf("fastest(%v) = %v", samples, got)
+	}
+	if got := fastest(nil); got != 0 {
+		t.Errorf("fastest(nil) = %v", got)
+	}
+	// Order must not matter: a queue's passes arrive in the order they ran.
+	if got := fastest([]time.Duration{3, 9, 40}); got != 3 {
+		t.Errorf("fastest of a rising run = %v", got)
 	}
 }
 
 // TestBuildingIsMostOfTheWorkForSmallItemsWithManySelectors, which is the measurement the
-// program exists to make. The assertion is on the ratio of two medians from the same run, so it
-// does not depend on the machine's speed or on its load - only on the shape.
+// program exists to make. The gate is on allocation counts, which are the same number on every
+// platform and under any load; the timing is checked too, where the clock can resolve it.
 func TestBuildingIsMostOfTheWorkForSmallItemsWithManySelectors(t *testing.T) {
-	many, err := Run(makeItems(60, 128), 1, 50)
+	many, err := Run(makeItems(200, 128), 1, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
-	few, err := Run(makeItems(60, 128), 1, 1)
+	few, err := Run(makeItems(200, 128), 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if many.BuildShare() <= few.BuildShare() {
-		t.Errorf("fifty selectors spent %.0f%% of the work building and one selector %.0f%%",
-			many.BuildShare()*100, few.BuildShare()*100)
-	}
-	if many.BuildShare() < 0.2 {
-		t.Errorf("fifty selectors over 128-byte documents spent only %.0f%% of the work "+
-			"building rewriters", many.BuildShare()*100)
-	}
-
-	// And a big document turns it round: the same rule set is a small share of the work.
 	big, err := Run(makeItems(20, 32<<10), 1, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("allocation shares: fifty selectors %.3f, one selector %.3f, 32 KB %.3f; "+
+		"time shares %.3f, %.3f, %.3f",
+		many.AllocShare(), few.AllocShare(), big.AllocShare(),
+		many.BuildShare(), few.BuildShare(), big.BuildShare())
+
+	if many.AllocShare() <= few.AllocShare() {
+		t.Errorf("fifty selectors put %.0f%% of the allocations in construction and one "+
+			"selector %.0f%%", many.AllocShare()*100, few.AllocShare()*100)
+	}
+	if many.AllocShare() < 0.2 {
+		t.Errorf("fifty selectors over 128-byte documents put only %.0f%% of the "+
+			"allocations in construction", many.AllocShare()*100)
+	}
+	// And a big document turns it round: the same rule set is a small share of the work.
+	if big.AllocShare() >= many.AllocShare() {
+		t.Errorf("32 KB documents put %.0f%% of the allocations in construction and "+
+			"128-byte ones %.0f%%", big.AllocShare()*100, many.AllocShare()*100)
+	}
+
+	// The time share is the figure a caller actually feels, and it should rank the three the
+	// same way - but only where the clock can resolve the intervals. On a coarse clock this
+	// says what it could not measure rather than passing quietly.
+	for _, o := range []Outcome{many, few, big} {
+		if !o.Resolvable() {
+			t.Logf("not checking the time share: %d items of %d bytes with %d "+
+				"selectors took %v, overhead pass %v, against a tick of %v",
+				o.Items, o.Size, o.Selectors, o.Wall, o.Overhead, o.Tick)
+			return
+		}
+	}
+	if many.BuildShare() <= few.BuildShare() {
+		t.Errorf("fifty selectors spent %.0f%% of the time building and one selector %.0f%%",
+			many.BuildShare()*100, few.BuildShare()*100)
+	}
 	if big.BuildShare() >= many.BuildShare() {
-		t.Errorf("32 KB documents spent %.0f%% of the work building and 128-byte ones %.0f%%",
+		t.Errorf("32 KB documents spent %.0f%% of the time building and 128-byte ones %.0f%%",
 			big.BuildShare()*100, many.BuildShare()*100)
 	}
 }
@@ -178,15 +266,15 @@ func TestTheAdviceFollowsTheMeasurement(t *testing.T) {
 	}
 }
 
-// TestTheReportIsCoherent: the wall clock and the worker time are different measurements and
-// the report says which is which, because summed worker time can exceed elapsed time.
+// TestTheReportIsCoherent: the two passes are different measurements and the report says which
+// is which, since the whole method is their ratio.
 func TestTheReportIsCoherent(t *testing.T) {
 	out, err := Run(makeItems(40, 512), 4, 8)
 	if err != nil {
 		t.Fatal(err)
 	}
 	report := out.String()
-	for _, want := range []string{"cross-talk", "wall clock", "median item", "advice"} {
+	for _, want := range []string{"cross-talk", "wall clock", "build and close", "advice"} {
 		if !strings.Contains(report, want) {
 			t.Errorf("the report does not mention %q:\n%s", want, report)
 		}
@@ -194,8 +282,11 @@ func TestTheReportIsCoherent(t *testing.T) {
 	if out.BuildShare() > 1 {
 		t.Errorf("the build share is %.2f, which cannot be", out.BuildShare())
 	}
-	if out.PerItemBuild() > out.PerItemWork() {
-		t.Errorf("building took %v of %v per item", out.PerItemBuild(), out.PerItemWork())
+	if out.PerItemBuild() > out.PerItem() {
+		t.Errorf("building took %v of %v per item", out.PerItemBuild(), out.PerItem())
+	}
+	if out.Overhead > out.Wall {
+		t.Errorf("the overhead pass took %v and the work pass %v", out.Overhead, out.Wall)
 	}
 }
 
