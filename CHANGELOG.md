@@ -1197,6 +1197,38 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/article`: find a page's article body by scoring elements as it
+  streams past them, then emit that element and nothing else.** Two passes, and not
+  by choice: the winner is not known until the document ends, and a rewrite cannot
+  write to a position it has already passed.
+
+  What makes the second pass cheap is the thing the library documents about source
+  locations - the offsets are absolute and unaffected by how the document was
+  written in, so the byte range the first pass measured names the element in the
+  second whatever its read sizes are. Nothing is buffered but the scores, and the
+  test that pins it asserts the output equals the input sliced at those offsets.
+
+  Its own property found the bug worth reporting. The text count was taken per
+  chunk, and a chunk boundary falls wherever the writes and the tokenizer put it:
+  the same page scored 128 characters read one byte at a time and 155 read whole,
+  because every chunk lost its own leading and trailing space to the trim. The count
+  is taken over the accumulated node now, at `IsLastInTextNode`, which is the
+  discipline the documentation gives for anything that measures text - and the
+  property that failed is the one that says the scores do not depend on the read
+  size.
+
+  Three smaller things the library decided rather than the heuristic. A text chunk
+  does not know what element it is in, so the count is kept per open container and
+  added to all of them, which is what makes a container outscore its children. A
+  text chunk cannot tell that it is inside a link either, so the depth of open
+  anchors is counted - there is no selector for "not inside an `<a>`". And an
+  element's score is complete only at its end tag, so a container whose end tag
+  never arrives is reported as skipped rather than scored on partial evidence.
+
+  One test states a limitation rather than a feature: the outermost container wins
+  on text it merely contains, which is why a real extractor excludes `<body>`, and
+  the test says so instead of asserting a preference the heuristic does not have.
+
 - **`examples/gip/comments`: a comment renderer, and three bugs its own tests
   found.** It sanitises untrusted comment HTML to a short allow-list and turns bare
   URLs into links, which is the one job in the collection that has to build markup
