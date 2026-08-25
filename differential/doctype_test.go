@@ -153,3 +153,115 @@ func TestADoctypeAfterAnElementLeavesTheDocumentInQuirksMode(t *testing.T) {
 			"chosen to be", nodes)
 	}
 }
+
+// upgradeDoctype is the only shape available for changing a declaration: remove the
+// old one, and insert the new one before the first element, because a Doctype has
+// no way to write at its own position.
+func upgradeDoctype(t *testing.T, doc string) string {
+	t.Helper()
+	pending := false
+	out, err := lolhtml.RewriteString(doc,
+		lolhtml.OnDoctype(func(d *lolhtml.Doctype) error {
+			if _, has := d.PublicID(); !has {
+				if name, _ := d.Name(); name == "html" {
+					return nil // already modern
+				}
+			}
+			d.Remove()
+			pending = true
+			return nil
+		}),
+		lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+			if !pending {
+				return nil
+			}
+			pending = false
+			return e.Before("<!DOCTYPE html>", lolhtml.HTML)
+		}))
+	if err != nil {
+		t.Fatalf("%q: %v", doc, err)
+	}
+	return out
+}
+
+// publicIDs is what the parser kept, which is the question: an empty string means a
+// modern doctype and no entry at all means quirks mode.
+func publicIDs(t *testing.T, doc string) []string {
+	t.Helper()
+	root, err := html.Parse(strings.NewReader(doc))
+	if err != nil {
+		t.Fatalf("%q: %v", doc, err)
+	}
+	var out []string
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.DoctypeNode {
+			public := ""
+			for _, a := range n.Attr {
+				if a.Key == "public" {
+					public = a.Val
+				}
+			}
+			out = append(out, public)
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(root)
+	return out
+}
+
+// TestUpgradingADoctypeWorksAndWhereItSilentlyDoesNot. The three shapes it handles
+// and the three it turns into quirks-mode documents, which is what the Doctype
+// documentation now says.
+func TestUpgradingADoctypeWorksAndWhereItSilentlyDoesNot(t *testing.T) {
+	const legacy = `<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">`
+	for _, tc := range []struct {
+		what, doc string
+		upgraded  bool
+	}{
+		{"an ordinary document", legacy + `<html><body>x</body></html>`, true},
+		{"a comment first", legacy + `<!--c--><html>x</html>`, true},
+		{"whitespace first", legacy + `   <html>x</html>`, true},
+		{"text before the first element", legacy + `text<html>x</html>`, false},
+		{"no elements at all", legacy, false},
+		{"only text", legacy + `just text`, false},
+	} {
+		// The input is a quirks-mode risk already: the legacy public id is what a
+		// browser reads.
+		if got := publicIDs(t, tc.doc); len(got) != 1 || got[0] == "" {
+			t.Fatalf("%s: the input has %v, want one legacy doctype", tc.what, got)
+		}
+		out := upgradeDoctype(t, tc.doc)
+		got := publicIDs(t, out)
+		switch {
+		case tc.upgraded:
+			if len(got) != 1 || got[0] != "" {
+				t.Errorf("%s: %q -> %q, the parser keeps %v, want one modern doctype",
+					tc.what, tc.doc, out, got)
+			}
+		default:
+			if len(got) != 0 {
+				t.Errorf("%s: %q -> %q, the parser keeps %v, want none - this shape is "+
+					"the silent failure the documentation describes", tc.what, tc.doc, out, got)
+			}
+		}
+	}
+}
+
+// TestASecondDoctypeIsIgnored, which is why "add one without removing the old" is
+// not an alternative: the legacy declaration still applies.
+func TestASecondDoctypeIsIgnored(t *testing.T) {
+	const doc = `<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN"><!DOCTYPE html><html>x</html>`
+	if got := doctypeTokens(t, doc); len(got) != 2 {
+		t.Fatalf("the handler saw %v, want both tokens", got)
+	}
+	got := publicIDs(t, doc)
+	if len(got) != 1 {
+		t.Fatalf("the parser kept %v, want one", got)
+	}
+	if got[0] == "" {
+		t.Errorf("the parser kept the second doctype; the first should win")
+	}
+}
