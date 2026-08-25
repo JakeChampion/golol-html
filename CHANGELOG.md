@@ -1318,6 +1318,33 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A doctype can be removed and never written, and `Remove` did not say what
+  removing one costs.** `Doctype` has `Name`, `PublicID`, `SystemID`,
+  `SourceLocation` and `Remove` - no `Before`, `After` or `Replace`, because
+  lol-html offers none. So a rewrite that wants to turn a legacy declaration into
+  `<!DOCTYPE html>` has to remove the old one and insert the new one before the
+  first element, and that has three silent failure modes. Measured against
+  golang.org/x/net/html:
+
+      <!DOCTYPE …><html>…          upgraded
+      <!DOCTYPE …><!--c--><html>…  upgraded: a comment before a doctype is allowed
+      <!DOCTYPE …>   <html>…       upgraded: so is whitespace
+      <!DOCTYPE …>text<html>…      the new one lands after text, where a parser
+                                   ignores it: quirks mode
+      <!DOCTYPE …>                 nothing to insert before: quirks mode
+      <!DOCTYPE …>just text        the same
+
+  And adding one without removing the old is not an alternative: a second DOCTYPE
+  is a parse error and dropped, so the legacy declaration still applies. Which
+  leaves the decision to remove being made before the place for the replacement is
+  known, and nothing in the doctype handler can know it - a rewrite that must be
+  right has to read the document twice or leave the declaration alone.
+
+  `Doctype.Remove` now says what a missing doctype means, which is the largest
+  rendering change a single token removal can make: quirks mode, where the box
+  model, table cell heights and line heights all differ. `Doctype` carries the
+  workaround and its failure table. `differential/doctype_test.go` measures all six
+  shapes through the oracle, and that the second declaration is the one dropped.
 - **Strict mode's trigger list was wrong for `<frameset>`, in the direction that
   matters.** `WithStrict` said eight names are ambiguous inside a `<select>` and
   that inside a `<frameset>` it is "any of them except `<noframes>`", that
