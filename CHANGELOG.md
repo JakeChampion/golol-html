@@ -1168,6 +1168,26 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/observe`, a rewriter that changes nothing and proves it.** The
+  properties module already asserts that a read-only rewrite is the identity over
+  generated documents; this is the same claim as a tool, over a caller's own document,
+  with the profile of what it saw: elements by name, attributes by name, text nodes and
+  bytes, comments, the doctype.
+
+  Nothing in the library changed. What the program adds is the honest handling of the one
+  exception, which is not the handler's: a text handler decodes and re-encodes, so a
+  document holding bytes its declared encoding cannot decode comes out with U+FFFD where
+  those bytes were. The tool reports that difference as the document's - naming the byte
+  offset - and exits zero, while any other difference is the observer's and exits
+  non-zero. `-no-text` skips the text handler, which is the only way to observe such a
+  document without changing it.
+
+  Its tests run twenty awkward documents - unquoted attributes, single quotes, stray
+  whitespace in tags, references the parser does not decode, a NUL, a U+FFFD, raw text,
+  a template holding table rows, conditional comments, a PHP block, CDATA, an unclosed
+  paragraph, the empty document - through one Write and through 1-, 3- and 64-byte
+  writes, and check that the counts do not depend on the chunking.
+
 - **`differential/tagname_test.go`.** `TagNamePreserveCase` had exactly one
   mention in the whole suite - `_ = e.TagNamePreserveCase()` inside the operations
   fuzzer, with the result discarded - so nothing checked what it returned. It now
