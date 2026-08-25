@@ -184,8 +184,20 @@ func (w *Writer) Write(p []byte) (int, error) {
 // Close finishes the document, flushes the remaining output and releases every
 // native resource held by the Writer. It is safe to call more than once.
 //
-// The error from the final flush - including any handler error raised while
-// processing the document end - is reported here, so Close must not be ignored.
+// The error from the final flush is reported here, so Close must not be ignored.
+// Two handlers can still run inside it: [OnDocumentEnd] always, and a text handler
+// for the last chunk of a text node the document left open - measured, a closed
+// element delivers every chunk during Write and an unclosed one delivers its
+// boundary chunk during Close. So an error or a panic from a text handler can
+// surface from here rather than from Write, and a caller that recovers around
+// Write alone has a gap. An end-tag handler for an element nothing closes never
+// runs at all, so it is not a third case.
+//
+// A panic from a handler running inside Close leaves the Writer closed rather than
+// poisoned, because Close marks it closed before it does anything: a later Write
+// reports [ErrClosed] and a later Close reports nil. A panic from Write poisons it
+// with the bare sentinel. Either way the native resources are released on the way
+// out and the library is unaffected: examples/gip/panics prints the whole table.
 //
 // If an earlier Write already failed, Close reports ErrPoisoned wrapped around
 // that first error rather than the bare sentinel: checking only Close is the
