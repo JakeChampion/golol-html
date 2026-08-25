@@ -856,6 +856,20 @@ func (e *Element) IsRemoved() bool {
 // element such as <br> has no end tag to wait for - so check CanHaveContent
 // first when the tag is not known statically. It also returns nil and never runs
 // for <plaintext>, which has no end tag at all; see CanHaveContent.
+//
+// Each registration costs memory until the rewrite ends, not until the end tag
+// arrives. Measured on 100,000 sibling <div>s with a handler on "*" that registers
+// one end-tag handler each: the live handle count rises to 100,001 and never falls
+// until the Writer is closed, and the Go side allocates about 30 MB against about
+// 6 MB for the same rewrite without the registration - roughly 300 bytes per
+// element, and the same for a wide document as for a deep one.
+//
+// [MemorySettings.MaxMemory] does not bound it: the same document completes under a
+// 64 KiB limit while allocating those 30 MB, because that limit is lol-html's
+// parsing buffer and this is the binding's handle table. So a rewrite that must
+// hold a memory budget has to bound its input, and register this only where an
+// element actually needs it - a narrow selector, or a condition checked before
+// registering rather than inside the callback. Measured in endtagcost_test.go.
 func (e *Element) OnEndTag(fn func(*EndTag) error) error {
 	p, err := e.live()
 	if err != nil {

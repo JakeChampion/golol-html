@@ -1318,6 +1318,27 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **An end-tag registration is held until the rewrite ends, and `MaxMemory` does
+  not bound it.** `Element.OnEndTag` said what it does and nothing about what it
+  costs. Measured: the live handle count climbs through five *closed* siblings -
+  2, 3, 4, 5, 6 - and falls only when the Writer is closed, so the cost is one
+  handle per matched element rather than per open element. On 100,000 sibling
+  divs with a handler on `*` registering one each, that is 100,001 handles and
+  about 30 MB of Go allocation, against about 6 MB for the same rewrite without
+  the registration: roughly 300 bytes an element, and the same for a wide document
+  as for a deep one.
+
+  And the option that looks like a memory budget does not cover it. The same
+  document completes under a 64 KiB `MaxMemory` while allocating those 30 MB,
+  because that limit is lol-html's parsing buffer and this is the binding's handle
+  table. `MemorySettings.MaxMemory` now says so - it caps lol-html's memory, not
+  the rewrite's - and `OnEndTag` carries the measurement and the two mitigations:
+  bound the input, and register only where an element needs it, deciding before
+  registering rather than inside the callback.
+
+  `endtagcost_test.go` pins the lifetime, that the cost is per matched element in
+  both shapes of document, that `MaxMemory` does not refuse it, and that deciding
+  first is an order of magnitude cheaper.
 - **Foster parenting cuts both ways: an insertion can land outside the element it
   was put in.** The table section covered reading and removal - content a parser
   moves out of a table is reported inside it here, and removing the table removes

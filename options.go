@@ -93,7 +93,15 @@ type MemorySettings struct {
 	// alone unless a profile of the C side says otherwise.
 	PreallocatedParsingBuffer int
 
-	// MaxMemory caps total rewriter memory in bytes. Zero means unlimited.
+	// MaxMemory caps lol-html's memory in bytes. Zero means unlimited.
+	//
+	// lol-html's, not the rewrite's: it bounds the parsing buffer on the C side
+	// and is blind to what the binding allocates for a handler. The difference is
+	// measurable - 100,000 sibling <div>s with an [Element.OnEndTag] registered on
+	// each complete under a 64 KiB MaxMemory while the Go side allocates about
+	// 30 MB, because an end-tag registration costs a live handle until the rewrite
+	// ends. See [Element.OnEndTag], and bound the input as well as this if a
+	// budget has to hold.
 	//
 	// Exceeding it fails the Write or Close that noticed, with a *NativeError
 	// that errors.Is matches against [ErrMemoryLimitExceeded].
