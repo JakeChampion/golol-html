@@ -1197,6 +1197,53 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/emailstrip`** removes what a mail client would reject and says
+  what it removed and why, from an allow-list rather than a block-list - a
+  block-list is a list of the things somebody thought of, and mail clients reject
+  more than anybody has thought of.
+
+  Its first version had a hole, and the hole is the most useful thing in the file.
+  It checked a URL's scheme against the raw attribute value, so every encoded
+  spelling of `javascript:` walked past it:
+
+      javascript:alert(1)                rejected
+      &#106;avascript:alert(1)           accepted
+      &#x6a;avascript:alert(1)           accepted
+      &#0000106;avascript:alert(1)       accepted
+      jav&#x09;ascript:alert(1)          accepted
+      &Tab;javascript:alert(1)           accepted
+
+  A browser decodes before it acts; a check on the raw string sees a scheme called
+  `&#106;avascript` and lets it through. The library documents exactly this, with
+  three of those vectors and the rule to follow - decide on the decoded form,
+  rewrite the raw one - which is what the program does now: `html.UnescapeString`
+  before the scheme check, and the value written back untouched, so
+  `https://example.com/?a=1&amp;b=2` keeps its entity. All eleven vectors are a
+  test.
+
+  The documented caveat cuts the right way here: `html.UnescapeString` decodes more
+  of an attribute value than a browser does, which for a filter can only reject a
+  URL a browser would have accepted. For a rewrite it would be the wrong direction,
+  and nothing in the program writes a decoded value back.
+
+  The other thing worth reading is the last line of its report. Removing an element
+  does not stop handlers running for what was inside it, so a report that counts
+  those says it removed eleven attributes when it removed one `<script>`.
+  `Element.IsRemoved` answers for an ancestor, so on `<form action="/x"><p
+  class="inside" id="y">text</p><b>bold</b></form>` the report says one removal and
+  two things inside it, not four. Text is the exception and the library says so:
+  `TextChunk.IsRemoved` answers for the chunk and not its ancestors, so the
+  visible-text collection is driven by a removed-depth counter an element handler
+  maintains, and the test that would fail without it is in the file.
+
+  Its properties: everything that survives is on the allow-list, checked by
+  re-reading the output with a rewriter of its own; stripping twice strips nothing;
+  the output does not depend on the read size; and a note appended at the document
+  end can never become markup, over seven notes including one that closes the
+  document and opens a script. Conditional comments survive and ordinary ones do
+  not, and the doctype is left alone, because replacing it would change the
+  document's mode and that decides where a table wrapper lands - B174.
+
 - **`differential/tablewrap_test.go`** has the matrix: five wrappers against two
   document modes, with x/net/html saying where each landed, plus a legacy doctype
   behaving like none, plus the five contexts where a wrapper lands exactly where it
