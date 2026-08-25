@@ -239,6 +239,23 @@
 // the same selector and [CLASS=a] matches class="a". An attribute selector
 // matches a present-but-empty attribute: [style] matches style="".
 //
+// Case-insensitively means ASCII, which is what HTML means by it. Both the name
+// and the selector have their ASCII letters folded and everything else left alone,
+// so a non-ASCII letter has to match in case:
+//
+//	<DÉTAIL>   matched by "DÉTAIL", "dÉtail", "DÉtail"
+//	           not matched by "détail" or "DéTAIL"
+//
+// The É is the same character on both sides or it is not the same selector. So
+// <DÉTAIL> is the element "dÉtail" - see [Element.TagName] - and the spelling a
+// caller would reach for, all lower case, matches nothing. Nothing warns: a
+// selector that matches no element is a valid selector. Custom element names may
+// contain non-ASCII letters, so this is reachable from a template written in a
+// language that has accents rather than only from a deliberately odd document.
+//
+// A tag name still has to *begin* with an ASCII letter to be a tag at all:
+// "<ÉTAT>" is text, not an element, so no selector reaches it.
+//
 // Attribute values are a different rule, and it is not uniform. HTML matches the
 // value case-insensitively for a fixed list of attributes and case-sensitively
 // for everything else, and the rewriter follows that list exactly:
@@ -262,7 +279,10 @@
 //
 // Where that matters, say which you want rather than relying on the default:
 // [a=v i] is case-insensitive and [a=v s] is exact, and both work for any
-// attribute.
+// attribute. The i flag folds ASCII too, and only ASCII: [data-x="é" i] does not
+// match data-x="É", so the flag a caller reaches for when case matters is the one
+// that will not help with the case that is hardest to spot. Measured in
+// asciicase_test.go.
 //
 // An unsupported selector is rejected by [NewWriter], not silently ignored, with
 // a [SelectorError] naming it and saying which part it could not use.

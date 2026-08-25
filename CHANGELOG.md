@@ -1297,6 +1297,32 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **"Case-insensitively" means ASCII, and three places said it without the
+  qualifier.** The selector section, the case-flag paragraph and
+  `Element.TagName` all described folding as though it applied to a name; HTML
+  folds the ASCII letters of a name and leaves everything else, which is only the
+  same thing for an ASCII name.
+
+      <DÉTAIL>   matched by "DÉTAIL", "dÉtail", "DÉtail"
+                 not matched by "détail" or "DéTAIL"
+
+  Both sides are folded, so the É has to match in case. `TagName` reports
+  `dÉtail` - a spelling nobody wrote - and the selector a caller would reach for,
+  all lower case, matches nothing, with no warning: a selector that matches no
+  element is a valid selector. Custom element names may contain non-ASCII letters,
+  so a template written in a language with accents reaches this without trying.
+
+  The `i` flag is the sharpest case, because it is what a caller reaches for when
+  case matters: `[data-x="é" i]` does not match `data-x="É"`, while
+  `[data-x="café" i]` does match `CAFé` - most of the value folds the way it
+  looks like it should, which is what makes the failure quiet.
+
+  Measured with it: a tag name has to *begin* with an ASCII letter to be a tag at
+  all, so `<ÉTAT>` is text and no selector reaches it; and the HTML
+  case-insensitive attribute list is no exception - `rel` folds `CANONICAL` and
+  not `CANONICÁL`. `asciicase_test.go` holds all of it, including the way round:
+  a wide selector and `strings.EqualFold`, which matches both spellings where no
+  single selector can.
 - **Whether a handler can tell it is inside a removed element depends on which
   handler it is.** The removal section said that handlers keep running over
   removed content and that "a handler that accumulates ... has to notice for itself
