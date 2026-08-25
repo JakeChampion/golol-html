@@ -92,6 +92,7 @@ var commentUserData = userDataAccessor[*C.lol_html_comment_t]{
 // UserData returns the value most recently attached by SetUserData, or nil.
 func (c *Comment) UserData() any { return getUserData(&c.unit, commentUserData) }
 
-// SetUserData attaches a value to this comment, readable by any later handler
-// that sees it. Go handlers can usually close over the value instead.
+// SetUserData attaches a value to this comment, readable by another handler that
+// is given the same comment - an [OnComment] handler and an [OnDocumentComment]
+// one both see it. Go handlers can usually close over the value instead.
 func (c *Comment) SetUserData(v any) error { return setUserData(&c.unit, commentUserData, v) }

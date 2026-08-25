@@ -493,6 +493,20 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`Element.SetUserData` named the one thing it cannot do.** It said the value
+  is "readable by any later handler that sees the same element - most usefully an
+  end-tag handler". An end-tag handler cannot read it: `EndTag` has no user data,
+  because lol-html provides it for elements, comments, text chunks and the
+  doctype and not for end tags, and the element is detached by then, so reading
+  through the captured `Element` returns nil. Measured.
+
+  What it is for is a second handler given the same unit - two selectors matching
+  one element, or an `OnComment` and an `OnDocumentComment` on one comment - which
+  the documentation did not mention. And it is per unit rather than per position:
+  a value set on one text chunk is not readable from the next chunk of the same
+  node, so it is not somewhere to accumulate across chunks. All of it is pinned in
+  `userdata_test.go`, including that closing over a Go variable does work, which
+  is what an end-tag handler is written inside a start-tag handler for.
 - **Nothing said how to select an element whose name contains a colon, and the
   error blames something else.** `esi:include` is rejected with "Unsupported
   pseudo-class or pseudo-element in selector", which names something the caller

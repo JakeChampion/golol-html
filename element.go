@@ -677,9 +677,26 @@ var elementUserData = userDataAccessor[*C.lol_html_element_t]{
 // UserData returns the value most recently attached by SetUserData, or nil.
 func (e *Element) UserData() any { return getUserData(&e.unit, elementUserData) }
 
-// SetUserData attaches a value to this element, readable by any later handler
-// that sees the same element - most usefully an end-tag handler.
+// SetUserData attaches a value to this element, readable by another handler that
+// is given the same element.
 //
-// Go handlers can usually just close over the value instead. The attached value
-// is released with the Writer.
+// "The same element" means one reported to two handlers, which happens when two
+// selectors match it:
+//
+//	OnElement(".card", func(e *lolhtml.Element) error { return e.SetUserData(n) })
+//	OnElement("[data-id]", func(e *lolhtml.Element) error { n := e.UserData() ... })
+//
+// Not an end-tag handler, which is what this documentation used to say and is not
+// possible: [EndTag] has no user data - lol-html provides it for elements,
+// comments, text chunks and the doctype, and not for end tags - and the element
+// itself is detached by the time its end-tag handler runs, so reading through the
+// captured [Element] returns nil. Measured. Close over a Go variable instead,
+// which is what an end-tag handler is written inside a start-tag handler for.
+//
+// It is per unit and not per position: two elements never share it, and a value
+// set on one text chunk is not readable from the next chunk of the same text
+// node. The attached value is released with the Writer.
+//
+// Go handlers can usually just close over the value instead, which is why this
+// exists mainly for parity with the C API.
 func (e *Element) SetUserData(v any) error { return setUserData(&e.unit, elementUserData, v) }
