@@ -68,6 +68,30 @@ func (e *Element) TagNamePreserveCase() string {
 }
 
 // SetTagName renames the element. The matching end tag, if any, is renamed too.
+//
+// Renaming can change what the element's content means, because whether content
+// is markup is decided by the element it is in. Renaming one of the raw-text
+// elements to an ordinary one turns its text into markup:
+//
+//	<script>var x = "<img src=x onerror=alert(1)>"</script>
+//	SetTagName("div")
+//	<div>var x = "<img src=x onerror=alert(1)>"</div>
+//
+// and the image is now an element. Measured for script, style, textarea and
+// title. That is the same hazard [ErrRawTextBreakout] refuses for an insertion,
+// and a rename is the way round it - the content is not being inserted, it is
+// being reinterpreted, and the library cannot see it coming: this call happens at
+// the start tag, before any content has been reported.
+//
+// The other direction is quieter and still a change of meaning: renaming an
+// ordinary element to a raw-text one turns its markup into text, so
+// <div><img src=x></div> becomes <script><img src=x></script>, where the image is
+// nine words of JavaScript.
+//
+// So a rename across that boundary is only safe when you know what the content
+// is. Where you do not, replace the element instead - [Element.Replace] with
+// content you built - or read the content and decide at the end tag. Pinned in
+// settagname_test.go.
 func (e *Element) SetTagName(name string) error {
 	p, err := e.live()
 	if err != nil {

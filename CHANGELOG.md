@@ -505,6 +505,26 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A rename is the way round `ErrRawTextBreakout`.** Whether content is markup is
+  decided by the element it is in, so `SetTagName` across the raw-text boundary
+  reinterprets everything inside:
+
+      <script>var x = "<img src=x onerror=alert(1)>"</script>
+      SetTagName("div")
+      <div>var x = "<img src=x onerror=alert(1)>"</div>
+
+  and the image is now an element. Measured for `script`, `style`, `textarea` and
+  `title`. Nothing is inserted, so the breakout check has nothing to look at, and
+  the call happens at the start tag before any content is reported, so the library
+  cannot see it coming. The other direction is quieter and still a change of
+  meaning: renaming an ordinary element to a raw-text one turns its markup into
+  text.
+
+  `SetTagName` now says so and says what to do instead - replace the element, or
+  read the content and decide at the end tag - and `ErrRawTextBreakout` points at
+  it, since that is where a reader looks for this hazard. Pinned in
+  `settagname_test.go`, including that a rename which does not cross the boundary
+  leaves the content alone.
 - **A table can contain things that a parser says are not in it.** Content that
   cannot be inside a table is moved to just before it by a parser - foster
   parenting - and there is no tree here to move anything in, so it is reported
