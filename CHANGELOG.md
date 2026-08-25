@@ -1318,6 +1318,35 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A descendant selector keeps matching after the ancestor has ended.** The
+  documentation covered the end-tag rule for insertion positions - Append and After
+  on an element whose end tag was omitted write somewhere else - and said nothing
+  about the same rule deciding which handlers fire.
+
+  The selector engine pops its stack on end tag tokens, and a start tag never pops
+  anything. So for every element whose end tag HTML lets a document leave out, a
+  descendant selector goes on matching:
+
+      <ul><li><video><li><track></ul>
+
+      "video track"  matches the track
+      in the tree    the track is in the second item, with no video above it
+
+  Measured against x/net/html over a second list item, paragraph, table cell, row,
+  definition and option, in `differential/impliedclose_test.go`. The over-match runs
+  until something explicit closes the ancestor - the enclosing `</ul>` ends it - and
+  catches everything after it at any depth, so `li p` on a page written without
+  `</li>` is a selector for the rest of the list.
+
+  This is the worse half of the two: a position taken from a missing end tag is at
+  least silent, and this one runs the handler on an element that is not there. The
+  child combinator cannot be fooled the same way, because the start tag that ended
+  the element is also the parent of whatever comes next - so where the thing being
+  looked for can only be a child, `a > b` is both the more precise question and the
+  safe one.
+
+  Recorded on the end-tag section, in the supported-selectors list, and as B145.
+
 - **A `<template>` is markup that is not on the page, and prepending into one can
   delete its content.** The package documentation said nothing about templates,
   which left two things to find out the hard way.
