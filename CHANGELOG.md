@@ -1197,6 +1197,18 @@
   order they were written.
 
 ### Testing
+- **`sinkfailure_test.go`** gates the five facts above: every handler stops, the
+  document-end handler does not run, the destination's own error is findable from
+  `Write` and from `Close` under `ErrPoisoned`, the stopping point does not move
+  with the write sizes, a destination with no budget still sees one handler run,
+  and `Close` fails exactly for the documents where `Close` writes.
+
+- **`examples/gip/clientgone`** rewrites a page to a destination that stops
+  accepting partway, which is what a browser closing a connection looks like from
+  inside a handler. It prints what the client got, what the counters had reached,
+  and that the summary handler never ran; `-closes` prints the Close table above
+  from a live measurement rather than from a comment.
+
 - **`earlystop_test.go` gates the prefix guarantee** across the four handler kinds
   that can stop and four write sizes, together with the error identity through
   `Write`, through the refused writes after it, and through `Close`; that the
@@ -1607,6 +1619,47 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A destination failure stops every handler, including the one a summary is
+  written in.** The docs said a destination error surfaces from `Write` or `Close`
+  and poisons the Writer. They did not say that the rewrite stops entirely: no
+  further element, comment or text handler runs, and `OnDocumentEnd` never runs at
+  all.
+
+  The last one is the trap, because the document end is where a rewrite naturally
+  writes its accounting. A program that counts what it rewrote and logs the total
+  from `OnDocumentEnd` logs nothing on exactly the runs worth knowing about - the
+  ones where the client went away. Measured on a 760-byte page against a
+  destination that accepted 99 bytes: 2 links rewritten, 2 comments, 6 text chunks,
+  document-end handler not run. The counters have to live where the caller can read
+  them after the error, and they say what the rewrite reached rather than what the
+  page contains.
+
+  Two smaller facts, both now pinned. Where a destination failure stops does not
+  depend on the write sizes - the same handler counts and the same byte count at
+  every write size from one byte to the whole document - because the budget is a
+  fact about the destination and the page is a fact about the document. And a
+  destination that accepts *nothing* still sees one handler run, since handlers run
+  as tokens are parsed and the destination is written to afterwards.
+
+- **`Close` discovers a broken destination only when `Close` is the call that
+  writes.** Which is rarer than it sounds. Measured, with the destination made
+  unable to accept anything after the last `Write`:
+
+      document                     written during Close   Close reports
+      <p>text</p>                  nothing                nil
+      <p>unclosed text             nothing                nil
+      <div><p>a                    nothing                nil
+      <script>var a =              nothing                nil
+      <p>a</p                      the unfinished end tag   the failure
+      <div a="x                    the unfinished attribute the failure
+      <!--unclosed                 the unfinished comment   the failure
+      <p>text</p><                 the bare less-than       the failure
+      any document, appending at the document end           the failure
+
+  So a rewrite of an ordinary document has handed everything over by the time
+  `Close` is called, and a destination that broke in between is invisible to it.
+  Documented on `Writer.Write` and `Writer.Close`, and as B168.
+
 - **How to stop a rewrite early, and what it leaves behind.** Nothing said how to
   stop, though a rewrite over a stream that does not end has to. There are two
   ways and the docs described neither.

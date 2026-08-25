@@ -155,6 +155,21 @@ func NewWriter(dst io.Writer, opts ...Option) (*Writer, error) {
 // error - so errors.Is and errors.As still reach it, however late it is asked
 // for.
 //
+// A destination failure stops the rewrite, and stops it completely: no further
+// element, comment or text handler runs, and the [OnDocumentEnd] handler never
+// runs at all. That last one is worth planning for, because the document end is
+// where a rewrite naturally writes its accounting - a summary logged there logs
+// nothing on the run where the client went away. Keep the counters where the
+// caller can read them after the error, and treat them as what the rewrite
+// reached rather than as what the page contains. examples/gip/clientgone prints
+// the difference; sinkfailure_test.go gates it.
+//
+// Where a destination failure stops does not depend on the write sizes: the
+// budget is a fact about the destination and the page is a fact about the
+// document. A destination that accepts nothing at all still sees one handler run,
+// because handlers run as tokens are parsed and the destination is written to
+// afterwards.
+//
 // Failing is not atomic. Everything before the token whose handler failed has
 // already reached the destination, at every write size and including a single
 // Write of the whole document, and what it holds is a whole number of tokens -
@@ -209,6 +224,15 @@ func (w *Writer) Write(p []byte) (int, error) {
 // reports [ErrClosed] and a later Close reports nil. A panic from Write poisons it
 // with the bare sentinel. Either way the native resources are released on the way
 // out and the library is unaffected: examples/gip/panics prints the whole table.
+//
+// Close is also the call that discovers a destination that broke after the last
+// Write - but only when Close is the call that writes. For most documents it
+// writes nothing, because the bytes have already gone: measured, a document that
+// ends cleanly, in the middle of text, or inside a raw-text element has been
+// handed over entirely by the time Close is called, and Close reports nil however
+// broken the destination is. Close writes, and so can fail, when the document ends
+// inside a token - an unfinished end tag, attribute, comment, or a bare "<" - or
+// when a handler appends at the document end. Gated in sinkfailure_test.go.
 //
 // If an earlier Write already failed, Close reports ErrPoisoned wrapped around
 // that first error rather than the bare sentinel: checking only Close is the
