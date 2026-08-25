@@ -1197,6 +1197,42 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/formschema`: read every form on a page and print what it would
+  take to submit it.** The point is replay - the hidden fields, the pre-selected
+  options, the checkbox that submits nothing until it is checked - which is what
+  makes it different from listing the inputs.
+
+  Four of its decisions are the library's rather than the domain's, and they pull in
+  different directions inside one program:
+
+  A `<textarea>`'s value is its *text*, and a textarea is a raw-text element, so the
+  value arrives in chunks with no markup in them and has to be accumulated to
+  `IsLastInTextNode`. A per-chunk read gets a prefix and looks like it worked; the
+  test feeds a 520-byte value at five read sizes.
+
+  A `<select>`'s value is a nested element's attribute, so the field is not complete
+  until the select's end tag - while an `<input>` is void, has no end tag, and is
+  complete at its start tag. The same program records one at each.
+
+  A duplicate attribute is read through `Attribute`, which acts on the first copy -
+  the one a parser keeps and so the one a browser submits - rather than through the
+  iterator, which yields both.
+
+  And values are *decoded* while the action is not, which is the difference between
+  a thing that gets submitted and a thing that gets requested: `value="a&amp;b"`
+  submits `a&b`, and `action="/s?a=1&amp;b=2"` requests the URL as written. The
+  library's caveat applies to the first - `html.UnescapeString` decodes more of an
+  attribute value than a parser does, so `?a=1&copy=2` gains a copyright sign here
+  and keeps its parameter in a browser - and the report says when a value could have
+  been affected rather than pretending it could not.
+
+  Two things it declines to do. A field that names its form with a `form` attribute
+  is reported separately, because resolving it means knowing about a form that may
+  not have arrived - the ordering constraint, stated as a note rather than guessed
+  at. And strict parsing is off, because a raw-text element inside a `<select>` makes
+  it refuse the document; the report says when that shape was seen, since the content
+  inside such an element is text to a parser and any fields in it are invisible.
+
 - **`examples/gip/article`: find a page's article body by scoring elements as it
   streams past them, then emit that element and nothing else.** Two passes, and not
   by choice: the winner is not known until the document ends, and a rewrite cannot
