@@ -111,6 +111,26 @@ type MemorySettings struct {
 	// single Write and needs 8192 when fed in 256-byte writes. Size the limit
 	// against the write pattern the caller will actually use, or a value that
 	// passed a test will bail out under io.Copy.
+	//
+	// The rule underneath that is the largest single token a handler is given, and
+	// only where the token straddles two writes. Measured on a 2012-byte <img> tag
+	// and on 2800 bytes of 14-byte tags:
+	//
+	//	                          one Write   256 B writes   64 B writes
+	//	one 2012-byte tag, matched        5           2012          2012
+	//	one 2012-byte tag, unmatched      5            260            68
+	//	200 short tags, matched           5            268            76
+	//
+	// So the document's length does not come into it, an unmatched token costs
+	// nothing beyond the write size, and text costs nothing at all because it
+	// arrives in chunks - while a comment, which arrives whole, costs its length
+	// like a matched tag. What the rewrite writes does not count either: growing an
+	// attribute 64 times does not move the floor.
+	//
+	// The consequence is that adding a handler can raise the limit a pipeline
+	// needed before, with no change to the document. A rewrite matching the
+	// elements that carry srcset - the longest tags on most pages - is the usual
+	// way to meet this. Measured in memoryfloor_test.go.
 	MaxMemory int
 
 	// GracefulBailOut changes what the rewriter does when MaxMemory is
