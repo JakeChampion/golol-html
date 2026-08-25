@@ -213,6 +213,23 @@
   documentation says which of those applies where.
 
 ### Fixed
+- **`examples/gip/queue` reported a build share of 1.33, which cannot be.** The
+  two-queue method runs the work pass and the overhead pass separately, and
+  whichever goes second pays for the first one's rubbish - the work pass allocates
+  far more, so it left the overhead pass holding the collection. On the arm64
+  runner that put the overhead pass at 2.01ms against 1.51ms for the whole queue.
+
+  The passes alternate which goes first now, and each starts from a collected
+  heap. And the invariant the test asserted was not one: two separate runs can come
+  out either way round on a loaded machine, so a share at or above 1 is now
+  reported as two passes that could not be separated - naming both figures - rather
+  than printed as a number. The counted share is unaffected, having no clock in it,
+  so the report still gives a reader something to use.
+
+  The new case is gated by an `Outcome` built by hand with the runner's own
+  figures, because a fast machine will not produce it: 120 test runs against forty
+  spinning processes did not.
+
 - **`examples/gip/idmerge` was the pattern B177 warns about, and it corrupted
   silently.** It rewrites each input with its own rewriter and concatenates the
   outputs, which is exactly the join that is not the same as rewriting the whole.
