@@ -1197,6 +1197,18 @@
   order they were written.
 
 ### Testing
+- **`fixedcost_test.go`** gates the shape of the table: the cost grows with the
+  rule set and not with a document that matches nothing, fifty selectors is
+  hundreds of allocations before a byte is written, and a Writer refuses a second
+  document once closed - which is why the cost is per item.
+
+- **`examples/gip/queue`** runs a rewriter per goroutine over a queue and reports
+  three things: that no worker's output is another's - every document carries its
+  own number and every output is checked against that document rewritten alone -
+  how much of the per-item work went on construction rather than rewriting, and
+  with `-scan`, the throughput at several worker counts so a caller can find the
+  knee on their own machine rather than assume it is the core count.
+
 - **`reserialise_test.go`** gates both tables: fifteen operations against whether
   they reformat the tag, twelve source spellings against what survives, the tag
   name's case, the self-closing slash, and a document that comes back smaller than
@@ -1665,6 +1677,41 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **What a rewriter costs to build, for a workload that builds one per document.**
+  The registration cost was documented in allocations, "paid once per
+  `NewWriter`". For a queue of small documents that phrase is the whole story
+  rather than a footnote: a `Writer` cannot be reused - `Close` ends it, there is
+  no reset, and a parsed selector belongs to the Writer that parsed it - so every
+  item pays the whole rule set again. Measured as the allocations for a complete
+  rewrite:
+
+      selectors   empty document   1 KB   16 KB
+              1               23      26      26
+             10              105     106     106
+             50              406     408     408
+
+  Read down a column and the cost is the rule set; read across and a document that
+  matches nothing adds almost nothing. In time, fifty selectors is about 38µs of
+  construction on an M3 Pro, which is more than rewriting a one-kilobyte document
+  with them costs - so below about sixteen kilobytes a document, such a rewrite
+  spends more time being built than running. Fewer selectors or bigger documents
+  are the two ways out, and there is no third.
+
+  How many goroutines to run a queue on is a property of the machine rather than of
+  the library, and it is lower than the core count. 400 one-kilobyte documents with
+  fifty selectors, on twelve threads:
+
+      workers   wall clock   items/sec   speedup
+            1         39ms       10268      1.00x
+            2       20.6ms       19447      1.89x
+            4       12.1ms       33074      3.22x
+            8       20.2ms       19826      1.93x
+           12       18.5ms       21630      2.11x
+
+  The peak is at four and it is worse above it, because a rewrite that is mostly
+  allocation contends. A large-document workload saturates instead: 3.4x at four
+  workers and the same at twelve. Written up in the cost section and as B172.
+
 - **A mutated start tag comes back re-serialised, and the output is not the input
   plus the edit.** Setting an attribute on every anchor of the vendored
   cloudflare.com.html takes the document from 119,237 bytes to 114,542 - four per

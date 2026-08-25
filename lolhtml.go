@@ -1362,6 +1362,33 @@
 // saving is real but small, and registering the same selector twice to keep two
 // handlers separate is not something to avoid on cost grounds.
 //
+// Paid once per NewWriter matters more than it sounds for a workload of many small
+// documents, because a [Writer] cannot be reused - [Writer.Close] ends it, there is
+// no reset, and a parsed selector belongs to the Writer that parsed it. So a queue
+// pays the whole registration per item. Measured as the allocations for a complete
+// rewrite:
+//
+//	selectors   empty document   1 KB   16 KB
+//	        1               23      26      26
+//	       10              105     106     106
+//	       50              406     408     408
+//
+// Read down a column and the cost is the rule set; read across and the document
+// adds almost nothing where nothing matches. In time, on an M3 Pro, fifty
+// selectors is about 38 microseconds of construction, which is more than rewriting
+// a one-kilobyte document with them costs - so under about sixteen kilobytes a
+// document, a fifty-selector rewrite spends more time being built than running.
+// Fewer selectors or bigger documents are the two ways out; there is no third.
+//
+// How many goroutines to run such a queue on is a property of the machine and not
+// of this library, and it is lower than the core count: measured on a
+// twelve-thread M3 Pro, 400 one-kilobyte documents with fifty selectors took 39 ms
+// on one worker, 12.1 ms on four, and 20.2 ms on eight - the peak is at four and
+// it gets worse above it, because a rewrite that is mostly allocation contends.
+// The large-document case saturates rather than declining. examples/gip/queue
+// measures both for a caller's own workload, and fixedcost_test.go gates the
+// shape.
+//
 // That cost is per handler and not per selector, and a selector list is one
 // selector. Measured over 500 elements that match nothing, so the numbers are
 // registration and matching with no handler ever running:
