@@ -1197,6 +1197,27 @@
   order they were written.
 
 ### Testing
+- **`reserialise_test.go`** gates both tables: fifteen operations against whether
+  they reformat the tag, twelve source spellings against what survives, the tag
+  name's case, the self-closing slash, and a document that comes back smaller than
+  it went in.
+
+- **`examples/gip/twoways`** runs two rewriters over the same input at once - one
+  transforming and streaming, one auditing and reporting - and checks that the
+  concurrent answer is the sequential answer. It is also how the re-serialisation
+  above turned up: the transform reported fewer bytes out than in, which is not
+  something an attribute set should do, so the program now says why.
+
+- **`concurrentisolation_test.go`** pins three claims that were made and only
+  measured sequentially. The same input bytes can be read by two rewriters at once,
+  because `Write` reads the slice and does not keep it. User data and end-tag
+  registrations are per-Writer: eight goroutines, 400 reads, no cross-talk and no
+  handles left over, which matters because the handle table they use is
+  process-wide. And a panic in one Writer's handler leaves a Writer that is
+  *actually* mid-document in another goroutine untouched - the survivors hold at
+  half a document until the panic has happened, so the two overlap rather than
+  merely both occurring.
+
 - **`pipeline_test.go`** gates the composition: two stages annotate what the first
   produced where one pass does not, the peak heap does not grow with the input,
   piping costs what buffering costs and produces identical bytes, closing upstream
@@ -1644,6 +1665,47 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **A mutated start tag comes back re-serialised, and the output is not the input
+  plus the edit.** Setting an attribute on every anchor of the vendored
+  cloudflare.com.html takes the document from 119,237 bytes to 114,542 - four per
+  cent smaller, having been asked to make it bigger by fifteen bytes an element.
+  183 of its 233 anchors have their attributes on separate lines, and those
+  newlines do not survive the edit.
+
+  What survives is more than "re-serialised" suggests, and what does not is
+  precise: each attribute's own source text comes back exactly as it arrived, and
+  the separators between attributes are regenerated.
+
+      kept                           changed
+      single quotes                  newlines between attributes -> one space
+      unquoted values                tabs and runs of spaces     -> one space
+      spaces around the equals       a trailing space before >   -> dropped
+      the case of a name             a missing space between two -> added
+      the case of the tag            <circle r="1"/>             -> <circle r="1" />
+      duplicate attributes
+      bare booleans
+      entities in values
+      newlines inside a value
+
+  Which operations trigger it is worth knowing too, because most do not:
+
+      re-serialises              leaves the bytes alone
+      SetAttribute               reading anything
+      SetAttribute to the        AttributeList
+        value already there      Before, After, Prepend, Append
+      RemoveAttribute, when      SetInnerContent
+        the attribute is there   OnEndTag, SetUserData
+      SetTagName                 RemoveAttribute of an absent attribute
+
+  Setting a value to the one already present still re-serialises, so a rewrite
+  that means to leave unchanged elements untouched has to compare first and set
+  only when it differs.
+
+  The consequence is for anything comparing bytes: a diff, a checksum, an ETag or
+  a "did this change" check over the output sees changes the caller did not ask
+  for. Documented on `Element.SetAttribute` with the tables, referenced from
+  `ClearEndTagHandlers`, and recorded as B171.
+
 - **A second pass does not have to hold the document.** The two-pass section
   explained the cost of running a rewrite twice - about double the allocations -
   and then said "the document has to be held while the first pass reads it, which
