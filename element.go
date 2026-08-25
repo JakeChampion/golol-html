@@ -378,8 +378,16 @@ func (e *Element) SourceLocation() SourceLocation {
 // method returns the first, which is the one a browser would have.
 //
 // The value is raw source text, with character references left encoded: the
-// href of <a href="?a=1&amp;b=2"> is "?a=1&amp;b=2", not "?a=1&b=2". Use
-// html.UnescapeString from the standard library if you need the decoded form.
+// href of <a href="?a=1&amp;b=2"> is "?a=1&amp;b=2", not "?a=1&b=2".
+//
+// html.UnescapeString from the standard library decodes it, with one difference worth
+// knowing: in an attribute value a named reference without its semicolon is not a
+// reference at all when the character after it is "=" or ASCII alphanumeric, and the
+// standard library decodes it anyway. So "?a=1&copy=2" is a URL with a parameter
+// called copy to a browser and a URL with a copyright sign to html.UnescapeString. In
+// text the two agree. Measured in differential/attrrefs_test.go; a rewrite that has to
+// be exact about attribute values needs that rule, which examples/gip/references
+// implements.
 //
 // SetAttribute is the mirror image and takes raw source text too, escaping only
 // the double quote, so a value read here and written straight back is

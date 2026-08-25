@@ -33,7 +33,9 @@ import "strings"
 // references still encoded, so escaping one of those again double-escapes it and
 // "Configure &amp; run" becomes "Configure &amp;amp; run". For a value read from
 // the document, either leave it raw and do not escape it, or decode it first with
-// html.UnescapeString from the standard library and escape the result. Which of
+// html.UnescapeString from the standard library and escape the result - remembering
+// that in an attribute value that decoder is not the parser's, since it decodes a
+// semicolon-less name that a browser leaves alone. Which of
 // those is right depends on where the value came from as well as where it is
 // going, because each context lets through the character the other one ends on. A
 // value that came from text can be written back into text raw, and needs the quote
