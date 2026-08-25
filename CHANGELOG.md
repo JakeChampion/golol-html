@@ -1297,6 +1297,30 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **`SourceLocation` had one sentence, and it is the identity a two-pass rewrite
+  runs on.** The documentation recommends reading a document twice wherever a
+  decision needs what comes later, and a byte range is what joins the passes - so
+  the four things a caller needs from it are worth stating:
+
+      the offsets index the bytes fed to the rewriter, before decoding or
+      transcoding: under WithEncoding a chunk reporting "café" has a four-byte
+      range, so slicing the input works and measuring the reported string does not
+
+      an element's range is its start tag and nothing of its content; an end tag's
+      is the token that closed the element, which every element that token closed
+      reports identically; a comment's and a doctype's cover the whole token
+
+      a range can be empty: the final chunk of a text node stands at the point
+      where the node ended, which is how to find a text node's extent - first
+      chunk's Start to last chunk's End
+
+      a replacement character produced for a byte that could not be decoded can
+      stand at a point too, so the length of the reported text and the length of
+      the range are unrelated numbers
+
+  `sourcelocation_test.go` measures all of it, plus the guarded extent recipe and
+  a two-pass rewrite finding its own elements again. That the offsets are absolute
+  and chunk-invariant was already measured in `sourceloc_test.go`.
 - **Source is not only undecoded, it is unpreprocessed.** "Character references
   are not decoded" covers the well-known half of what "raw source" means. HTML also
   normalises bytes before the tokenizer sees them, and a rewriter that re-emits

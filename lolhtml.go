@@ -1057,6 +1057,34 @@ func (ct ContentType) String() string {
 
 // SourceLocation is the half-open byte range a unit occupied in the input
 // document, counted from the first byte fed to the rewriter.
+//
+// The bytes fed, before anything is decoded or transcoded. Under [WithEncoding]
+// the reported text of a unit is UTF-8 and the range is not: a text chunk reading
+// "café" in a windows-1252 document has a four-byte range, because that is what
+// the document spent on it. So slicing the input at the range works and measuring
+// the reported string does not. The offsets are absolute and unaffected by how the
+// document was written in - one byte at a time gives the same numbers as one call -
+// which is what makes them usable as identity across two passes, as long as both
+// passes are fed the same bytes.
+//
+// What the range covers depends on the unit:
+//
+//	an element     its start tag, and nothing of its content
+//	an end tag     the tag that closed the element, which may belong to an
+//	               enclosing one - see [Element.OnEndTag]
+//	a comment      the whole token, delimiters included; see [Comment]
+//	a doctype      the whole declaration
+//	a text chunk   the bytes of that chunk
+//
+// A range can be empty. The final chunk of a text node carries no bytes, and its
+// range is the zero-width point where the node ended - which is the way to find a
+// text node's extent, from the first chunk's Start to the last chunk's End. A
+// replacement character the rewriter produced for a byte that could not be decoded
+// can have one too: fed "caf\xe9" as UTF-8, the chunk reporting U+FFFD stands at a
+// point rather than over any bytes. So the length of the reported text and the
+// length of the range are unrelated numbers.
+//
+// Measured in sourcelocation_test.go.
 type SourceLocation struct {
 	Start int
 	End   int
