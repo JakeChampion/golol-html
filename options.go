@@ -306,11 +306,31 @@ func OnComment(selector string, fn func(*Comment) error) Option {
 }
 
 // OnText registers fn to run for every text chunk inside an element matching
-// selector, including text inside its descendants.
+// selector, including text inside its descendants. Use [OnDocumentText] for
+// every text chunk in the document.
+//
+// Those are not the same set, and the gap is silent. No selector reaches text
+// that is not inside any element, so a fragment - which is what an edge rewrite
+// usually has - hands a selector-based handler less than it looks like:
+//
+//	document                      OnText("*")   OnDocumentText
+//	hello                                   0                2
+//	<p>a</p>tail                            2                4
+//	before<p>a</p>after                     2                6
+//	<html><body>a</body></html>             2                2
+//
+// A redactor written as OnText("*", redact) leaves the first three untouched and
+// reports nothing. The last row is the shape that hides it: a full document has
+// an <html> around everything, so a test written against one passes.
 //
 // Text arrives in chunks with no guaranteed boundaries: a single text node can
 // be reported as several chunks, and only the last has IsLastInTextNode set.
 // Accumulate across chunks if you need whole text nodes.
+//
+// The last chunk of a node is its own call and carries no bytes, in every shape
+// measured - see [TextChunk.IsLastInTextNode] - so this handler runs at least
+// twice per text node and about half its calls on a document of prose are handed
+// nothing. Work that costs anything belongs behind a length check.
 //
 // A text node is not the same thing as an element's text, and the difference is
 // where this gets people. <a>click <b>here</b></a> has two text nodes, so this
@@ -380,8 +400,9 @@ func OnDocumentComment(fn func(*Comment) error) Option {
 	})
 }
 
-// OnDocumentText registers fn to run for every text chunk in the document. See
-// OnText for how chunking works.
+// OnDocumentText registers fn to run for every text chunk in the document,
+// including text outside any element. See OnText for how chunking works, and for
+// the measured difference between the two.
 //
 // Every OnText handler runs before this one on a chunk they both see, even if
 // this option came first; see the package documentation on handler order.

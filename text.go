@@ -58,7 +58,17 @@ func (t *TextChunk) Bytes() []byte {
 }
 
 // IsLastInTextNode reports whether this is the final chunk of its text node.
-// The final chunk is frequently empty, existing only to mark the boundary.
+//
+// That chunk is a call of its own and it carries no bytes: it exists to mark the
+// boundary. Measured empty in every shape tried - a short text node, a 100 KB
+// one, character references, each of the four raw-text elements, and the same
+// document fed in one-, three- and five-byte writes, which changes how the
+// content is chunked and not how it ends. An element with no text has no text
+// node and so no final chunk at all.
+//
+// The consequence is a cost: a text handler runs at least twice per text node,
+// and on a document of prose about half its calls are handed nothing. See
+// [OnText].
 //
 // Its text node, not its element: an element containing nested markup has one
 // text node per run of character data, and each one ends with its own final
