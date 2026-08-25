@@ -710,6 +710,22 @@ func OnDocumentEnd(fn func(*DocumentEnd) error) Option {
 // Go string "café". Content you insert is taken as UTF-8 and encoded on the way
 // out, so the output is in the document's encoding throughout.
 //
+// Which means a rewrite cannot convert a document from one encoding to another.
+// There is no output-encoding option, and replacing every text chunk and every
+// attribute with itself leaves the bytes exactly as they were - measured over
+// windows-1252, iso-8859-2, shift_jis, euc-jp and gbk in legacyencoding_test.go.
+// A program that has to convert transcodes the bytes itself and can use the
+// rewriter for the other half: reading both versions and comparing what the
+// handlers were given proves the text survived, which is what
+// examples/gip/reencode does.
+//
+// A byte the decoder cannot use has two shapes, and both are visible to a caller
+// that looks. In a document declared UTF-8 it reaches the output as the three
+// bytes of U+FFFD. In a legacy encoding it reaches the output as "&#65533;" - a
+// reference, in the text, seven bytes where the document had one - because U+FFFD
+// is not in a legacy repertoire and the reference below is the fallback. Both
+// only when a text handler is registered; with none, the byte passes through.
+//
 // A character the target encoding cannot represent does not have one answer. It
 // depends on the position, because a numeric character reference is only a
 // character where references are decoded:
