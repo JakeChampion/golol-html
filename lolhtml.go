@@ -124,6 +124,19 @@
 //	SetInner <ul><li>[1]</ul>                   items b and c are gone
 //	Replace  <ul>[1]                            every item is gone
 //
+// The one exception is inserting through the end tag rather than through the
+// element. All three handlers run at the single `</ul>`, innermost first, and
+// every insertion survives:
+//
+//	EndTag.Before  <ul><li>a<li>b<li>c[3][2][1]</ul>   all three, at the end of the list
+//
+// The position is no more correct than Append's - the content belongs at each
+// item's own end, and the source has no such position - but nothing is silently
+// dropped. For a rewrite whose whole job is to add something, that is the
+// difference between a misplaced insertion and a missing one, and it is the
+// reason to prefer [EndTag.Before] over [Element.Append] where either would do.
+// examples/gip/shadow is built on it.
+//
 // And [Element.Remove] on the *first* item alone empties the whole list:
 //
 //	<ul><li>a<li>b<li>c</ul>  ->  <ul>
