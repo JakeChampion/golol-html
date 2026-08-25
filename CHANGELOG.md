@@ -1197,6 +1197,43 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/comments`: a comment renderer, and three bugs its own tests
+  found.** It sanitises untrusted comment HTML to a short allow-list and turns bare
+  URLs into links, which is the one job in the collection that has to build markup
+  out of text an attacker chose.
+
+  The bugs, in the order the tests found them:
+
+  *Double escaping.* A text node's contents arrive as source, so `a &amp; b` is
+  those nine characters. Writing them back with `lolhtml.Text` escapes them again
+  and produces `a &amp;amp; b`. The rule the library gives is the same one it gives
+  for attributes - decide on the decoded form, write back the raw one - so the text
+  goes back with `HTML`, and nothing in the linkifier escapes anything. What makes
+  that safe is what a text node is: bytes the tokenizer decided are not markup, so a
+  `<` inside one could not begin a tag and re-emitting it in place leaves it text.
+
+  *A link with no policy.* The `rel` and `target` attributes were set by the element
+  handler, which never saw the anchors the linkifier produced - a selector does not
+  match markup the same pass inserted, deliberately, because that is what stops a
+  rewrite triggering itself. So the first pass produced bare links and a second pass
+  added the policy: the idempotence test caught the disagreement. The linkifier
+  writes them itself now, and the handler still applies them to the commenter's own
+  anchors, which makes the policy the renderer's rather than the commenter's.
+
+  *A test measuring the wrong thing.* A comment saying `" onmouseover="alert(1)`
+  comes out as those characters as *text*, which is correct, and a substring check
+  called it a failure. The check re-reads the output with a rewriter and asks whether
+  any attribute begins with "on" - which is the difference between looking at bytes
+  and asking a parser.
+
+  The rest is the discipline the docs give, applied: text accumulated to
+  `IsLastInTextNode` because a URL can straddle chunks and a per-chunk linkifier
+  finds nothing in `https://exa` or `mple.com/x`; a depth counter for open anchors,
+  since there is no selector for "not inside a link"; `RemoveAndKeepContent` for a
+  disallowed element that holds prose and `Remove` for one that holds code, which
+  `IsRawText` is how to tell apart; and an href kept only when its *decoded* scheme
+  is http, https or mailto.
+
 - **The text-insertion property was stated over documents that excluded every
   hazardous context.** `properties/text_structure_test.go` says inserting with
   `lolhtml.Text` never changes a document's tags, "for any value, at any position,
