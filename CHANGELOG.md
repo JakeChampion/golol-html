@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Added `CheckComment` and `ErrCommentBreakout`, for text a caller is about to
+  put inside a comment it assembled itself. `Comment.SetText` refuses text that
+  would end the comment early and says there is no escaping that would work; a
+  comment built by hand out of `HTML` content had no equivalent guard, which the
+  documentation named without offering one. `CheckRawText` is exported for
+  exactly that hand-built case, so this is the missing half of the pair.
+
+  The rule is the tokenizer's: refuse text containing `-->` or `--!>`, or
+  beginning with `>` or `->`. Agreement with `SetText` is pinned over 2813
+  strings rather than assumed, 474 of them refused by both, and what it refuses
+  is checked against what actually leaks by parsing the output.
+
+- `examples/gip/tailcomment`: emit a summary of what changed as a trailing
+  comment, which is the path that has no guard - `DocumentEnd.Append` takes
+  markup. Unguarded, a summary holding a URL with `-->` in it truncates the
+  comment and puts the rest in the page. Since there is no escape, the program
+  makes the choice explicit: rewrite the sequence ("- ->"), or refuse to emit a
+  comment and say why.
+
+  Its test caught that the danger needs a literal `-->` in the source.
+  `Attribute` returns raw source, so `&gt;` stays encoded and is harmless; a
+  literal `>` is legal inside a quoted attribute value and is not.
 - `Attribute`: say that it has no source location, and that its bytes cannot be
   recovered from the ones that do. `Element.SourceLocation` is the whole start
   tag, and searching that for one attribute's range fails on markup the library
@@ -59,6 +81,40 @@
   ranges say. It reproduces the document even when every range is nonsense, so
   it cannot be used as a check on the ranges - which is what the first draft of
   this program's tests did.
+- `differential`: remove `zz_scratch_test.go`, a scratch draft committed by
+  accident in #238. It is the working version of what became
+  `preserving_test.go`: the same fourteen documents, the same six rewrites, the
+  same tree comparison, and `!!` still in its failure message. It duplicates
+  those assertions rather than adding any, so a change that broke them broke two
+  files, and the surviving one is the one with the hazards half and the prose.
+- `SourceLocation`: say that the units do not tile the document. The section is
+  exhaustive about what each unit's range covers and silent about which tokens
+  never become a unit, which matters most for the tool the section is written
+  for - one keying on offsets across two passes. A stray end tag, one with no
+  start tag to pair with, reaches no handler at all: an end tag is observable
+  only through `Element.OnEndTag` and there is no element to register it on.
+  Its bytes are still written out, so rebuilding a document from the ranges
+  reported drops them: `<p>a</p></p><b>c</b>` comes back as
+  `<p>a</p><b>c</b>`. Measured for `</p>`, `</span>`, `</br>`, `</img>`,
+  `</p class=x>`, `</>`, `</circle>` and a trailing `</li>`; with every handler
+  the library has registered on `*` and the document written in one call, those
+  are the only unnamed bytes in the documents measured. One space decides it - `</ x>` is a bogus comment, not a
+  tag, and a comment handler sees it.
+
+- `examples/gip/locate`: grep for HTML - report every match's source location
+  and prove each report by slicing the caller's own copy of the input, then
+  report the bytes no handler named. Also pins the exactness the library's own
+  test stopped short of: `sourceloc_test.go` asserts a start-tag slice *begins*
+  `<name`, which leaves where it ends untested, and it is exact for the forms a
+  scanner hunting the next `>` gets wrong - `<a title="a<b">`, `<p attr=>`,
+  `<p/ >`, `<p a="1"b="2">`. The slice is also the only way back to the
+  author's spelling, since `<P>` reports `TagName` `p`.
+
+  Two of its own bugs. It registered an end-tag handler without checking
+  `CanHaveContent`, which is an error rather than a no-op on a void element, so
+  `<img src=a/>` failed the rewrite instead of reporting one span. And its
+  chunk-invariance test compared a four-handler baseline against a two-handler
+  run, so the span counts it was checking were never meant to match.
 
 ### Added
 - **`CheckRawText`, because the text paths cannot apply the breakout guard.**
