@@ -1325,6 +1325,35 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/gzipout`: rewrite into a gzip writer and check the round trip.**
+  Two Closers in a chain, and B186 is the reason it is worth an example.
+
+  A rewriter writes during its own `Close` - `OnDocumentEnd` always, and a text
+  handler for the last chunk of a text node the document left open - so the order of
+  the two `Close` calls decides whether those bytes arrive:
+
+      document and handlers                       rewriter first   gzip first
+      a complete document, no append                     34 bytes     34 bytes
+      an append at the document end                      71 bytes     34 bytes
+      an append, document ends inside a tag              58 bytes     21 bytes
+      text held, document ends inside the text            7 bytes      3 bytes
+
+  The first row is why the mistake survives testing: on an ordinary document with
+  ordinary handlers there is nothing to lose. When there is, the rewriter's `Close`
+  returns `flate: closed writer` - so it is detectable, and `defer` is where the
+  report dies. Deferred calls run last in, first out, so the defer written *second*
+  runs first, and a defer discards the error that would have said so.
+
+  Two measurements that came out the reassuring way. The write pattern costs nothing
+  in compressed size: the same document at chunk sizes 1, 16, 512 and 1 MiB gzipped
+  to 1188 bytes each, identical to compressing the finished output in one write - so
+  wrapping the compressor in a `bufio.Writer` buys nothing here. And what a rewrite
+  costs on the wire is not what it costs in bytes: adding `rel="noopener"` to two
+  hundred links added 3000 bytes to the document and **51** to the stream, a 22 per
+  cent increase becoming 4.5. A rewrite that adds distinct content per element -
+  an id, a nonce - does not compress away, and a test asserts the difference rather
+  than the claim.
+
 - **`examples/gip/tee`: stream a document to two destinations at once, one rewritten
   and one exactly as it arrived, from a single read.** The verbatim copy is the
   input, so teeing the reader is the whole implementation. What is worth measuring is
