@@ -1325,6 +1325,38 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/esi`: expand Edge Side Includes both ways and report where the
+  two disagree.** `examples/gip/include` is the one to copy - it uses
+  `WithESITags`, fetches in the handler rather than in the sink, and implements the
+  spec's error handling. This one exists to measure what the option is buying,
+  because "use the option" is easier to follow when the alternative has a number
+  against it.
+
+  Without it, an `esi:` element is an ordinary unclosed container, so its end is
+  the enclosing element's end tag. On
+  `<div><p>before</p><esi:include src="/f"/><p>after</p></div>`:
+
+      operation                     without the option                     with it
+      Replace                       loses <p>after</p> and </div>          correct
+      Before then Remove            loses <p>after</p> and </div>          correct
+      SetInnerContent               keeps the marker, loses <p>after</p>   correct
+      RemoveAndKeepContent          loses </div>                           correct
+      Before then RemoveAndKeep     loses </div>                           correct
+      Before alone                  correct, and the marker stays          the marker stays
+
+  So there is one lossless way to do it without the option and it cannot remove the
+  marker. That matters less than it sounds and in a way worth measuring: the source
+  tree already nests what follows the include *inside* it, so `div > p` matches one
+  paragraph without the option and two with it - and `Before` alone preserves that
+  tree exactly, fragment added, nothing moved.
+
+  The trap is the operation that looks like the fix. `Before` plus
+  `RemoveAndKeepContent` produces exactly the option's tree on a document that ends
+  soon after the include, and on one that does not it consumes the `</div>` and
+  makes a following `<section>` a child of the div instead of its sibling. A rewrite
+  tested on the first shape passes and then moves half the page on the second.
+  B180, with the trees in `differential/esi_test.go`.
+
 - **`examples/gip/placeholders`: resolve handlebars-style `{{ name }}` placeholders,
   choosing the escape by position and refusing the positions where no escape is
   enough.** "Escaping properly" is five different jobs:
