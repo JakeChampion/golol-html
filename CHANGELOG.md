@@ -1325,6 +1325,42 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/regions`: apply a different set of handlers to each region of one
+  document.** B191, and it took four wrong premises of mine to get to it.
+
+  Most of what a region sees is context-free, because a rewriter is a tokenizer
+  rather than a tree builder: a `td` alone is the same token as a `td` in a table,
+  an `option` alone the same as one in a select. A tree builder would disagree about
+  both. That is what makes per-region handlers possible at all, and it is not the
+  same as a boundary being safe.
+
+  End tags are the exception and they set the rule. An end tag pairs with a start
+  tag, so an element spanning a boundary is split: the region before never meets the
+  end tag and the region after meets one with nothing open to match. Measured,
+  `<div><p>A</p><p>B</p></div>` cut at 13 runs the div's `OnEndTag` handler once as a
+  whole document and **zero** times across the two halves. So the rule is: cut where
+  nothing is open.
+
+  The sentinel test from B177 does not answer this. It answers whether the prefix
+  *swallows* what follows, which is necessary and not sufficient, and it misses two
+  things: a prefix ending in a bare `<` or `</`, which swallows nothing and still
+  orphans the tail's tag name, and an open element, which it cannot see at all.
+  Measured over one document, 10 of 79 offsets pass the cheap test and are unsafe.
+  The exact check is to rewrite both halves with a probe that touches every kind of
+  unit - elements, end tags, text, comments, the doctype - and compare against the
+  whole; a weaker probe answers a narrower question and approves boundaries that a
+  caller's own handlers would notice.
+
+  `TestASafeBoundaryIsSafeForAnyHandlers` is the gate that matters: every offset the
+  check approves is then split with five different handler sets, each touching a
+  different unit kind, and all five have to agree with the whole. Four of eighty
+  offsets are approved, which is what a conservative check looks like.
+
+  Also fixes the same `fmt.Sscanf("%d")` bug I fixed in `examples/gip/gunzip` two
+  turns ago and then wrote again here: it stops at the first character it does not
+  understand and reports success, so `-at 1.5` would have split at byte 1. There are
+  no other uses of it in the tree.
+
 - **`examples/gip/stopafter`: rewrite until a marker and copy everything after it.**
   The mechanism is B189's, from `examples/gip/headonly`; what is new is that the
   marker can be any kind of unit, and B190 - where the rewrite resumes is not the
