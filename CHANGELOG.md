@@ -108,6 +108,23 @@
   `<img src=a/>` failed the rewrite instead of reporting one span. And its
   chunk-invariance test compared a four-handler baseline against a two-handler
   run, so the span counts it was checking were never meant to match.
+- `DocumentEnd.Append`: say that there is no streaming form of it, and what to do
+  when the append is large. `Element` and `EndTag` each have six `Stream`
+  methods; `DocumentEnd` has none, so a trailing report exists in memory in full
+  - 65.5 MB of allocation for a 12 MB report of a million rows, against 16.0 MB
+  written to the caller's own sink after `Close` for byte-identical output. The
+  routes differ in two things: the caller escapes its own content, for which
+  `EscapeText` is already documented as exactly what `ContentType` `Text`
+  applies, and the caller has to check `Close` first.
+
+- `examples/gip/tailreport`: append a generated report to every document,
+  streaming it rather than building it. Two corrections it forced on me. I had
+  written that a handler error discards the output; it does not - the sink keeps
+  the early-stop prefix, so `before<a href="/">l</a>after` with a failing anchor
+  handler leaves `before` there, which is a better reason not to write a report
+  than the one I had. And its allocation comparison used twelve distinct keys, so
+  it was measuring the fixed cost rather than the report; with 200,000 it is 19.2
+  MB streamed against 40.1 MB built.
 
 ### Added
 - **`CheckRawText`, because the text paths cannot apply the breakout guard.**

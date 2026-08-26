@@ -47,6 +47,23 @@ type DocumentEnd struct {
 // not fire, so a fallback to Append is the usual shape and needs the check
 // above. examples/gip/beacon does this both ways round, and verifies the result
 // by stripping its own insertion back out and comparing byte for byte.
+//
+// This takes a string, and there is no streaming form of it: [Element] and
+// [EndTag] each have six Stream methods and DocumentEnd has none. A large
+// trailing append therefore exists in memory in full before it is appended. For
+// a 12 MB report of a million rows that cost 65.5 MB of allocation.
+//
+// Where the append is large, write it to your own sink after [Writer.Close]
+// instead. The rewriter's output has already gone there and Close has flushed it,
+// so what a caller writes next lands exactly where this would have put it - the
+// same position, with the same hazard about an input cut off mid-construct. The
+// same report streamed that way allocated 16.0 MB and the output was
+// byte-identical. Two differences, both small: the caller does its own escaping,
+// for which [EscapeText] is documented as exactly what [Text] applies, and the
+// caller has to check Close first. An error there does not discard the output -
+// what was already emitted stays in the sink, which is the documented early-stop
+// prefix - so a report written anyway would be attached to a truncated document.
+// examples/gip/tailreport is that shape.
 func (d *DocumentEnd) Append(content string, ct ContentType) error {
 	p, err := d.live()
 	if err != nil {
