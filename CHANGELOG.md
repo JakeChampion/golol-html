@@ -1325,6 +1325,28 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/bindings`: turn framework attribute syntax into plain HTML
+  attributes where it can, and say why it cannot everywhere else.** Only a literal
+  can become a plain attribute - a quoted string, a number, `true` or `false` -
+  because an expression needs a runtime and a program that guessed would produce a
+  page that looks right and says something else. Everything else is reported with
+  a reason: an event handler has no plain form, a structural directive decides
+  whether the element exists, two-way binding has no plain form, and `v-html`
+  writes markup rather than an attribute.
+
+  It reads `Attribute.NamePreserveCase` for everything it prints, per B179, and
+  only ever writes names that are lower-case already - which is the only reason it
+  is safe to write them at all.
+
+  Two things it demonstrates rather than merely uses. A binding's value is
+  attribute-value source, so `:title="'a &amp; b'"` becomes `title="a &amp; b"`
+  and not `title="a &amp;amp; b"`: the test asserts the decoded value is unchanged
+  across five escapes. And every framework name needs escaping to appear in a
+  selector - `[\:href]`, `[\@click]`, `[\*ngIf]`, `[\(click\)]`,
+  `[\[\(ngModel\)\]]` - with the unescaped form rejected rather than silently
+  matching nothing, which is why the program reads the attribute list instead of
+  registering one selector per prefix.
+
 - **`examples/gip/widgets`: turn legacy widget markup into web component markup.**
   A container becomes a custom element, the state it kept in classes and data
   attributes becomes properties, and the parts it kept in nested divs become slots.
@@ -2359,6 +2381,35 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Lower-cased attribute names break more than SVG.** `SetAttribute`'s
+  documentation explained that adding an attribute lower-cases its name, that
+  updating one keeps the document's spelling, and that this is a silent breakage in
+  SVG and MathML where `viewbox` is not `viewBox`. It also said that "in HTML that
+  is nothing", which is true of an HTML parser and not of whoever reads the
+  document next.
+
+  A framework template is the other case, and it is HTML-shaped text rather than a
+  document: parsed as HTML by anything using this library, with attribute names
+  that are identifiers to a compiler.
+
+      source              Attribute.Name      Attribute.NamePreserveCase
+      *ngIf="ok"          *ngif               *ngIf
+      [ngClass]="c"       [ngclass]           [ngClass]
+      [(ngModel)]="v"     [(ngmodel)]         [(ngModel)]
+      v-bind:someProp     v-bind:someprop     v-bind:someProp
+      @myEvent            @myevent            @myEvent
+
+  `*ngIf` is a directive and `*ngif` is not. So a rewrite that reads `Name` and
+  writes it back turns the directive off, a report built from `Name` names
+  something the author cannot search for, and an attribute added as `*ngIf` arrives
+  as `*ngif`. Updating one already in the document keeps the spelling, and
+  `Replace` with built markup is the other way round - the same two escape hatches
+  SVG has.
+
+  The section says that now, with the table, and ends on the rule rather than the
+  example: the question is not whether the document is HTML but whether whoever
+  reads it next cares about case. B179.
+
 - **Renaming a container to a name that cannot hold content has four answers.**
   `SetTagName`'s documentation covered the content-model cases - a `table` that
   fosters its content out, a `select` that deletes it - and not the void direction,

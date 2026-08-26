@@ -451,13 +451,35 @@ func (e *Element) HasAttribute(name string) (bool, error) {
 //	<svg viewBox="0 0 1 1">    SetAttribute("viewBox", "0 0 9 9")  ->  viewBox="0 0 9 9"
 //	<svg>                      SetAttribute("viewBox", "0 0 9 9")  ->  viewbox="0 0 9 9"
 //
-// In HTML that is nothing: attribute names are matched case-insensitively, and
-// [Attributes] lower-cases them for the same reason. In SVG and MathML it is a
-// silent breakage, because there the names are case-sensitive - viewbox is not
-// viewBox, and a browser ignores it. The spec's list of the ones that need a
-// capital runs to about sixty names, viewBox, preserveAspectRatio,
-// gradientTransform, patternUnits, refX, textLength, stdDeviation and
-// zoomAndPan among them.
+// For an HTML element read by an HTML parser that is nothing: attribute names are
+// matched case-insensitively, and [Attributes] lower-cases them for the same
+// reason. It is a silent breakage wherever the next reader is case-sensitive, and
+// that is not only SVG.
+//
+// In SVG and MathML the names are case-sensitive to a browser - viewbox is not
+// viewBox, and it is ignored. The spec's list of the ones that need a capital runs
+// to about sixty names, viewBox, preserveAspectRatio, gradientTransform,
+// patternUnits, refX, textLength, stdDeviation and zoomAndPan among them.
+//
+// A framework template is the other case, and it is HTML-shaped text rather than a
+// document: the file is parsed as HTML by anything using this library, and its
+// attribute names are read by a compiler that treats them as identifiers.
+//
+//	source              Attribute.Name      Attribute.NamePreserveCase
+//	*ngIf="ok"          *ngif               *ngIf
+//	[ngClass]="c"       [ngclass]           [ngClass]
+//	[(ngModel)]="v"     [(ngmodel)]         [(ngModel)]
+//	v-bind:someProp     v-bind:someprop     v-bind:someProp
+//	@myEvent            @myevent            @myEvent
+//
+// *ngIf is a directive and *ngif is not. So a rewrite that reads Name and writes
+// it back turns the directive off, a report built from Name names something the
+// author cannot search for, and an attribute added as "*ngIf" arrives as "*ngif".
+// examples/gip/bindings reads NamePreserveCase for everything it prints and only
+// ever writes names that are lower-case already.
+//
+// The question is not whether the document is HTML. It is whether whoever reads it
+// next cares about case.
 //
 // So a rewrite that reads an SVG attribute, computes a new value and writes it
 // back works, and the same code adding the attribute to an element that did not
