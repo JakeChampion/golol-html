@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `differential`: remove `zz_scratch_test.go`, a scratch draft committed by
+  accident in #238. It is the working version of what became
+  `preserving_test.go`: the same fourteen documents, the same six rewrites, the
+  same tree comparison, and `!!` still in its failure message. It duplicates
+  those assertions rather than adding any, so a change that broke them broke two
+  files, and the surviving one is the one with the hazards half and the prose.
+
 ### Added
 - **`CheckRawText`, because the text paths cannot apply the breakout guard.**
   Inserting content into a `<script>` or a `<style>` through an `Element` method is
