@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- Doc figures: correct the one that was wrong, gate it, and stamp the one that had
+  drifted with the toolchain it came from.
+
+  The Content-Encoding table in the package documentation said "256 arbitrary
+  bytes ... 482 bytes", and `lossytext_test.go`'s table said the same. The case
+  they describe feeds every byte value in order, and the answer is 512 - measured
+  through the helper that test uses. It reads like a number left behind when the
+  input stopped being random. Nothing caught it because nothing gated it: the
+  assertion is that a lossy body grows, which 482 and 512 both satisfy. It is
+  gated now, with a message naming both comments to update if the decoder ever
+  legitimately changes the answer.
+
+  `Element.OnEndTag` said "about 30 MB against about 6 MB ... roughly 300 bytes
+  per element". Measured on Go 1.25.8 it is 27.0 MB, 4.2 MB and about 240 bytes.
+  The figures were hedged and directionally right, so this is a re-measurement
+  rather than a correction - but the section quoted no toolchain, and this
+  project's own rules say to name it, because that is the axis allocation figures
+  move on.
+
+  Two other figures were checked and stand: `NamespaceURI` returning the package
+  constants costs zero allocations rather than one per element (measured 1025
+  either way over 1000 elements), and the write-amplification claim is gated
+  one-sidedly in `writecount_test.go`, which is the right way to pin an
+  approximate count. Two remain ungated and unverified here because measuring
+  them needs a 64 MB document: the user-data heap figures on
+  `Element.SetUserData` and the pipeline peak-heap figures in the package
+  documentation.
+
 - Added `CheckComment` and `ErrCommentBreakout`, for text a caller is about to
   put inside a comment it assembled itself. `Comment.SetText` refuses text that
   would end the comment early and says there is no escaping that would work; a
