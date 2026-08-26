@@ -1820,13 +1820,16 @@ func (ct ContentType) String() string {
 //	a doctype      the whole declaration
 //	a text chunk   the bytes of that chunk
 //
-// A range can be empty. The final chunk of a text node carries no bytes, and its
-// range is the zero-width point where the node ended - which is the way to find a
-// text node's extent, from the first chunk's Start to the last chunk's End. A
-// replacement character the rewriter produced for a byte that could not be decoded
-// can have one too: fed "caf\xe9" as UTF-8, the chunk reporting U+FFFD stands at a
-// point rather than over any bytes. So the length of the reported text and the
-// length of the range are unrelated numbers.
+// A range can be empty. The final chunk of a text node has a range that is the
+// zero-width point where the node ended - which is the way to find a text node's
+// extent, from the first chunk's Start to the last chunk's End. Its range, not its
+// text: the chunk usually carries no text either, and it carries the replacement
+// character when the node ended with bytes that could not be decoded, so
+// "<p>ab\xe9</p>" ends with a flagged chunk whose text is U+FFFD at a zero-width
+// range. See [TextChunk.IsLastInTextNode]. A replacement character anywhere in a
+// node has the same shape: fed "caf\xe9" as UTF-8, the chunk reporting U+FFFD
+// stands at a point rather than over any bytes. So the length of the reported text
+// and the length of the range are unrelated numbers.
 //
 // Measured in sourcelocation_test.go.
 type SourceLocation struct {
