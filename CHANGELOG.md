@@ -1325,6 +1325,36 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/etag`: compute an entity tag for a rewritten page without waiting
+  for the page.** An etag is a header and the output only exists as it is written, so
+  hashing the output means either sending the header late or holding the body.
+  Neither is needed: a rewrite is a function, so hashing the input with the
+  rewriter's identity names the output without producing it.
+
+  Fastest of twenty runs over a 233 KB page, normalised to a plain rewriting pass:
+
+      approach                              time   relative   etag known
+      rewrite only (the baseline)         5.161ms      1.00x   -
+      hash the input, sha256, up front    5.296ms      1.02x   before the body
+      one pass, buffered, then hash       5.389ms      1.04x   before the body, holding it
+      hash the output, fnv64a, streaming  5.623ms      1.09x   after the body
+      hash the output, sha256, streaming  5.881ms      1.14x   after the body
+      two rewriting passes               10.473ms      2.03x   before the body
+
+  Hashing the input is the cheapest row and the only one that is both up front and
+  O(1) memory. The last row is why this is not `examples/gip/cachetags`: there the
+  second pass could register no handlers and cost 0.08x, so two passes came to less
+  than one. Here the second pass has to do the rewriting, because the rewriting is
+  what the etag is about.
+
+  What the design trusts is that the rewrite is deterministic, which is a property
+  of the handlers rather than of the library - a map iterated inside a handler or a
+  clock read in one loses it. So `-verify` rewrites twice and reports whether the
+  outputs agree, the tests do the same at six chunk sizes, and one test builds a
+  deliberately non-deterministic handler and asserts the check notices. The etag is
+  a cache key rather than a signature, so the hash is fnv64a: it has to change when
+  the bytes change and it does not have to resist an adversary choosing them.
+
 - **`examples/gip/cachetags`: collect cache tags from a document into a header
   value, which is a thing a streaming rewriter cannot quite do.** The tags are in
   the body and the header goes in front of it, so no single streaming pass can do
