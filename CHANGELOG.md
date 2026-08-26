@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- `SourceLocation`: say that a text chunk is the exception to the
+  write-invariance the section promises. When a multi-byte character straddles a
+  write boundary the chunk's range covers only the part of it that arrived last,
+  or the held-over bytes are charged to the chunk already emitted. `<p>a€b</p>`
+  fed in one call reports one chunk, 3..8, whose text is its own slice; fed
+  three bytes at a time it reports 3..6 for the text "a", three bytes of range
+  for one byte of text; fed one byte at a time it leaves bytes 4 and 5 named by
+  no chunk at all. The text is right in every case, which is why ASCII never
+  shows it and a proxy reading from an `io.Reader` with a fixed buffer does.
+  Everything else reports the same range at every write size, so the section now
+  gives the recipe that does not depend on the write pattern: take the ranges of
+  the units around the text and read the text itself from your own copy of the
+  input.
+
+- `examples/gip/textmap`: report the location of every text chunk and rebuild
+  the document from what was reported. Rebuilding from the chunk text is wrong
+  at some write sizes; the tag-derived text map is identical at all of them,
+  measured over four documents at every size from one byte up. It is also the
+  lossless way to read the text of a body that is not text: for a 259-byte body
+  holding every byte value the map yields its 255 text bytes, where the
+  handler's own text reports 511, because the text path turns each undecodable
+  byte into U+FFFD.
+
+  One trap, found by a test that passed when it should not have: filling the gaps
+  between chunks from the input and taking each chunk by slicing the input is
+  `doc[pos:start]` followed by `doc[start:end]`, a contiguous copy whatever the
+  ranges say. It reproduces the document even when every range is nonsense, so
+  it cannot be used as a check on the ranges - which is what the first draft of
+  this program's tests did.
 - `SourceLocation`: say how much input a streaming caller has to retain to slice
   at these offsets. The section recommends the offsets as identity across two
   passes and says nothing about the buffer, and the obvious rule - keep the

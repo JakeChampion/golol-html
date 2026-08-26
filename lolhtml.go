@@ -1823,6 +1823,26 @@ func (ct ContentType) String() string {
 // which is what makes them usable as identity across two passes, as long as both
 // passes are fed the same bytes.
 //
+// A text chunk is the exception, and it is the one that matters for a proxy reading
+// from an io.Reader with a fixed buffer. When a multi-byte character straddles a
+// write boundary, the chunk's range covers only the part of it that arrived in the
+// last write, or the bytes held over are charged to the chunk already emitted.
+// `<p>a€b</p>` fed in one call reports one chunk, 3..8, whose text is its own
+// slice. Fed three bytes at a time it reports 3..6 for the text "a" - three bytes
+// of range for one byte of text - and fed one byte at a time it reports 3..4 "a",
+// 6..7 "€", 7..8 "b", leaving bytes 4 and 5 named by no chunk at all. The text is
+// right in every case; the range is not. So for a text chunk, neither the
+// write-invariance above nor slicing the input at the range can be relied on.
+//
+// The way to map the text of a document without depending on the write pattern is
+// to take the ranges of the units around it, which do not move: an element, an end
+// tag, a comment and a doctype report the same range at every write size, including
+// when their own content is multi-byte. Everything between them is text (or a stray
+// end tag, below), and it can be read from the caller's own copy of the input -
+// which is also how to read the text of a body that is not text at all, since a
+// registered text handler decodes and re-encodes and turns every undecodable byte
+// into U+FFFD. examples/gip/textmap does this.
+//
 // What the range covers depends on the unit:
 //
 //	an element     its start tag, and nothing of its content
