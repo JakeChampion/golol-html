@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	stdhtml "html"
 	"io"
 	"strings"
@@ -313,5 +314,142 @@ func TestTheReportSaysWhatHappened(t *testing.T) {
 		if !strings.Contains(report, want) {
 			t.Errorf("the report does not mention %q:\n%s", want, report)
 		}
+	}
+}
+
+// TestAPartThatDoesNotEndCleanlyIsRefused, which is the check that stops this program being the
+// silent corruption the package documentation warns about. A part that ends inside an unfinished
+// construct swallows whatever is joined after it, so the wrapper and the next part vanish into
+// it - and nothing errors unless something looks.
+func TestAPartThatDoesNotEndCleanlyIsRefused(t *testing.T) {
+	for _, doc := range []string{
+		`<p id="p1">a</p><div class="c`, // inside an attribute value
+		`<p id="p1">a</p><div`,          // inside a start tag
+		`<p id="p1">a</p></div`,         // inside an end tag
+		`<p id="p1">a</p><!-- note`,     // inside a comment
+		`<p id="p1">a</p><!`,            // inside a bogus comment
+		`<!DOCTYPE`,                     // inside a doctype
+		`<p id="p1">a</p><script>var x`, // inside raw text
+		`<p id="p1">a</p><style>p{`,
+		`<p id="p1">a</p><textarea>x`,
+		`<p id="p1">a</p><title>t`,
+	} {
+		m := NewMerger()
+		_, err := m.Collect("part.html", doc)
+		if err == nil {
+			t.Errorf("%q was accepted", doc)
+			continue
+		}
+		var unfinished *UnfinishedError
+		if !errors.As(err, &unfinished) {
+			t.Errorf("%q: err = %T (%v), want *UnfinishedError", doc, err, err)
+			continue
+		}
+		if unfinished.Name != "part.html" {
+			t.Errorf("%q: the error names %q", doc, unfinished.Name)
+		}
+		if !strings.Contains(err.Error(), "part.html") {
+			t.Errorf("%q: the message does not name the part: %v", doc, err)
+		}
+	}
+
+	// And the shapes that do end cleanly are accepted, including the ones that look
+	// unfinished and are not: an element left open is fine, because more content is simply
+	// more content, and a stray end tag absorbs nothing.
+	for _, doc := range []string{
+		`<p id="p1">a</p>`,
+		`<p id="p1">a`,
+		`<ul><li id="i1">a<li id="i2">b`,
+		`</div>`,
+		`<p id="p1">a &lt; b</p>`,
+		`<!DOCTYPE html><p id="p1">a</p>`,
+		`<script>var x = "<b>"</script><p id="p1">a</p>`,
+		`text`,
+		``,
+	} {
+		m := NewMerger()
+		if _, err := m.Collect("part.html", doc); err != nil {
+			t.Errorf("%q: %v", doc, err)
+		}
+	}
+}
+
+// TestMergeRefusesBeforeItWritesAnything, since a partial merge on standard output is worse than
+// no merge: the caller cannot tell how much of it to trust.
+func TestMergeRefusesBeforeItWritesAnything(t *testing.T) {
+	var out strings.Builder
+	m := NewMerger()
+	err := m.Merge([]Input{
+		{Name: "good.html", Doc: `<p id="p1">a</p>`},
+		{Name: "bad.html", Doc: `<p id="p2">b</p><div class="c`},
+	}, &out)
+	if err == nil {
+		t.Fatal("the merge succeeded")
+	}
+	var unfinished *UnfinishedError
+	if !errors.As(err, &unfinished) {
+		t.Errorf("err = %T (%v)", err, err)
+	}
+	if unfinished != nil && unfinished.Name != "bad.html" {
+		t.Errorf("the error names %q", unfinished.Name)
+	}
+	if out.Len() != 0 {
+		t.Errorf("%d bytes were written before the refusal: %q", out.Len(), out.String())
+	}
+}
+
+// TestWhatTheCheckPrevents measures the corruption itself, so the check is known to be worth its
+// selector rather than assumed to be. It joins the two parts the way Merge would and asks a
+// parser what it finds.
+func TestWhatTheCheckPrevents(t *testing.T) {
+	const truncated = `<p id="p1">a</p><div class="c`
+	const second = `<p id="p2">b</p>`
+
+	joined := `<section data-source="a.html">` + truncated + `</section>` +
+		`<section data-source="b.html">` + second + `</section>`
+
+	var found []string
+	if _, err := lolhtml.RewriteString(joined,
+		lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+			found = append(found, e.TagName())
+			return nil
+		})); err != nil {
+		t.Fatal(err)
+	}
+
+	// Six elements were meant: two sections, two paragraphs, the div, and nothing else.
+	// What a parser finds is four, because the unfinished attribute ate the rest.
+	if len(found) != 4 {
+		t.Errorf("a parser found %v, and the corruption this check prevents is that it "+
+			"finds four elements where six were meant", found)
+	}
+	if n := strings.Count(joined, "<section"); n != 2 {
+		t.Fatalf("the test document has %d sections", n)
+	}
+	sections := 0
+	for _, name := range found {
+		if name == "section" {
+			sections++
+		}
+	}
+	if sections != 1 {
+		t.Errorf("a parser found %d sections in a document that spells two", sections)
+	}
+
+	// And the second part's wrapper became an attribute of the div, which is the part that
+	// makes it silent: the output is a well-formed document that says something else.
+	var divAttrs []string
+	if _, err := lolhtml.RewriteString(joined,
+		lolhtml.OnElement("div", func(e *lolhtml.Element) error {
+			for _, a := range e.AttributeList() {
+				divAttrs = append(divAttrs, a.Name)
+			}
+			return nil
+		})); err != nil {
+		t.Fatal(err)
+	}
+	if len(divAttrs) < 2 {
+		t.Errorf("the div has attributes %v, and the point is that it absorbed the "+
+			"wrapper's", divAttrs)
 	}
 }

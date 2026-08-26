@@ -106,6 +106,14 @@
 // workers put the same rule set at 0.51 where one worker puts it at 0.46 - and it is a ratio of
 // totals, so it says nothing about the spread across items.
 //
+// And two passes are not always separable. They are separate runs, so whichever goes second pays
+// for the first one's rubbish, and the work pass allocates far more: on the project's arm64
+// runner the overhead pass came out *longer* than the work pass and the share was 1.33. The
+// passes alternate which goes first and each starts from a collected heap now, which is the fix
+// for the bias, and a share that still comes out at or above 1 is reported as two passes that
+// could not be separated rather than printed. [Outcome.Resolvable] is the test, and the counted
+// share below has none of this in it.
+//
 // # The figure that does not need a clock
 //
 // The report carries a second share, counted rather than timed: the mallocs an item cannot
@@ -254,10 +262,14 @@ func (o Outcome) AllocShare() float64 {
 	return o.AllocsBuild / o.AllocsFull
 }
 
-// Resolvable reports whether the two intervals are far enough above this platform's clock tick
-// to be worth printing. A per-item figure on the Windows runner was not, and read zero.
+// Resolvable reports whether the timed share is worth printing. Two things can stop it: a clock
+// too coarse for the intervals, which is what a per-item figure hit on the Windows runner, and an
+// overhead pass that did not come out shorter than the work pass, which is what the arm64 runner
+// produced and which means the two could not be separated on that machine at that size. Neither
+// is a failure of the program - they are what an honest instrument has to say rather than print a
+// figure over 1.
 func (o Outcome) Resolvable() bool {
-	return o.Tick > 0 && o.Overhead > 20*o.Tick && o.Wall > 20*o.Tick
+	return o.Tick > 0 && o.Overhead > 20*o.Tick && o.Wall > 20*o.Tick && o.Overhead < o.Wall
 }
 
 // PerItem and PerItemBuild divide the two intervals by the queue length, which is what a caller
@@ -375,19 +387,41 @@ func Run(items []Item, workers, selectors int) (Outcome, error) {
 	}
 
 	var walls, overheads []time.Duration
-	for range passes {
-		wall, matched, crossTalk, err := drive(items, workers, selectors, want)
+	// The two passes alternate which goes first, and each starts from a collected heap,
+	// because whichever runs second pays for the first one's rubbish. Without that the work
+	// pass, which allocates far more, left the overhead pass holding the collection - and on
+	// the arm64 runner the overhead pass came out *longer* than the work pass, which made the
+	// share 1.33.
+	for pass := range passes {
+		workFirst := pass%2 == 0
+		var wall, overhead time.Duration
+		var matched, crossTalk int
+		var err error
+
+		run := func(want []string) (time.Duration, int, int, error) {
+			runtime.GC()
+			return drive(items, workers, selectors, want)
+		}
+
+		if workFirst {
+			wall, matched, crossTalk, err = run(want)
+			if err != nil {
+				return out, err
+			}
+			overhead, _, _, err = run(nil)
+		} else {
+			overhead, _, _, err = run(nil)
+			if err != nil {
+				return out, err
+			}
+			wall, matched, crossTalk, err = run(want)
+		}
 		if err != nil {
 			return out, err
 		}
 		walls = append(walls, wall)
-		out.Matched, out.CrossTalk = matched, crossTalk
-
-		overhead, _, _, err := drive(items, workers, selectors, nil)
-		if err != nil {
-			return out, err
-		}
 		overheads = append(overheads, overhead)
+		out.Matched, out.CrossTalk = matched, crossTalk
 	}
 	out.Wall, out.Overhead = fastest(walls), fastest(overheads)
 
@@ -525,6 +559,11 @@ func (o Outcome) String() string {
 	fmt.Fprintf(&b, "  %-16s %d elements rewritten across the queue\n", "work done", o.Matched)
 	if o.Resolvable() {
 		fmt.Fprintf(&b, "  %-16s %s\n", "advice", advice(o.BuildShare()))
+	} else if o.Overhead >= o.Wall && o.Wall > 20*o.Tick {
+		fmt.Fprintf(&b, "  %-16s the two passes could not be separated here - building "+
+			"alone took %v against %v for the whole queue, so the share is noise: "+
+			"try more items\n", "advice",
+			o.Overhead.Round(100*time.Microsecond), o.Wall.Round(100*time.Microsecond))
 	} else {
 		fmt.Fprintf(&b, "  %-16s this clock ticks every %v, which is too coarse for a "+
 			"queue this short: try more items\n", "advice", o.Tick)

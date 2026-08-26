@@ -287,14 +287,81 @@ func TestTheReportIsCoherent(t *testing.T) {
 			t.Errorf("the report does not mention %q:\n%s", want, report)
 		}
 	}
-	if out.BuildShare() > 1 {
-		t.Errorf("the build share is %.2f, which cannot be", out.BuildShare())
+	// The overhead pass being shorter than the work pass is not an invariant: they are two
+	// separate runs, and on a small queue a loaded machine can put them either way round.
+	// What the program must not do is print a share it cannot support, so the assertion is
+	// on the report rather than on the timings.
+	if out.Resolvable() {
+		if out.BuildShare() > 1 {
+			t.Errorf("a resolvable run has a build share of %.2f", out.BuildShare())
+		}
+		if out.PerItemBuild() > out.PerItem() {
+			t.Errorf("building took %v of %v per item",
+				out.PerItemBuild(), out.PerItem())
+		}
+		if out.Overhead >= out.Wall {
+			t.Errorf("a resolvable run had an overhead pass of %v against %v",
+				out.Overhead, out.Wall)
+		}
+	} else if !strings.Contains(report, "could not be separated") &&
+		!strings.Contains(report, "too coarse") {
+		t.Errorf("an unresolvable run printed advice anyway:\n%s", report)
 	}
-	if out.PerItemBuild() > out.PerItem() {
-		t.Errorf("building took %v of %v per item", out.PerItemBuild(), out.PerItem())
+}
+
+// TestTwoPassesThatCouldNotBeSeparatedSayNothingElse, which the arm64 runner produced: the
+// overhead pass came out longer than the work pass, so the share was 1.33. That is not a number
+// to print, and this asserts the report says so instead. No timing here - the Outcome is built by
+// hand, which is the only way to gate a case a fast machine will not produce.
+func TestTwoPassesThatCouldNotBeSeparatedSayNothingElse(t *testing.T) {
+	noisy := Outcome{
+		Items: 60, Size: 128, Workers: 1, Selectors: 50,
+		Tick:        41 * time.Nanosecond,
+		Wall:        1514872 * time.Nanosecond,
+		Overhead:    2009689 * time.Nanosecond,
+		AllocsBuild: 415, AllocsFull: 431,
 	}
-	if out.Overhead > out.Wall {
-		t.Errorf("the overhead pass took %v and the work pass %v", out.Overhead, out.Wall)
+	if noisy.Resolvable() {
+		t.Error("an overhead pass longer than the work pass is resolvable")
+	}
+	if got := noisy.BuildShare(); got <= 1 {
+		t.Fatalf("the share is %.2f, so this case does not reproduce the runner's", got)
+	}
+	report := noisy.String()
+	if !strings.Contains(report, "could not be separated") {
+		t.Errorf("the report does not say the passes could not be separated:\n%s", report)
+	}
+	for _, unwanted := range []string{"most of the time is construction", "noticeable slice",
+		"in the noise here"} {
+		if strings.Contains(report, unwanted) {
+			t.Errorf("the report gave advice anyway (%q):\n%s", unwanted, report)
+		}
+	}
+	// The counted share is unaffected, since it has no clock in it - so the report still has
+	// a figure a reader can use.
+	if got := noisy.AllocShare(); got < 0.9 || got > 1 {
+		t.Errorf("the allocation share is %.3f", got)
+	}
+	if !strings.Contains(report, "allocations") {
+		t.Errorf("the report dropped the counted share too:\n%s", report)
+	}
+
+	// And a clock too coarse for the queue is the other unresolvable case, with its own
+	// sentence, so the two are not confused.
+	coarse := Outcome{
+		Items: 1, Workers: 1, Selectors: 1,
+		Tick:     15 * time.Millisecond,
+		Wall:     40 * time.Microsecond,
+		Overhead: 20 * time.Microsecond,
+	}
+	if coarse.Resolvable() {
+		t.Error("a queue below the clock tick is resolvable")
+	}
+	if !strings.Contains(coarse.String(), "too coarse") {
+		t.Errorf("the coarse-clock case does not say so:\n%s", coarse.String())
+	}
+	if strings.Contains(coarse.String(), "could not be separated") {
+		t.Errorf("the coarse-clock case blamed the passes:\n%s", coarse.String())
 	}
 }
 
