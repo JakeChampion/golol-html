@@ -618,6 +618,21 @@ func (e *Element) RemoveAttribute(name string) error {
 }
 
 // An Attribute is one attribute of an element.
+// An Attribute has no source location, and its bytes cannot be recovered from the
+// ones that do. [Element.SourceLocation] covers the whole start tag, and searching
+// that for an attribute's own range does not work on markup this library
+// deliberately preserves:
+//
+//	<div a="1" a="2">      a duplicate: two entries, both named a
+//	<div a=1 a='2' a="1">  two entries with the same name and the same value
+//	<div data-a="x" a="1"> searching for "a=" finds it inside data-a
+//	<div a>                a bare attribute, so there is no "a=" to find
+//
+// The first two are the ones with no answer: a repeated attribute is kept rather
+// than dropped, so name and value together do not identify one. A tool keyed on
+// byte offsets can therefore act on an element or a whole start tag but not on one
+// attribute of it, which is what examples/gip/shrink meets when it wants to
+// propose removing a single attribute and has to fall back to bytes.
 type Attribute struct {
 	// Name is the attribute name, lowercased.
 	Name string

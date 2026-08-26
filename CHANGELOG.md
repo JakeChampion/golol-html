@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- `Attribute`: say that it has no source location, and that its bytes cannot be
+  recovered from the ones that do. `Element.SourceLocation` is the whole start
+  tag, and searching that for one attribute's range fails on markup the library
+  preserves - a duplicate name, two entries with the same name *and* value, a
+  name that is a substring of another (`a=` inside `data-a=`), and a bare
+  attribute with no `=` at all. The first two have no answer, since a repeated
+  attribute is kept rather than dropped. So an offset-keyed tool can act on an
+  element or a start tag and not on one attribute of it.
+
+- `examples/gip/shrink`: reduce a failing document to its essence, with the
+  rewriter proposing the cuts - element extents, start tags, comments, doctypes
+  and text nodes, with byte halving as the fallback for what structure cannot
+  reach (attributes among them, per the above).
+
+  Two measurements it produced, both against what I expected. Proposing every
+  structural cut before any byte cut - the obvious design - cost 595 oracle calls
+  on a document wrapped in thirty divs against 34 for plain halving, because the
+  cuts structure proposes are mostly the ones that remove the failure. Ordering
+  all candidates by size brings that to 55, and then structure wins 6 of 9
+  documents, 308 calls against 331: a real but modest gain, which is what the
+  test now asserts rather than the sweeping one I started with.
+
+  It also demonstrates the classic reduction mistake concretely. On a document
+  holding two failures, an oracle that asks only "does it fail" reduces
+  `<div><script>a</script></div><div><style>b</style></div>` to `<style>` where
+  the original failure was the script's - a different error with different advice
+  in it.
+
 - `SourceLocation`: say that a text chunk is the exception to the
   write-invariance the section promises. When a multi-byte character straddles a
   write boundary the chunk's range covers only the part of it that arrived last,
