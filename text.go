@@ -12,8 +12,10 @@ import "unsafe"
 // Text is reported in chunks with no guaranteed boundaries: one text node may
 // arrive as several chunks, split wherever the parser happened to stop. Only
 // the final chunk of a node has IsLastInTextNode set, and that last chunk is
-// often empty - it exists to mark the boundary. Accumulate across chunks if you
-// need whole text nodes.
+// usually empty - it exists to mark the boundary, and it is not empty when the
+// node ends with undecodable bytes; see [TextChunk.IsLastInTextNode].
+// Accumulate across chunks, and that chunk's text with them, if you need whole
+// text nodes.
 //
 // A TextChunk is valid only for the duration of the handler that received it;
 // see the package documentation on handler lifetime.
@@ -118,16 +120,27 @@ func (t *TextChunk) Bytes() []byte {
 
 // IsLastInTextNode reports whether this is the final chunk of its text node.
 //
-// That chunk is a call of its own and it carries no bytes: it exists to mark the
-// boundary. Measured empty in every shape tried - a short text node, a 100 KB
-// one, character references, each of the four raw-text elements, and the same
-// document fed in one-, three- and five-byte writes, which changes how the
-// content is chunked and not how it ends. An element with no text has no text
-// node and so no final chunk at all.
+// That chunk is usually a call of its own carrying no bytes: it exists to mark
+// the boundary. Measured empty for a short text node, a 100 KB one, character
+// references, each of the four raw-text elements, and the same document fed in
+// one-, three- and five-byte writes, which changes how the content is chunked and
+// not how it ends. An element with no text has no text node and so no final chunk
+// at all.
 //
-// The consequence is a cost: a text handler runs at least twice per text node,
-// and on a document of prose about half its calls are handed nothing. See
-// [OnText].
+// It is not empty when the node ends with bytes that could not be decoded in the
+// document's encoding: then it carries the replacement character produced for
+// them. Fed "<p>ab\xe9</p>" as UTF-8 the calls are "ab" and then a final chunk
+// whose text is U+FFFD, three bytes of it. So accumulate this chunk's own text
+// before acting on the flag - a handler that treats it as a marker and returns
+// loses a character, silently, on exactly the input that a text handler already
+// rewrites lossily. Measured in every raw-text element, after 100 KB of text, at
+// every write size, and with the document unterminated. The same bytes under
+// [WithEncoding] "windows-1252" decode, so the final chunk there is empty again.
+//
+// The usual consequence is a cost: a text handler runs twice per text node, and
+// on a document of prose about half its calls are handed nothing. See [OnText].
+// It can run once - "<p>\xe9</p>" is a single call, which is both the first
+// chunk of the node and its last, and carries the replacement character.
 //
 // Its text node, not its element: an element containing nested markup has one
 // text node per run of character data, and each one ends with its own final

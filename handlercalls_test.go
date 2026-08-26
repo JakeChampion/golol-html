@@ -66,10 +66,10 @@ func TestNoSelectorReachesCommentsOutsideEveryElement(t *testing.T) {
 	}
 }
 
-// TestTheFinalChunkOfATextNodeIsEmpty across every shape that might chunk
+// TestTheFinalChunkOfATextNodeIsEmptyWhenItDecodes across every shape that might chunk
 // differently. The claim in the documentation is "in every shape measured", and
 // this is that measurement.
-func TestTheFinalChunkOfATextNodeIsEmpty(t *testing.T) {
+func TestTheFinalChunkOfATextNodeIsEmptyWhenItDecodes(t *testing.T) {
 	docs := []string{
 		`<p>hello</p>`,
 		`<p>a<b>c</b>d</p>`,
@@ -105,6 +105,10 @@ func TestTheFinalChunkOfATextNodeIsEmpty(t *testing.T) {
 		if empties != lasts {
 			t.Errorf("%.30q: %d of %d final chunks carried bytes", doc, lasts-empties, lasts)
 		}
+		// Every document here decodes cleanly, which is the condition. A node
+		// ending in undecodable bytes has a final chunk that carries the
+		// replacement character; see
+		// TestTheFinalChunkCarriesAReplacementCharacterItProduced.
 	}
 }
 
@@ -140,7 +144,8 @@ func TestTheFinalChunkIsEmptyHoweverTheInputIsWritten(t *testing.T) {
 			t.Errorf("writes of %d: %d final chunks, %d empty, want 1 and 1", n, lasts, empties)
 		}
 		if calls < 2 {
-			t.Errorf("writes of %d: %d calls, want at least two per text node", n, calls)
+			t.Errorf("writes of %d: %d calls, want two per text node for a node that "+
+				"decodes cleanly", n, calls)
 		}
 	}
 }
@@ -156,5 +161,137 @@ func TestAnEmptyElementProducesNoTextCalls(t *testing.T) {
 		if calls != 0 {
 			t.Errorf("%q: %d text calls, want none", doc, calls)
 		}
+	}
+}
+
+// TestTheFinalChunkCarriesAReplacementCharacterItProduced is the exception to the two claims
+// above, and it is the one that matters: the documentation said the final chunk carries no bytes,
+// so the natural handler acts on the flag and returns - and that drops a character.
+//
+// The trigger is a node whose last bytes could not be decoded. The replacement character the
+// rewriter produces for them arrives as the final chunk, with the flag set and three bytes of
+// text, standing at a zero-width source range because it is not in the input.
+func TestTheFinalChunkCarriesAReplacementCharacterItProduced(t *testing.T) {
+	type result struct {
+		calls     int
+		lastText  string
+		lastBytes int
+		lastRange lolhtml.SourceLocation
+	}
+	run := func(t *testing.T, doc string, size int, opts ...lolhtml.Option) result {
+		t.Helper()
+		var got result
+		var out strings.Builder
+		all := append([]lolhtml.Option{lolhtml.OnDocumentText(func(c *lolhtml.TextChunk) error {
+			got.calls++
+			if c.IsLastInTextNode() {
+				got.lastText = c.Text()
+				got.lastBytes = len(c.Bytes())
+				got.lastRange = c.SourceLocation()
+			}
+			return nil
+		})}, opts...)
+		w, err := lolhtml.NewWriter(&out, all...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if size <= 0 {
+			size = len(doc) + 1
+		}
+		for i := 0; i < len(doc); i += size {
+			if _, err := w.Write([]byte(doc[i:min(i+size, len(doc))])); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	const replacement = "\ufffd"
+
+	// Every shape the old claim was measured in, with an undecodable byte at the end of the
+	// node. In each one the final chunk carries the replacement character.
+	for _, doc := range []string{
+		"<p>ab\xe9</p>",
+		"<p>ab\xe9",        // unterminated
+		"<p>a\xe9\xe9</p>", // two of them
+		"<script>ab\xe9</script>",
+		"<style>ab\xe9</style>",
+		"<title>ab\xe9</title>",
+		"<textarea>ab\xe9</textarea>",
+		"<p>" + strings.Repeat("a", 100000) + "\xe9</p>",
+	} {
+		got := run(t, doc, 0)
+		if got.lastText != replacement {
+			t.Errorf("%.30q: final chunk text %q, want the replacement character",
+				doc, got.lastText)
+		}
+		if got.lastBytes != 3 {
+			t.Errorf("%.30q: final chunk carried %d bytes, want 3", doc, got.lastBytes)
+		}
+		if got.lastRange.Len() != 0 {
+			t.Errorf("%.30q: final chunk range %v, want a zero-width point - those bytes "+
+				"are not in the input", doc, got.lastRange)
+		}
+	}
+
+	// And at every write size, since the write pattern changes how content is chunked and
+	// not how a node ends.
+	for _, size := range []int{1, 2, 3, 5, 7, 0} {
+		if got := run(t, "<p>ab\xe9</p>", size); got.lastText != replacement {
+			t.Errorf("writes of %d: final chunk text %q, want the replacement character",
+				size, got.lastText)
+		}
+	}
+
+	// One call, not two: the node is nothing but the undecodable byte, so its first chunk is
+	// also its last.
+	if got := run(t, "<p>\xe9</p>", 0); got.calls != 1 || got.lastText != replacement {
+		t.Errorf("<p>\\xe9</p>: %d calls with final text %q, want one call carrying the "+
+			"replacement character", got.calls, got.lastText)
+	}
+
+	// The trigger is the encoding, not the byte: declared windows-1252, the same document
+	// decodes and the final chunk is empty again.
+	if got := run(t, "<p>ab\xe9</p>", 0, lolhtml.WithEncoding("windows-1252")); got.lastText != "" {
+		t.Errorf("as windows-1252: final chunk text %q, want it empty", got.lastText)
+	}
+
+	// The consequence, written as the handler the old documentation invited: acting on the
+	// flag without reading its text loses the character.
+	accumulate := func(doc string, readLast bool) string {
+		var acc strings.Builder
+		var whole string
+		var out strings.Builder
+		w, err := lolhtml.NewWriter(&out, lolhtml.OnDocumentText(func(c *lolhtml.TextChunk) error {
+			if c.IsLastInTextNode() {
+				if readLast {
+					acc.WriteString(c.Text())
+				}
+				whole = acc.String()
+				acc.Reset()
+				return nil
+			}
+			acc.WriteString(c.Text())
+			return nil
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(doc)); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return whole
+	}
+	if got := accumulate("<p>ab\xe9</p>", false); got != "ab" {
+		t.Errorf("ignoring the final chunk's text gave %q, want the character dropped", got)
+	}
+	if got := accumulate("<p>ab\xe9</p>", true); got != "ab"+replacement {
+		t.Errorf("reading the final chunk's text gave %q, want %q", got, "ab"+replacement)
 	}
 }

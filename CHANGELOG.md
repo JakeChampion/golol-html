@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- `TextChunk.IsLastInTextNode`: the final chunk of a text node is not always
+  empty, and the documentation said it was - "that chunk is a call of its own and
+  it carries no bytes... measured empty in every shape tried". Every shape tried
+  decoded cleanly. When a node ends with bytes that could not be decoded, the
+  flagged chunk is the replacement character produced for them: three bytes of
+  text, at a zero-width source range because those bytes are not in the input.
+  Measured in each raw-text element, after 100 KB of text, unterminated, and at
+  every write size; the same bytes declared `windows-1252` decode and the chunk
+  is empty again.
+
+  This mattered because the wording invited the handler that drops it: act on
+  the flag, return, and never read its text. Accumulating that way gives "ab"
+  for `<p>ab\xe9</p>` where reading the final chunk gives "ab\ufffd" - and
+  undecodable input is exactly the case a proxy meets.
+
+  The adjacent claim was wrong for the same reason: a text handler does not run
+  "at least twice per text node". `<p>\xe9</p>` is one call, which is both the
+  node's first chunk and its last.
+
 ### Added
 - **`CheckRawText`, because the text paths cannot apply the breakout guard.**
   Inserting content into a `<script>` or a `<style>` through an `Element` method is
