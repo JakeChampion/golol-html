@@ -31,6 +31,12 @@
   ranges say. It reproduces the document even when every range is nonsense, so
   it cannot be used as a check on the ranges - which is what the first draft of
   this program's tests did.
+- `differential`: remove `zz_scratch_test.go`, a scratch draft committed by
+  accident in #238. It is the working version of what became
+  `preserving_test.go`: the same fourteen documents, the same six rewrites, the
+  same tree comparison, and `!!` still in its failure message. It duplicates
+  those assertions rather than adding any, so a change that broke them broke two
+  files, and the surviving one is the one with the hazards half and the prose.
 
 ### Added
 - **`CheckRawText`, because the text paths cannot apply the breakout guard.**
