@@ -1325,6 +1325,45 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/cachetags`: collect cache tags from a document into a header
+  value, which is a thing a streaming rewriter cannot quite do.** The tags are in
+  the body and the header goes in front of it, so no single streaming pass can do
+  both. Of the four answers, three are real: buffer the body, parse it twice, or
+  send a trailer that few clients read.
+
+  It parses twice, and the reason is measured. Fastest of twenty runs over a 347 KB
+  page, normalised to one pass that rewrites the body:
+
+      pass                                  time    relative
+      copy only, no handlers               406µs       0.08x
+      collect only, no output             3.351ms      0.66x
+      rewrite only (the baseline)         5.085ms      1.00x
+      two passes: collect then copy       3.773ms      0.75x
+      two passes: collect then rewrite    8.463ms      1.67x
+      one pass, buffered                  7.285ms      1.44x
+
+  The first row decides it: a pass with no handlers costs eight per cent of a pass
+  with them, because with nothing registered the sink hands the destination a slice
+  over lol-html's own buffer instead of copying. So where the body passes through
+  unchanged - the common case for a tag extractor - collecting and then copying
+  costs **less** than a single pass that rewrites, and holds nothing.
+
+  Where the body is rewritten too, it is 1.67x against buffering's 1.44x, and the
+  memory column is the one that matters. Live heap after a collection, at the moment
+  the header would be set: buffering holds +72 KB, +351 KB and +1.76 MB for pages of
+  68 KB, 348 KB and 1.4 MB, and two passes hold nothing at any size. Sixteen per
+  cent is what that costs.
+
+  A tag from a document is not a header value: it arrives as source, so it is
+  decoded before it is judged, and a carriage return or line feed in it is refused
+  rather than stripped. My first version checked *after* splitting the attribute
+  into tags, which is a hole with no error in it - `strings.Fields` treats a newline
+  as a separator, so `a\nb` became the two clean tags `a` and `b`, the newline never
+  reached the check, and the cache would have been keyed on two tags the page never
+  asked for. The check comes before the split now, and a value holding a line break
+  is refused whole rather than quietly divided. Eleven spellings are tested,
+  including `&#10;`, `&#xa;`, `&NewLine;` and `&#010;`.
+
 - **`examples/gip/deployid`: echo a deploy id from the environment into a meta tag,
   and say when it could not put it somewhere a browser will read.** A comment can go
   anywhere; a meta has to be in the head, and a rewriter cannot see the head a
