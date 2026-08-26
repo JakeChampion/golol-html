@@ -1325,6 +1325,56 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/servertiming`: time a rewrite and write what it measured into the
+  document it rewrote.** A Server-Timing *header* would be better and is not
+  available: a header is sent before the body and the duration is known after it, so
+  the value goes in a comment at the document end - which is also the only position
+  left, since an insertion can only go where the rewriter has not been.
+
+  Two things it measures rather than assumes.
+
+  What timing costs, because the obvious worry is that instrumenting every handler
+  call swamps the work. It does not. Two clock reads against a handler call that is
+  a crossing into C, fastest of fifty runs on an M3 Pro:
+
+      page              plain      one clock read   a read per handler call
+      486 bytes         12.9µs     12.8µs           13.1µs
+      4806 bytes         105µs     105.9µs          110.6µs
+      49806 bytes      1.030ms     1.017ms          1.032ms
+
+  About six per cent at the middle size and inside the noise at the other two, with
+  no extra allocations per call. So per-handler timing is affordable, which matters
+  because the alternative - timing the whole rewrite and dividing - cannot tell a
+  slow selector from a slow document.
+
+  Affordable where it is possible at all, and CI supplied the counter-example. A
+  handler call is under a microsecond and the Windows runner's clock ticks every
+  **340µs to 363µs** across runs, so two hundred calls there summed to zero in one
+  run and to 1.1 ticks in another. That is not a small number, and the program says
+  so: the comment carries the call count and the tick instead of a duration.
+
+  The same tick puts a floor under the whole-rewrite figure too. Twenty ticks of a
+  350µs clock is 7ms, a rewrite of a few hundred kilobytes, and below that there is
+  nothing to report on that machine either. So there are three states, all
+  reachable and each with its own output - neither figure, the rewrite only, or
+  both - and a deterministic table asserts all three so that the timed test is
+  checking expectations that have themselves been checked. Getting that table wrong
+  twice is what this took: the first fix asserted a positive per-call figure, and
+  the second conflated "the calls are unresolvable" with "nothing is".
+
+  The tick is worth recording on its own: the project's earlier guess for that
+  runner was 15ms, from a different measurement.
+
+  And whether the figure is a figure at all. The clock tick is measured and
+  reported, and a rewrite that did not last twenty of them gets a comment saying so
+  instead of a number - the lesson `examples/gip/queue` paid for, applied before it
+  bites rather than after.
+
+  B181 is the third thing: the comment does not always survive. It is swallowed by
+  the same truncated inputs as an element, and a document ending inside a comment
+  *merges* with it, so one comment comes out carrying both the page's text and the
+  marker. Counting comments says it arrived and so does searching for its text.
+
 - **`examples/gip/esi`: expand Edge Side Includes both ways and report where the
   two disagree.** `examples/gip/include` is the one to copy - it uses
   `WithESITags`, fetches in the handler rather than in the sink, and implements the

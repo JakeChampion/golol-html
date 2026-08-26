@@ -206,7 +206,17 @@ tick in it is not zero, so it looked like a measurement.
 What works: time a whole run rather than a step, so the interval is milliseconds
 and thousands of ticks; take the fastest of several passes, since preemption only
 ever adds; measure the clock's tick rather than assuming it, and say so in the
-report instead of printing a figure the clock cannot support. Then **put the gate
+report instead of printing a figure the clock cannot support. The tick on the
+Windows runner is **340µs to 363µs**, measured across runs, which is coarser than
+any single handler call and finer than a whole rewrite of a large page - so the
+same program can have one figure worth printing and one that is not.
+
+When a program has two figures at different scales, **enumerate the states and
+assert the state rather than the number**, deterministically, with a table of
+hand-built values. examples/gip/servertiming needed two attempts at this after CI
+found the first: asserting a positive per-call figure is the microsecond mistake
+again, and asserting "the calls are unresolvable" where the answer is "nothing is"
+is the same mistake with more branches. Then **put the gate
 on a count, not on the interval.** `allocs/op` is the same number on every
 platform and at any load - measured, to within one allocation in four hundred -
 and where a counted share and a timed share disagree in magnitude they still
