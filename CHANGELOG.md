@@ -1325,6 +1325,38 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/headonly`: rewrite the head of a document and pass the body
+  through without parsing it.** A rewriter runs to Close and cannot be switched off
+  part way, so "only the head" looks like it has to mean handlers that check a flag
+  and do nothing. B189 says otherwise, and by two orders of magnitude.
+
+  A handler can stop the rewrite by returning an error, and what has reached the
+  destination is documented to be byte for byte what a fresh rewriter produces from
+  that much input rather than a truncation. The stopping element's
+  `SourceLocation().Start` is therefore exactly where the untouched input resumes,
+  so the rest can be copied. Measured on a 114-byte head, fastest of twenty runs:
+
+      body size   stop and copy   handlers gated off   a plain no-handler pass
+      100 bytes            6µs                  7µs                       1µs
+      10 KB                8µs                 99µs                      20µs
+      200 KB              16µs              1.842ms                     375µs
+
+  115x faster than gating at 200 KB and 23x faster than passing the body through a
+  rewriter with no handlers, because it does not pass the body through anything. The
+  outputs are byte-identical, which the tests assert against the gated version over
+  eleven document shapes rather than assuming.
+
+  Where the head ends cannot be `<body>`: a document need not spell one, and a
+  rewriter reports the source. The rule is the specification's - the first element
+  outside `base`, `link`, `meta`, `noscript`, `script`, `style`, `template` and
+  `title` - so `<head><title>T</title></head><p>x` ends at the `<p>`.
+
+  Two things it gives up, both stated rather than discovered later: the bytes have to
+  be available from the offset, so this holds the document (a stream would keep what
+  it read past the stop point, bounded by one write); and nothing in the body is
+  parsed, so nothing in it is checked - a body that would have failed a sanitiser
+  passes through untouched.
+
 - **`examples/gip/multipart`: rewrite the HTML parts of a multipart body and pass
   everything else through byte for byte.** B188 is why one rewriter per part is
   correct rather than merely convenient.
