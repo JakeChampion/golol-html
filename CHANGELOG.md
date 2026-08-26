@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+- Added `CheckComment` and `ErrCommentBreakout`, for text a caller is about to
+  put inside a comment it assembled itself. `Comment.SetText` refuses text that
+  would end the comment early and says there is no escaping that would work; a
+  comment built by hand out of `HTML` content had no equivalent guard, which the
+  documentation named without offering one. `CheckRawText` is exported for
+  exactly that hand-built case, so this is the missing half of the pair.
+
+  The rule is the tokenizer's: refuse text containing `-->` or `--!>`, or
+  beginning with `>` or `->`. Agreement with `SetText` is pinned over 2813
+  strings rather than assumed, 474 of them refused by both, and what it refuses
+  is checked against what actually leaks by parsing the output.
+
+- `examples/gip/tailcomment`: emit a summary of what changed as a trailing
+  comment, which is the path that has no guard - `DocumentEnd.Append` takes
+  markup. Unguarded, a summary holding a URL with `-->` in it truncates the
+  comment and puts the rest in the page. Since there is no escape, the program
+  makes the choice explicit: rewrite the sequence ("- ->"), or refuse to emit a
+  comment and say why.
+
+  Its test caught that the danger needs a literal `-->` in the source.
+  `Attribute` returns raw source, so `&gt;` stays encoded and is harmless; a
+  literal `>` is legal inside a quoted attribute value and is not.
+
+- `SourceLocation`: say that a text chunk is the exception to the
+  write-invariance the section promises. When a multi-byte character straddles a
+  write boundary the chunk's range covers only the part of it that arrived last,
+  or the held-over bytes are charged to the chunk already emitted. `<p>a€b</p>`
+  fed in one call reports one chunk, 3..8, whose text is its own slice; fed
+  three bytes at a time it reports 3..6 for the text "a", three bytes of range
+  for one byte of text; fed one byte at a time it leaves bytes 4 and 5 named by
+  no chunk at all. The text is right in every case, which is why ASCII never
+  shows it and a proxy reading from an `io.Reader` with a fixed buffer does.
+  Everything else reports the same range at every write size, so the section now
+  gives the recipe that does not depend on the write pattern: take the ranges of
+  the units around the text and read the text itself from your own copy of the
+  input.
+
+- `examples/gip/textmap`: report the location of every text chunk and rebuild
+  the document from what was reported. Rebuilding from the chunk text is wrong
+  at some write sizes; the tag-derived text map is identical at all of them,
+  measured over four documents at every size from one byte up. It is also the
+  lossless way to read the text of a body that is not text: for a 259-byte body
+  holding every byte value the map yields its 255 text bytes, where the
+  handler's own text reports 511, because the text path turns each undecodable
+  byte into U+FFFD.
+
+  One trap, found by a test that passed when it should not have: filling the gaps
+  between chunks from the input and taking each chunk by slicing the input is
+  `doc[pos:start]` followed by `doc[start:end]`, a contiguous copy whatever the
+  ranges say. It reproduces the document even when every range is nonsense, so
+  it cannot be used as a check on the ranges - which is what the first draft of
+  this program's tests did.
+- `differential`: remove `zz_scratch_test.go`, a scratch draft committed by
+  accident in #238. It is the working version of what became
+  `preserving_test.go`: the same fourteen documents, the same six rewrites, the
+  same tree comparison, and `!!` still in its failure message. It duplicates
+  those assertions rather than adding any, so a change that broke them broke two
+  files, and the surviving one is the one with the hazards half and the prose.
 - `TextChunk.IsLastInTextNode`: the final chunk of a text node is not always
   empty, and the documentation said it was - "that chunk is a call of its own and
   it carries no bytes... measured empty in every shape tried". Every shape tried

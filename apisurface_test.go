@@ -179,7 +179,12 @@ func TestTheSurfaceIsNotAccidentallyGrowing(t *testing.T) {
 	// 142: CheckRawText, because the TextChunk insertion paths cannot apply the
 	// breakout guard - a chunk does not say what element it is in - and they are
 	// the paths a rewrite editing a script or a stylesheet has to use.
-	const want = 142
+	// 144: CheckComment and ErrCommentBreakout, the same answer for a comment.
+	// Comment.SetText refuses text that would end the comment early and there is
+	// no escaping that would work; a comment assembled by hand out of HTML
+	// content had no guard, which SetText's own documentation named without
+	// offering one. DocumentEnd.Append takes markup, so that path is ordinary.
+	const want = 144
 
 	names := exportedNames(t)
 	if len(names) != want {
