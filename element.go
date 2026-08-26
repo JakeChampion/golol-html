@@ -135,10 +135,26 @@ func (e *Element) TagNamePreserveCase() string {
 //	<div><p>x</p></div>                 renamed to table   the p is fostered out
 //	<div><p>x</p><span>y</span></div>   renamed to select  both are gone, text merged
 //
-// No error, and the output is exactly the markup that was asked for. So a rename is
-// safe when the new element accepts what the old one held, which is a question about
-// the two content models rather than about this method: examples/gip/modernise renames
-// only within that set. Measured in differential/rename_test.go.
+// A name that cannot hold content at all is worse, because the answer depends on which
+// one. Renaming <div class="w">x</div> and asking a parser what it built:
+//
+//	renamed to        the tree
+//	br                two br elements, with x between them
+//	img hr input      one element, and x is now its sibling
+//	wbr area
+//	col               no element at all, only x
+//	meta              the element in <head>, and x left in <body>
+//
+// </br> is the one end tag HTML treats as a start tag, so the stray one becomes a
+// second element and the rename duplicated the widget. A col outside a table is
+// dropped, so the rename deleted it. A meta belongs in the head, so the rename moved
+// it and left its content behind.
+//
+// No error in any of this, and the output is exactly the markup that was asked for. So
+// a rename is safe when the new element accepts what the old one held, which is a
+// question about the two content models rather than about this method:
+// examples/gip/modernise renames only within that set, and examples/gip/upgrade
+// refuses a target that is not a container. Measured in differential/rename_test.go.
 func (e *Element) SetTagName(name string) error {
 	p, err := e.live()
 	if err != nil {

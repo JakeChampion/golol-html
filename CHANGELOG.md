@@ -1314,6 +1314,31 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/upgrade`: turn legacy widget markup into web component markup.**
+  A container becomes a custom element, the state it kept in classes and data
+  attributes becomes properties, and the parts it kept in nested divs become slots.
+
+  Both of its refusals are measurements. A target that cannot hold content is
+  rejected, because B178 - renaming a container to `br` gives two elements, to
+  `col` gives none, to `meta` moves the element to the head, and the output markup
+  looks reasonable in every case. A hyphenated name is always an ordinary
+  container, which is what makes a custom-element target safe by construction, and
+  the program says so rather than relying on it.
+
+  And a widget whose end tag the source omitted is skipped rather than renamed,
+  because a rename writes over the token that closed the element and that token
+  belongs to something enclosing: renaming the items of `<ul><li>a<li>b<li>c</ul>`
+  yields `<ul><my-item>a<my-item>b<my-item>c</my-item>` with the `</ul>` gone, and
+  the outermost rename is the one that wins. Whether an element closed itself is
+  knowable from `EndTag.Name`, and knowable too late, so this is two passes: the
+  first records which candidates closed themselves and the second renames only
+  those. A mixed list gets the two that spelled their end tags and reports the one
+  that did not.
+
+  Nine tests, two of which measure what the refusals prevent rather than asserting
+  that they are worth having. Idempotence comes for free: a renamed element no
+  longer matches the selector that found it.
+
 - **`examples/gip/inventory`: list the custom elements a page uses and say which
   nothing defines.** Definitions come from `customElements.define("name"` in the
   document's own scripts - accumulated to `IsLastInTextNode`, because script text
@@ -2323,6 +2348,29 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Renaming a container to a name that cannot hold content has four answers.**
+  `SetTagName`'s documentation covered the content-model cases - a `table` that
+  fosters its content out, a `select` that deletes it - and not the void direction,
+  which is worse because the answer depends on which void name. Measured against
+  x/net/html on `<div class="w">x</div>`:
+
+      renamed to        the tree a parser builds
+      br                two br elements, with x between them
+      img hr input      one element, and x is now its sibling
+      wbr area
+      col               no element at all, only x
+      meta              the element in <head>, and x left in <body>
+
+  `</br>` is the one end tag HTML treats as a start tag, so the stray one becomes a
+  second element and the rename duplicated the widget. A `col` outside a table is
+  dropped, so the rename deleted it. A `meta` belongs in the head, so the rename
+  moved it there and left its content behind. The output markup has the same shape
+  in all eight cases and nothing errors.
+
+  A hyphenated name is always an ordinary container, which is what makes a
+  custom-element target safe. B178, gated by
+  `differential/rename_test.go` `TestARenameIntoAVoidNameHasFourAnswers`.
+
 - **One rewriter per document, not one per fragment.** The Streaming section
   promises that chunk boundaries never affect handler behaviour, which is true and
   is about chunks of one stream. It does not extend to splitting the work between

@@ -145,3 +145,65 @@ func TestARenameStealsAnImpliedEndTag(t *testing.T) {
 		t.Errorf("after: %q, want %q", got, want)
 	}
 }
+
+// TestARenameIntoAVoidNameHasFourAnswers. The documented content-model cases - a table that
+// fosters, a select that deletes - are about where the content ends up. Renaming a container to
+// a name that cannot hold content is about the element itself, and there are four outcomes.
+// None of them is "this element, with its content inside it".
+//
+// The stray end tag is the reason. HTML has one end tag it treats as a start tag, and it is
+// </br>; every other void element's end tag is a parse error and ignored. On top of that, two
+// void elements are not allowed where the rename put them: a col outside a table is dropped, and
+// a meta is moved to the head.
+func TestARenameIntoAVoidNameHasFourAnswers(t *testing.T) {
+	const doc = `<div class="w">x</div>`
+
+	for _, tt := range []struct {
+		to   string
+		tree string
+		why  string
+	}{
+		// The stray </br> becomes a second br, so the rename duplicated the element.
+		{"br", "html .head .body ..br ..#x ..br", "</br> is parsed as <br>"},
+
+		// The end tag is ignored, the element is void, and the content that was inside
+		// it is now its sibling.
+		{"img", "html .head .body ..img ..#x", "the end tag is ignored"},
+		{"hr", "html .head .body ..hr ..#x", "the end tag is ignored"},
+		{"input", "html .head .body ..input ..#x", "the end tag is ignored"},
+		{"wbr", "html .head .body ..wbr ..#x", "the end tag is ignored"},
+		{"area", "html .head .body ..area ..#x", "the end tag is ignored"},
+
+		// A col outside a table is dropped, so the element is gone entirely.
+		{"col", "html .head .body ..#x", "a col outside a table is dropped"},
+
+		// A meta belongs in the head, so the element moves and its content does not.
+		{"meta", "html .head ..meta .body ..#x", "a meta is moved to the head"},
+	} {
+		out := renamed(t, doc, "div", tt.to)
+		if want := `<` + tt.to + ` class="w">x</` + tt.to + `>`; out != want {
+			t.Errorf("renaming to %s gave %q, want %q", tt.to, out, want)
+		}
+		if got := tree(t, out); got != tt.tree {
+			t.Errorf("renaming to %s: tree %q, want %q (%s)", tt.to, got, tt.tree, tt.why)
+		}
+	}
+
+	// The element count is the part that surprises: one in, and zero, one or two out.
+	counts := map[string]int{}
+	for _, to := range []string{"br", "img", "col", "meta"} {
+		counts[to] = strings.Count(tree(t, renamed(t, doc, "div", to)), to)
+	}
+	if counts["br"] != 2 || counts["img"] != 1 || counts["col"] != 0 || counts["meta"] != 1 {
+		t.Errorf("element counts %v, want br 2, img 1, col 0, meta 1", counts)
+	}
+
+	// And a rename into another container keeps everything, which is what makes the void
+	// names the thing to watch rather than renames in general.
+	for _, to := range []string{"section", "my-widget", "span"} {
+		out := renamed(t, doc, "div", to)
+		if got, want := tree(t, out), "html .head .body .."+to+" ...#x"; got != want {
+			t.Errorf("renaming to %s: tree %q, want %q", to, got, want)
+		}
+	}
+}
