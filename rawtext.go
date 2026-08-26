@@ -97,6 +97,19 @@ var ErrRawTextBreakout = errors.New("lolhtml: inserted content would end the raw
 // measured against the parser by TestTheGuardCoversEveryRawTextElement, so it
 // cannot.
 //
+// It is the predicate for the insertion question - can content written into this
+// element end it - and it is not the predicate for the other question these ten
+// names come up in: whether character references in the content are decoded. Two
+// of them are escapable raw text, where references do decode, so a program reading
+// text and deciding whether to unescape it wants this list minus textarea and
+// title. Getting that backwards is silent either way: unescaping a style's content
+// makes it say something it does not say, and not unescaping a title's loses the
+// decoding a parser performs. The NUL rule does key on this list exactly - inside
+// these ten a NUL becomes U+FFFD, elsewhere a parser drops it - and both are
+// measured against the parser for every element name in
+// differential/texttruth_test.go, with the whole conversion in
+// examples/gip/texttruth.
+//
 // The comparison is by tag name and is case-insensitive for ASCII, so it accepts
 // both what [Element.TagName] reports and what
 // [Element.TagNamePreserveCase] does. It does not consider namespaces: in SVG and
