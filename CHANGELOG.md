@@ -1325,6 +1325,42 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/placeholders`: resolve handlebars-style `{{ name }}` placeholders,
+  choosing the escape by position and refusing the positions where no escape is
+  enough.** "Escaping properly" is five different jobs:
+
+      position               what it needs                       what this does
+      text content           HTML text escaping                  ContentType Text
+      attribute value        attribute-value escaping            EscapeAttribute
+      title, textarea        HTML text escaping, because          ContentType Text
+                             references are decoded there
+      comment                no "-->" in the value               refused, and reported
+      script, style          escaping for JavaScript or CSS      refused
+      iframe, noembed,       nothing works: no references         refused
+      noframes, noscript,    decoded and no inner language
+      xmp, plaintext
+
+  The script row is the one that looks wrong and is not, per B16: inserting as
+  `Text` is safe - the value cannot become an element - and corrupt, because
+  references are not decoded there, so the JavaScript ends up holding `&lt;` where
+  a `<` was meant. Safe and corrupt is not resolved.
+
+  Two positions are gone before the program sees them, and both are reported
+  because a rewrite that says nothing has processed a different document from the
+  one it was given. `<div {{ attr }}="1">` is three attributes - `{{`, `attr`, and
+  `}}="1"` - so the name is not recoverable; written without spaces it is one
+  attribute and still not rewritable. And `<{{ tag }}>x</{{ tag }}>` is not an
+  element at all: the opening half is text, the closing half is a bogus comment,
+  and nothing inside nests. Measured: zero elements, one comment.
+
+  Ten tests. Four are security properties and each was checked by removing the
+  protection and watching the test fail - which caught one that was vacuous: the
+  attribute escape is not an injection guard, since `SetAttribute` rewrites the
+  double quote on the way out, so an unescaped value cannot end the attribute
+  either. What it prevents is corruption, and the test asserts the round trip
+  instead. The URL scheme is checked on the decoded value against twelve payloads,
+  including `&#106;avascript:`, `jav&#x09;ascript:` and `&Tab;javascript:`.
+
 - **`examples/gip/bindings`: turn framework attribute syntax into plain HTML
   attributes where it can, and say why it cannot everywhere else.** Only a literal
   can become a plain attribute - a quoted string, a number, `true` or `false` -
@@ -2381,6 +2417,10 @@
   2224 allocations against 423 when it was first measured.
 
 ### Documentation
+- **Two stray `// //` lines in the package documentation.** They rendered as a
+  literal `//` in the middle of a paragraph break, in the sections on inserting
+  into a script and on rewriting text that is already there.
+
 - **Lower-cased attribute names break more than SVG.** `SetAttribute`'s
   documentation explained that adding an attribute lower-cases its name, that
   updating one keeps the document's spelling, and that this is a silent breakage in

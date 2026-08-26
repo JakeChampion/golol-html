@@ -867,7 +867,7 @@
 // order. Anything you insert has to be safe before it goes in - use [Text] for
 // values you did not author, and see the section on inserting into a script for
 // where even that is not enough.
-// //
+//
 // The same rule reaches the content that was already there, through
 // [Element.SetTagName]: a rename writes over the tag and leaves the content alone,
 // and whoever parses the output applies the new name's content model to it. Renaming
@@ -951,7 +951,7 @@
 // encoding, using an escape the target language understands - "\u65e5" for
 // JavaScript, "\65e5" for CSS - or serve the document as UTF-8, where the
 // question does not arise. Pinned in encoding_test.go.
-// //
+//
 // Rewriting text that is already there has the same two problems and one more.
 // [TextChunk.Replace] with [Text] escapes what raw text must not have escaped, so a
 // stylesheet's ".a > .b" comes back as ".a &gt; .b" - a selector that matches
