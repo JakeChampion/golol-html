@@ -152,6 +152,27 @@
   re-serialised per B171, so `id=a class = 'x'  data-k` comes back as
   `id="a2" class = 'x' data-k`. The test now says which start tags keep their
   bytes and which do not.
+- `TextChunk.IsLastInTextNode`: the final chunk of a text node is not always
+  empty, and the documentation said it was - "that chunk is a call of its own and
+  it carries no bytes... measured empty in every shape tried". Every shape tried
+  decoded cleanly. When a node ends with bytes that could not be decoded, the
+  flagged chunk is the replacement character produced for them: three bytes of
+  text, at a zero-width source range because those bytes are not in the input.
+  Measured in each raw-text element, after 100 KB of text, unterminated, and at
+  every write size; the same bytes declared `windows-1252` decode and the chunk
+  is empty again.
+
+  This mattered because the wording invited the handler that drops it: act on
+  the flag, return, and never read its text. Accumulating that way gives "ab"
+  for `<p>ab\xe9</p>` where reading the final chunk gives "ab\ufffd" - and
+  undecodable input is exactly the case a proxy meets.
+
+  The adjacent claim was wrong for the same reason, though narrower than I first
+  wrote it: a text handler does not always run twice per text node. Where the
+  node is nothing but a truncated multi-byte sequence - `<p>\xe9</p>`,
+  `<p>\xc3</p>` - it runs once, and that call is both the node's first chunk and
+  its last. A standalone invalid byte like `<p>\x80</p>` is still two, because it
+  is replaced inside the content chunk.
 
 ### Added
 - **`CheckRawText`, because the text paths cannot apply the breakout guard.**

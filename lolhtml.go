@@ -1494,7 +1494,12 @@
 // attributes on the element.
 //
 // A text handler starts at two calls per text node - the content and its empty
-// boundary marker - and two is a floor rather than a figure. The writes split a
+// boundary marker - and two is a floor for a node whose bytes decode rather than a
+// floor in general. A node that is nothing but a truncated multi-byte sequence is
+// one call: fed "<p>\xe9</p>" or "<p>\xc3</p>" as UTF-8, the single call is the
+// node's last chunk and carries the replacement character. A standalone invalid
+// byte is still two, because it is replaced inside the content chunk - see
+// [TextChunk.IsLastInTextNode]. The writes split a
 // node, and so does the tokenizer: a "<" in text that does not begin a tag is
 // delivered as a chunk of its own, so "3 < 4 and 5 < 6" is six calls from one
 // write. See [TextChunk.Text].
@@ -1870,6 +1875,16 @@ func (ct ContentType) String() string {
 // can have one too: fed "caf\xe9" as UTF-8, the chunk reporting U+FFFD stands at a
 // point rather than over any bytes. So the length of the reported text and the
 // length of the range are unrelated numbers.
+// A range can be empty. The final chunk of a text node has a range that is the
+// zero-width point where the node ended - which is the way to find a text node's
+// extent, from the first chunk's Start to the last chunk's End. Its range, not its
+// text: the chunk usually carries no text either, and it carries the replacement
+// character when the node ended with bytes that could not be decoded, so
+// "<p>ab\xe9</p>" ends with a flagged chunk whose text is U+FFFD at a zero-width
+// range. See [TextChunk.IsLastInTextNode]. A replacement character anywhere in a
+// node has the same shape: fed "caf\xe9" as UTF-8, the chunk reporting U+FFFD
+// stands at a point rather than over any bytes. So the length of the reported text
+// and the length of the range are unrelated numbers.
 //
 // Measured in sourcelocation_test.go.
 type SourceLocation struct {
