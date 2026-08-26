@@ -37,6 +37,13 @@
 // instrumenting every handler is affordable, which is worth knowing because the alternative -
 // timing the whole rewrite and dividing - cannot tell a slow selector from a slow document.
 //
+// Affordable where it is possible at all, which is not everywhere. A handler call is under a
+// microsecond, and a clock that ticks more coarsely than that measures every call as zero: on the
+// project's Windows runner the tick is about 340µs, so two hundred calls summed to exactly zero.
+// That is not a small number and this does not print it as one - the comment says how many calls
+// there were and that the clock could not see them. The figure to trust on such a machine is the
+// whole-rewrite one, which is milliseconds.
+//
 // # A duration below the clock tick is not a measurement
 //
 // The tick is a property of the platform, not of the library: 41ns on this machine, and coarser
@@ -114,6 +121,15 @@ func (m Measurement) PerCall() time.Duration {
 	return m.Handlers / time.Duration(m.Calls)
 }
 
+// CallsResolvable reports whether the handler figure means anything, which is a different
+// question from whether the whole rewrite does. A handler call is under a microsecond and some
+// clocks tick more coarsely than that: on the project's Windows runner the tick is about 340µs,
+// so every call measures as zero and the sum of two hundred of them is zero. Twenty ticks of
+// *total* handler time is the bar, because the sum is what is being reported.
+func (m Measurement) CallsResolvable() bool {
+	return m.PerHandler && m.Calls > 0 && m.Tick > 0 && m.Handlers > 20*m.Tick
+}
+
 // Comment is the Server-Timing comment for this measurement, or a comment saying why there is no
 // figure. It is a comment rather than a header because the value is not known until the body has
 // been written.
@@ -124,8 +140,15 @@ func (m Measurement) Comment() string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "<!-- Server-Timing: rewrite;dur=%.3f", ms(m.Rewrite))
-	if m.PerHandler {
+	switch {
+	case m.CallsResolvable():
 		fmt.Fprintf(&b, `, handlers;dur=%.3f;desc="%d calls"`, ms(m.Handlers), m.Calls)
+	case m.PerHandler && m.Calls > 0:
+		// The calls happened and the clock could not see them, which is worth
+		// saying: a reader who asked for the figure should not have to guess why
+		// it is missing.
+		fmt.Fprintf(&b, `, handlers;desc="%d calls, below this clock's %v tick"`,
+			m.Calls, m.Tick)
 	}
 	b.WriteString(" -->")
 	return b.String()
@@ -232,9 +255,13 @@ func (m Measurement) String() string {
 		fmt.Fprintf(&b, "  %-18s %v, which is %d clock ticks - too few to mean "+
 			"anything\n", "rewrite", m.Rewrite.Round(time.Nanosecond), m.Ticks())
 	}
-	if m.PerHandler && m.Calls > 0 {
+	if m.CallsResolvable() {
 		fmt.Fprintf(&b, "  %-18s %v, %v per call\n", "in handlers",
 			m.Handlers.Round(100*time.Nanosecond), m.PerCall().Round(time.Nanosecond))
+	} else if m.PerHandler && m.Calls > 0 {
+		fmt.Fprintf(&b, "  %-18s %d calls measured as %v in total, which this clock "+
+			"cannot resolve: a call is under a microsecond and the tick is %v\n",
+			"in handlers", m.Calls, m.Handlers, m.Tick)
 	}
 	fmt.Fprintf(&b, "  %-18s %v\n", "clock tick", m.Tick)
 	fmt.Fprintf(&b, "  %-18s appended at the document end, where the duration is known\n",

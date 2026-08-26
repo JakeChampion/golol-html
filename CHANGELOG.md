@@ -1347,6 +1347,17 @@
   because the alternative - timing the whole rewrite and dividing - cannot tell a
   slow selector from a slow document.
 
+  Affordable where it is possible at all, and CI supplied the counter-example. A
+  handler call is under a microsecond, and the Windows runner's clock ticks every
+  **343µs**, so two hundred calls summed to exactly zero. That is not a small
+  number, and the program says so: the comment carries the call count and the tick
+  instead of a duration. The whole-rewrite figure is the one to read on such a
+  machine, and on a page small enough it is unresolvable too - 1.5ms is four ticks -
+  in which case the comment says nothing about duration at all.
+
+  The 343µs is worth recording on its own: the project's earlier guess for that
+  runner was 15ms, from a different measurement.
+
   And whether the figure is a figure at all. The clock tick is measured and
   reported, and a rewrite that did not last twenty of them gets a comment saying so
   instead of a number - the lesson `examples/gip/queue` paid for, applied before it

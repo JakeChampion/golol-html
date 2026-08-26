@@ -206,7 +206,10 @@ tick in it is not zero, so it looked like a measurement.
 What works: time a whole run rather than a step, so the interval is milliseconds
 and thousands of ticks; take the fastest of several passes, since preemption only
 ever adds; measure the clock's tick rather than assuming it, and say so in the
-report instead of printing a figure the clock cannot support. Then **put the gate
+report instead of printing a figure the clock cannot support. The tick on the
+Windows runner is about **343µs**, measured, which is coarser than any single
+handler call and finer than a whole rewrite of a large page - so the same program
+can have one figure worth printing and one that is not. Then **put the gate
 on a count, not on the interval.** `allocs/op` is the same number on every
 platform and at any load - measured, to within one allocation in four hundred -
 and where a counted share and a timed share disagree in magnitude they still

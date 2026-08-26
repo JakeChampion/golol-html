@@ -78,11 +78,32 @@ func TestTheHandlerTimeIsInsideTheRewriteTime(t *testing.T) {
 	if m.Calls != 200 {
 		t.Errorf("%d calls", m.Calls)
 	}
-	if m.PerCall() <= 0 {
-		t.Errorf("per call %v", m.PerCall())
+
+	// The per-call figure is only a figure where the clock can see a call, and a call is
+	// under a microsecond. On the project's Windows runner the tick is about 340µs and two
+	// hundred calls sum to zero, so what is asserted is that the program says which case it
+	// is in rather than that the number is positive.
+	t.Logf("tick %v, rewrite %v, handlers %v over %d calls",
+		m.Tick, m.Rewrite, m.Handlers, m.Calls)
+	if m.CallsResolvable() {
+		if m.PerCall() <= 0 {
+			t.Errorf("a resolvable run has a per-call figure of %v", m.PerCall())
+		}
+		if !strings.Contains(m.Comment(), "handlers;dur=") {
+			t.Errorf("the comment has no handler figure: %s", m.Comment())
+		}
+	} else {
+		if !strings.Contains(m.Comment(), "below this clock") {
+			t.Errorf("the comment does not say the calls were unresolvable: %s",
+				m.Comment())
+		}
+		if !strings.Contains(m.String(), "cannot resolve") {
+			t.Errorf("the report does not say so:\n%s", m)
+		}
 	}
 
-	// Without -per-handler nothing is collected, and the comment does not claim any.
+	// Without -per-handler nothing is collected, and the comment claims no handler time
+	// either way.
 	_, plain := rewrite(t, page(200), false)
 	if plain.Calls != 0 || plain.Handlers != 0 {
 		t.Errorf("%d calls, %v in handlers", plain.Calls, plain.Handlers)
@@ -90,8 +111,71 @@ func TestTheHandlerTimeIsInsideTheRewriteTime(t *testing.T) {
 	if strings.Contains(plain.Comment(), "handlers;") {
 		t.Errorf("the comment claims handler time: %s", plain.Comment())
 	}
-	if !strings.Contains(plain.Comment(), "rewrite;dur=") {
-		t.Errorf("the comment has no rewrite figure: %s", plain.Comment())
+	if plain.Resolvable() && !strings.Contains(plain.Comment(), "rewrite;dur=") {
+		t.Errorf("a resolvable run has no rewrite figure: %s", plain.Comment())
+	}
+	if !plain.Resolvable() && !strings.Contains(plain.Comment(), "not measured") {
+		t.Errorf("an unresolvable run gave a figure: %s", plain.Comment())
+	}
+}
+
+// TestHandlerCallsBelowTheClockTickAreReportedAsSuch, built by hand because a machine with a
+// coarse enough clock may not be to hand - and because the Windows runner found this by failing.
+func TestHandlerCallsBelowTheClockTickAreReportedAsSuch(t *testing.T) {
+	// The runner's own figures: a 343µs tick and a rewrite of 1.5ms. Four ticks is too few
+	// for the rewrite itself, so that run says nothing about duration at all - which is the
+	// honest answer and the one the test that found this was asserting against.
+	runner := Measurement{Bytes: 1000, Tick: 343 * time.Microsecond,
+		Rewrite: 1496100 * time.Nanosecond, Calls: 200, Handlers: 0, PerHandler: true}
+	if runner.Resolvable() {
+		t.Errorf("%v against a %v tick is resolvable", runner.Rewrite, runner.Tick)
+	}
+	if got := runner.Ticks(); got != 4 {
+		t.Errorf("Ticks() = %d, want 4", got)
+	}
+	if got := runner.Comment(); !strings.Contains(got, "not measured") {
+		t.Errorf("comment = %s", got)
+	}
+
+	// The case the handler clause is for: the same coarse clock over a page big enough for
+	// the whole rewrite to register, where the calls still sum to nothing.
+	coarse := Measurement{Bytes: 500000, Tick: 343 * time.Microsecond,
+		Rewrite: 20 * time.Millisecond, Calls: 200, Handlers: 0, PerHandler: true}
+	if !coarse.Resolvable() {
+		t.Errorf("20ms against a %v tick is not resolvable", coarse.Tick)
+	}
+	if coarse.CallsResolvable() {
+		t.Error("two hundred calls summing to zero are resolvable")
+	}
+	if got := coarse.PerCall(); got != 0 {
+		t.Errorf("PerCall() = %v", got)
+	}
+	comment := coarse.Comment()
+	if !strings.Contains(comment, `desc="200 calls, below this clock's 343µs tick"`) {
+		t.Errorf("comment = %s", comment)
+	}
+	if !strings.Contains(comment, "rewrite;dur=20.000") {
+		t.Errorf("the rewrite figure is missing: %s", comment)
+	}
+	if strings.Contains(comment, "handlers;dur=") {
+		t.Errorf("the comment gave a handler figure anyway: %s", comment)
+	}
+	if !strings.Contains(coarse.String(), "cannot resolve") {
+		t.Errorf("report:\n%s", coarse)
+	}
+
+	// A fine clock resolves both, and the comment carries both figures.
+	fine := Measurement{Bytes: 1000, Tick: 41 * time.Nanosecond, Rewrite: time.Millisecond,
+		Calls: 200, Handlers: 160 * time.Microsecond, PerHandler: true}
+	if !fine.CallsResolvable() || !fine.Resolvable() {
+		t.Error("a 41ns tick does not resolve a 1ms rewrite with 160µs of handlers")
+	}
+	if got := fine.Comment(); !strings.Contains(got, "rewrite;dur=1.000") ||
+		!strings.Contains(got, `handlers;dur=0.160;desc="200 calls"`) {
+		t.Errorf("comment = %s", got)
+	}
+	if got := fine.PerCall(); got != 800*time.Nanosecond {
+		t.Errorf("PerCall() = %v", got)
 	}
 }
 
