@@ -1493,6 +1493,30 @@
 // that lists every attribute to find a single one costs four times the number of
 // attributes on the element.
 //
+// How much that costs depends on the shape of the document and not much on its
+// size, and the spread is wide. Held at 200 KB with two element selectors and the
+// document-level text and comment handlers, measured on an M3 Pro, fastest of
+// seven passes:
+//
+//	shape                          ns/byte   alloc B/KB    calls
+//	a list of <li> with no </li>   102.300      19,668.4  120,000
+//	unclosed <div>s                 50.026       6,562.1   40,000
+//	anchors with three attributes   40.235       3,284.2   17,646
+//	<p>ab</p> repeated              39.487       7,289.2   44,444
+//	table rows                      34.611       5,182.0   31,578
+//	<div></div> repeated            28.752       2,986.3   18,181
+//	nesting 25,000 deep             24.227       2,985.1   25,002
+//	stray </div>s                    3.003           8.5        0
+//	one 200 KB attribute value       0.060           8.4        1
+//
+// A factor of about 1700 at the same byte count. The worst shape is a list of
+// items without closing tags, at three calls each - the element, its text, and the
+// empty chunk that ends the text node - and it is a navigation menu rather than a
+// pathological document. The floor of 8.5 bytes per KB is what a document nothing
+// matches costs; a page of stray end tags sits there because no handler ever sees
+// one at all. examples/gip/worstshape is the harness, pointed at your own
+// handlers.
+//
 // A text handler starts at two calls per text node - the content and its empty
 // boundary marker - and two is a floor rather than a figure. The writes split a
 // node, and so does the tokenizer: a "<" in text that does not begin a tag is
