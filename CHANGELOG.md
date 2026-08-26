@@ -129,6 +129,29 @@
   by its own test: an empty `<pre>` emits no text chunk, so the flag for "the
   next text loses a newline" outlived the element and ate the newline after it -
   `<pre></pre>\nx` said "x". It is cleared on the end tag now.
+- `SourceLocation`: say how much input a streaming caller has to retain to slice
+  at these offsets. The section recommends the offsets as identity across two
+  passes and says nothing about the buffer, and the obvious rule - keep the
+  current write, drop it when no handler is pending - is wrong. A start tag spans
+  writes and its handler runs after its first bytes were handed over: fed three
+  bytes at a time, the handler for `<div id=a>` at offset 0 fires while such a
+  caller holds input from offset 9. The floor is the end of the last unit any
+  handler reported, since tokens do not overlap.
+
+- `examples/gip/dupsection`: duplicate a section, renaming the ids in the copy,
+  without holding the document. The copy is the section's own bytes, sliced from
+  the caller's buffer at the element's extent, so what a reconstruction from
+  reported units would lose survives - a stray end tag inside it, a comment, an
+  entity, the original quoting. With 512-byte reads and a 1016-byte section,
+  documents of 5 KB, 41 KB and 801 KB retained 1072, 1504 and 1408 bytes at
+  peak.
+
+  Two things its tests caught. The retention rule above, which it had wrong and
+  which failed at every read size below the section. And that the copy is not
+  byte-identical after all where the second pass sets an id: that start tag is
+  re-serialised per B171, so `id=a class = 'x'  data-k` comes back as
+  `id="a2" class = 'x' data-k`. The test now says which start tags keep their
+  bytes and which do not.
 
 ### Added
 - **`CheckRawText`, because the text paths cannot apply the breakout guard.**
