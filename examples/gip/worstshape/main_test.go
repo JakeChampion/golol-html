@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	lolhtml "github.com/JakeChampion/golol-html"
 )
@@ -30,6 +31,7 @@ func TestRankReturnsEveryShapeMostExpensiveFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("clock tick %v", clockTick())
 	if len(results) != len(Shapes) {
 		t.Fatalf("%d results for %d shapes", len(results), len(Shapes))
 	}
@@ -41,8 +43,15 @@ func TestRankReturnsEveryShapeMostExpensiveFirst(t *testing.T) {
 		}
 	}
 	for _, r := range results {
-		if r.Bytes == 0 || r.Nanoseconds <= 0 {
-			t.Errorf("%s: %d bytes in %d ns, which cannot be right", r.Shape, r.Bytes, r.Nanoseconds)
+		if r.Bytes == 0 {
+			t.Errorf("%s: no document was built", r.Shape)
+		}
+		// Not asserted: that the duration is above zero. The cheapest shapes here take a
+		// few microseconds and the Windows runner's clock ticks every 340µs or so, where
+		// that reads as exactly 0 - which is the clock's answer and not a bug. CI caught
+		// this after the rule in docs/gip/GIP.md had already been written twice.
+		if r.Nanoseconds < 0 {
+			t.Errorf("%s: negative duration %d", r.Shape, r.Nanoseconds)
 		}
 		t.Logf("%-30s %8.3f ns/byte %10.1f alloc B/KB %8d calls",
 			r.Shape, r.NsPerByte(), r.AllocPerByte()*1024, r.Calls)
@@ -197,4 +206,22 @@ func TestTheHarnessMeasuresTheHandlersAndNotTheLibrary(t *testing.T) {
 		t.Errorf("the handler set barely changed the worst case (%.2f against %.2f), so this "+
 			"harness is measuring the library rather than the handlers", maxSome, maxNone)
 	}
+}
+
+// clockTick measures the smallest interval this machine's clock can report, so a reader of the
+// logs above can tell a shape that is fast from a shape that is below the clock. On the Windows
+// runner this is around 340µs, which is longer than the cheapest shapes take.
+func clockTick() time.Duration {
+	best := time.Hour
+	for i := 0; i < 200; i++ {
+		start := time.Now()
+		var d time.Duration
+		for d == 0 {
+			d = time.Since(start)
+		}
+		if d < best {
+			best = d
+		}
+	}
+	return best
 }

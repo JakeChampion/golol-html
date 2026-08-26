@@ -44,6 +44,12 @@
 //
 // The ranking is a property of the handler set, not of the library, which is why this is a harness
 // rather than a table: point it at your own handlers.
+//
+// One caveat about the ns/byte column. The cheapest shapes here take a few microseconds, and a
+// clock that ticks every 340µs - the Windows runner's - reports them as exactly 0. That is the
+// clock's answer rather than an error, so nothing here asserts a duration is above zero, and the
+// gates are the allocation and call columns, which are the same number on every machine. The tool
+// says so when it happens.
 package main
 
 import (
@@ -214,8 +220,17 @@ func main() {
 	}
 	if len(results) > 1 {
 		worst, best := results[0], results[len(results)-1]
-		fmt.Printf("\n%s costs %.0fx per byte what %s does, on %.0fx the handler calls\n",
-			worst.Shape, worst.NsPerByte()/best.NsPerByte(), best.Shape,
-			worst.CallsPerByte()/max(best.CallsPerByte(), 1e-9))
+		fmt.Printf("\n%s costs %.0fx the allocations per byte of %s, on %.0fx the handler "+
+			"calls\n", worst.Shape, worst.AllocPerByte()/max(best.AllocPerByte(), 1e-9),
+			best.Shape, worst.CallsPerByte()/max(best.CallsPerByte(), 1e-9))
+		if best.Nanoseconds == 0 {
+			// A clock too coarse to see the cheapest shape is a real answer, not an
+			// error: on the Windows runner the tick is around 340µs and these shapes
+			// take a few. The ranking above is then only meaningful at the top.
+			fmt.Println("the cheapest shapes measured 0 ns - this clock cannot resolve " +
+				"them, so compare the allocation column instead")
+		} else {
+			fmt.Printf("and %.0fx the time per byte\n", worst.NsPerByte()/best.NsPerByte())
+		}
 	}
 }

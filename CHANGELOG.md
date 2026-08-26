@@ -17,6 +17,12 @@
   byte, and that the ordering by one tracks the ordering by the other - with the
   times logged and asserted nowhere.
 
+  "Asserted nowhere" took a second attempt. It checked that each shape took some
+  nonzero time, which is the timing rule broken in a third form: the Windows
+  runner reports the cheapest shapes as exactly 0 ns, because they take a few
+  microseconds and its clock ticks every 340µs. The tool now measures the tick,
+  says when a figure is below it, and compares allocations instead.
+
 - `SourceLocation`: say that a text chunk is the exception to the
   write-invariance the section promises. When a multi-byte character straddles a
   write boundary the chunk's range covers only the part of it that arrived last,
