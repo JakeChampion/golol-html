@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Added `CheckComment` and `ErrCommentBreakout`, for text a caller is about to
+  put inside a comment it assembled itself. `Comment.SetText` refuses text that
+  would end the comment early and says there is no escaping that would work; a
+  comment built by hand out of `HTML` content had no equivalent guard, which the
+  documentation named without offering one. `CheckRawText` is exported for
+  exactly that hand-built case, so this is the missing half of the pair.
+
+  The rule is the tokenizer's: refuse text containing `-->` or `--!>`, or
+  beginning with `>` or `->`. Agreement with `SetText` is pinned over 2813
+  strings rather than assumed, 474 of them refused by both, and what it refuses
+  is checked against what actually leaks by parsing the output.
+
+- `examples/gip/tailcomment`: emit a summary of what changed as a trailing
+  comment, which is the path that has no guard - `DocumentEnd.Append` takes
+  markup. Unguarded, a summary holding a URL with `-->` in it truncates the
+  comment and puts the rest in the page. Since there is no escape, the program
+  makes the choice explicit: rewrite the sequence ("- ->"), or refuse to emit a
+  comment and say why.
+
+  Its test caught that the danger needs a literal `-->` in the source.
+  `Attribute` returns raw source, so `&gt;` stays encoded and is harmless; a
+  literal `>` is legal inside a quoted attribute value and is not.
+
 - `SourceLocation`: say that a text chunk is the exception to the
   write-invariance the section promises. When a multi-byte character straddles a
   write boundary the chunk's range covers only the part of it that arrived last,
