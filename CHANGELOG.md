@@ -1325,6 +1325,36 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/doctypepick`: choose what a rewrite does from the document's
+  doctype, and only from a doctype the document's own parser will honour.** B192 is
+  why the second half of that sentence is the turn.
+
+  `OnDoctype` fires for every doctype token in the source. A parser honours the first
+  one with nothing but whitespace and comments before it and drops the rest as parse
+  errors. Measured against x/net/html using B174's behaviour:
+
+      document begins with          OnDoctype reports   the parser is in
+      <!doctype html>                          "html"   standards mode
+      whitespace, then a doctype               "html"   standards mode
+      a comment, then a doctype                "html"   standards mode
+      text, then a doctype                     "html"   *quirks* mode
+      an element, then a doctype               "html"   *quirks* mode
+      a non-breaking space, then one           "html"   *quirks* mode
+      nothing                                      ""   quirks mode
+
+  Three rows where the handler fires and the mode is not what it says, so a rewrite
+  that trusts the handler alone is wrong on those three and silent about it. The
+  qualifying condition is the same one `examples/gip/deployid` measures for a meta
+  reaching the head: only the five ASCII whitespace characters count, and a
+  non-breaking space is text.
+
+  The other half is that no peek is needed. The handler set is fixed when the
+  `Writer` is built, so choosing by doctype looks like it needs a first look - and a
+  peek is slower rather than faster (3.002ms against 2.959ms over an 87 KB document)
+  because it parses its prefix twice, *and* it can miss the doctype altogether: after
+  a 5000-byte comment the doctype ends at byte 5022, after two hundred comments at
+  2015. Registering both sets and gating them is one pass and cannot miss.
+
 - **`examples/gip/regions`: apply a different set of handlers to each region of one
   document.** B191, and it took four wrong premises of mine to get to it.
 
