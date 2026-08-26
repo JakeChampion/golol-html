@@ -5,6 +5,12 @@ package lolhtml
 */
 import "C"
 
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
+
 // A Comment is a comment token matched by a comment handler, which is not the
 // same thing as a comment.
 //
@@ -98,7 +104,9 @@ func (c *Comment) Text() string {
 //
 // This is the only path that writes a comment's text for you. Building a comment
 // by hand out of [HTML] content has no equivalent guard - see the package
-// documentation on building markup yourself.
+// documentation on building markup yourself, and [CheckComment], which applies
+// this same rule to text a caller is about to put inside a comment it assembled
+// itself.
 //
 // It also writes the delimiters, as <!-- and -->, whatever the document used. A
 // token spelled <?php echo 1; ?> is a comment token, and setting its text turns
@@ -185,3 +193,59 @@ func (c *Comment) UserData() any { return getUserData(&c.unit, commentUserData) 
 // that handle immediately; see [Element.SetUserData], where the cost and the
 // mitigation are set out.
 func (c *Comment) SetUserData(v any) error { return setUserData(&c.unit, commentUserData, v) }
+
+// ErrCommentBreakout is returned by [CheckComment] for text that would not stay
+// inside a comment.
+var ErrCommentBreakout = errors.New("lolhtml: text would end the comment it is inside")
+
+// CheckComment reports whether text can be the data of a comment, for a caller
+// building the comment itself rather than going through [Comment.SetText].
+//
+// It exists for the gap this file already names: SetText is the only path that
+// writes a comment's text for you, and a comment assembled by hand out of [HTML]
+// content has no guard. That path is a real one - [DocumentEnd.Append] and the
+// insertion methods take markup, so a summary emitted as a trailing comment is
+// built by hand - and the failure is silent in the same way the raw-text one is,
+// which is why [CheckRawText] is exported for the same reason.
+//
+// The rule is the tokenizer's: comment data must not contain "-->" or "--!>", and
+// must not begin with ">" or "->". Nothing else is special - "--", "--!", "----",
+// "<!--", a trailing "-", a NUL, "]]>" and a bare ">" after the first character
+// are all fine, because a comment ends only at those two sequences and the two
+// abrupt-closing forms at the start.
+//
+// There is no escaping, and that is not an omission: nothing inside a comment is
+// a character reference, so there is no spelling of those characters that a
+// comment can hold and still mean. A caller with text that fails this has to
+// change it or refuse it - replacing "--" with "- -" is the usual choice, and it
+// is a choice about meaning rather than an escape, which is why the library does
+// not make it.
+//
+// What it refuses is exactly what SetText refuses, pinned over every string up to
+// four characters of "-", "!", ">", "<", "a", newline and space by a test that
+// compares the two paths rather than assuming they agree. And what it refuses is
+// exactly what leaks: appended by hand, ">" becomes the complete comment "<!-->"
+// followed by "-->" as text in the document, and "a-->b" ends the comment at "a"
+// and leaves "b-->" behind.
+func CheckComment(text string) error {
+	if i := strings.Index(text, "-->"); i >= 0 {
+		return fmt.Errorf("%w: %q at offset %d ends it; a comment cannot hold that "+
+			"sequence at all, so change the text - \"- -\" for \"--\" is the usual choice",
+			ErrCommentBreakout, "-->", i)
+	}
+	if i := strings.Index(text, "--!>"); i >= 0 {
+		return fmt.Errorf("%w: %q at offset %d ends it; a comment cannot hold that "+
+			"sequence at all, so change the text", ErrCommentBreakout, "--!>", i)
+	}
+	if strings.HasPrefix(text, ">") {
+		return fmt.Errorf("%w: it begins with %q, which closes a comment abruptly; a "+
+			"space or any other character in front of it is enough",
+			ErrCommentBreakout, ">")
+	}
+	if strings.HasPrefix(text, "->") {
+		return fmt.Errorf("%w: it begins with %q, which closes a comment abruptly; a "+
+			"space or any other character in front of it is enough",
+			ErrCommentBreakout, "->")
+	}
+	return nil
+}
