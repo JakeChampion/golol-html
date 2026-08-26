@@ -246,11 +246,19 @@ func TestTheFinalChunkCarriesAReplacementCharacterItProduced(t *testing.T) {
 		}
 	}
 
-	// One call, not two: the node is nothing but the undecodable byte, so its first chunk is
-	// also its last.
-	if got := run(t, "<p>\xe9</p>", 0); got.calls != 1 || got.lastText != replacement {
-		t.Errorf("<p>\\xe9</p>: %d calls with final text %q, want one call carrying the "+
-			"replacement character", got.calls, got.lastText)
+	// One call, not two, where the node is nothing but a truncated sequence: its first chunk
+	// is also its last. A standalone invalid byte is still two, because it is replaced inside
+	// the content chunk - which is the distinction, and it is not the one I first assumed.
+	for _, doc := range []string{"<p>\xe9</p>", "<p>\xc3</p>"} {
+		if got := run(t, doc, 0); got.calls != 1 || got.lastText != replacement {
+			t.Errorf("%q: %d calls with final text %q, want one call carrying the "+
+				"replacement character", doc, got.calls, got.lastText)
+		}
+	}
+	if got := run(t, "<p>\x80</p>", 0); got.calls != 2 || got.lastText != "" {
+		t.Errorf("<p>\\x80</p>: %d calls with final text %q, want two and an empty final "+
+			"chunk - a standalone invalid byte is replaced inside the content",
+			got.calls, got.lastText)
 	}
 
 	// The trigger is the encoding, not the byte: declared windows-1252, the same document

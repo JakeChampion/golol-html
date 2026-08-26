@@ -17,9 +17,12 @@
   for `<p>ab\xe9</p>` where reading the final chunk gives "ab\ufffd" - and
   undecodable input is exactly the case a proxy meets.
 
-  The adjacent claim was wrong for the same reason: a text handler does not run
-  "at least twice per text node". `<p>\xe9</p>` is one call, which is both the
-  node's first chunk and its last.
+  The adjacent claim was wrong for the same reason, though narrower than I first
+  wrote it: a text handler does not always run twice per text node. Where the
+  node is nothing but a truncated multi-byte sequence - `<p>\xe9</p>`,
+  `<p>\xc3</p>` - it runs once, and that call is both the node's first chunk and
+  its last. A standalone invalid byte like `<p>\x80</p>` is still two, because it
+  is replaced inside the content chunk.
 
 ### Added
 - **`CheckRawText`, because the text paths cannot apply the breakout guard.**

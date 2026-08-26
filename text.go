@@ -139,8 +139,11 @@ func (t *TextChunk) Bytes() []byte {
 //
 // The usual consequence is a cost: a text handler runs twice per text node, and
 // on a document of prose about half its calls are handed nothing. See [OnText].
-// It can run once - "<p>\xe9</p>" is a single call, which is both the first
-// chunk of the node and its last, and carries the replacement character.
+// It can run once, where the node is nothing but a truncated multi-byte sequence:
+// "<p>\xe9</p>" and "<p>\xc3</p>" are a single call each, which is both the first
+// chunk of the node and its last, and carries the replacement character. A
+// standalone invalid byte is still two calls, because it is replaced inside the
+// content chunk and the empty boundary follows - "<p>\x80</p>" is two.
 //
 // Its text node, not its element: an element containing nested markup has one
 // text node per run of character data, and each one ends with its own final

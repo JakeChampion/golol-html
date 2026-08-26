@@ -1494,7 +1494,12 @@
 // attributes on the element.
 //
 // A text handler starts at two calls per text node - the content and its empty
-// boundary marker - and two is a floor rather than a figure. The writes split a
+// boundary marker - and two is a floor for a node whose bytes decode rather than a
+// floor in general. A node that is nothing but a truncated multi-byte sequence is
+// one call: fed "<p>\xe9</p>" or "<p>\xc3</p>" as UTF-8, the single call is the
+// node's last chunk and carries the replacement character. A standalone invalid
+// byte is still two, because it is replaced inside the content chunk - see
+// [TextChunk.IsLastInTextNode]. The writes split a
 // node, and so does the tokenizer: a "<" in text that does not begin a tag is
 // delivered as a chunk of its own, so "3 < 4 and 5 < 6" is six calls from one
 // write. See [TextChunk.Text].
