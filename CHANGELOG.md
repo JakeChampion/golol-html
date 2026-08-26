@@ -1325,6 +1325,31 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/deployid`: echo a deploy id from the environment into a meta tag,
+  and say when it could not put it somewhere a browser will read.** A comment can go
+  anywhere; a meta has to be in the head, and a rewriter cannot see the head a
+  parser will build.
+
+  It turns out not to need to. B183: inserting a bare meta before the first element
+  lands it in the head, because a parser in its "before head" mode meets the meta,
+  creates the head, and puts it there. Wrapping it in a `<head>` of your own gives an
+  identical tree and is dropped as a duplicate where the source has one, so the
+  wrap is wasted work. Measured against x/net/html over eight shapes, including a
+  page with no head spelled, `<html>` with no head, `<body>` first and `<title>`
+  first.
+
+  Where it fails is text: text ends the head, so a meta inserted after any lands in
+  the body and is ignored. The trap is what counts as text. Only tab, line feed,
+  form feed, carriage return and space keep the head open; U+00A0, U+2007, U+202F,
+  U+3000 and the vertical tab do not - so a template that indents its output with a
+  non-breaking space moves every meta tag it adds into the body, invisibly.
+
+  And that is detectable in one pass, because text arrives before the element that
+  follows it. The program counts non-whitespace text before the first element,
+  inserts the meta anyway - a meta in the body is inert rather than harmful - and
+  reports that a browser will ignore it, naming the text that closed the head.
+  `-strict` makes it an exit status.
+
 - **`examples/gip/buildinfo`: stamp a page with the commit that produced it, and
   say where the stamp went.** The value is known before the rewrite starts, which
   is the opposite of `examples/gip/servertiming` and makes the top of the document
