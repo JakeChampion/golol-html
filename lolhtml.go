@@ -1498,18 +1498,18 @@
 // document-level text and comment handlers, measured on an M3 Pro, fastest of
 // seven passes:
 //
-//	shape                          ns/byte   alloc B/KB    calls
-//	a list of <li> with no </li>   102.300      19,668.4  120,000
-//	unclosed <div>s                 50.026       6,562.1   40,000
-//	anchors with three attributes   40.235       3,284.2   17,646
-//	<p>ab</p> repeated              39.487       7,289.2   44,444
-//	table rows                      34.611       5,182.0   31,578
-//	<div></div> repeated            28.752       2,986.3   18,181
-//	nesting 25,000 deep             24.227       2,985.1   25,002
-//	stray </div>s                    3.003           8.5        0
-//	one 200 KB attribute value       0.060           8.4        1
+//	shape                              ns/byte   alloc B/KB    calls
+//	a list of <li> with no </li>     103.565     19,667.8  120,000
+//	unclosed <div>s                   50.974      6,561.0   40,000
+//	anchors with three attributes     42.233      3,284.0   17,646
+//	<p>ab</p> repeated                41.267      7,290.0   44,444
+//	table rows                        35.122      5,180.9   31,578
+//	<div></div> repeated              29.497      2,986.3   18,181
+//	nesting 18,000 deep               25.376      2,986.9   18,183
+//	stray </div>s                      3.144          8.5        0
+//	one 200 KB attribute value         0.055          8.6        1
 //
-// A factor of about 1700 at the same byte count. The worst shape is a list of
+// A factor of about 1900 at the same byte count. The worst shape is a list of
 // items without closing tags, at three calls each - the element, its text, and the
 // empty chunk that ends the text node - and it is a navigation menu rather than a
 // pathological document. The floor of 8.5 bytes per KB is what a document nothing

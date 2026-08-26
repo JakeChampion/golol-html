@@ -5,8 +5,8 @@
 - Package documentation, Cost: quantify the rule. "A rewrite's cost tracks how
   many times your handlers run, not how long the document is" was already there;
   what was missing is how much that varies. At a fixed 200 KB the spread across
-  document shapes is about 1700x, from 102.3 ns/byte for a list of `<li>` with no
-  closing tags down to 0.060 for one element with a 200 KB attribute value. The
+  document shapes is about 1900x, from 103.6 ns/byte for a list of `<li>` with no
+  closing tags down to 0.055 for one element with a 200 KB attribute value. The
   worst shape costs three handler calls per item - the element, its text, and the
   empty chunk that ends the text node - and it is a navigation menu rather than a
   pathological document.

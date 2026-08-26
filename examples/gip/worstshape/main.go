@@ -2,28 +2,28 @@
 // handlers over documents of the same size in different shapes and ranking them.
 //
 // The point is that document size is the wrong axis. Held at 200 KB, the shapes below span a
-// factor of about 1700 in time per byte, and what they span is handler calls per byte - not
+// factor of about 1900 in time per byte, and what they span is handler calls per byte - not
 // nesting depth, not markup validity, not how much of the document matches. Measured on an M3 Pro,
 // fastest of seven passes, with a handler set of two element selectors and a document-level text
 // and comment handler:
 //
-//	shape                          ns/byte   alloc B/KB    calls
-//	implied end tags (li)          102.300      19,668.4  120,000
-//	malformed: unclosed tags        50.026       6,562.1   40,000
-//	attribute-heavy anchors         40.235       3,284.2   17,646
-//	many text nodes                 39.487       7,289.2   44,444
-//	tables                          34.611       5,182.0   31,578
-//	many siblings                   28.752       2,986.3   18,181
-//	deep nesting                    24.227       2,985.1   25,002
-//	many comments                   17.026       2,055.4   25,000
-//	bogus comments                  13.465       1,646.1   20,000
-//	malformed: stray end tags        3.003           8.5        0
-//	one element, many attributes     1.498           7.6        1
-//	one long comment                 0.475           9.4        1
-//	one long text node               0.082           9.4        2
-//	raw text (script)                0.072           8.8        2
-//	entities                         0.070           8.8        2
-//	one long attribute value         0.060           8.4        1
+//	shape                            ns/byte   alloc B/KB    calls
+//	implied end tags (li)          103.565     19,667.8  120,000
+//	malformed: unclosed tags        50.974      6,561.0   40,000
+//	attribute-heavy anchors         42.233      3,284.0   17,646
+//	many text nodes                 41.267      7,290.0   44,444
+//	tables                          35.122      5,180.9   31,578
+//	many siblings                   29.497      2,986.3   18,181
+//	deep nesting                    25.376      2,986.9   18,183
+//	many comments                   16.926      2,055.7   25,000
+//	bogus comments                  13.478      1,646.1   20,000
+//	malformed: stray end tags        3.144          8.5        0
+//	one element, many attributes     1.601          8.6        1
+//	one long comment                 0.481          7.7        1
+//	one long text node               0.076          8.8        2
+//	raw text (script)                0.067          8.8        2
+//	entities                         0.065          8.0        2
+//	one long attribute value         0.055          8.6        1
 //
 // Three things worth taking from that.
 //
@@ -40,7 +40,7 @@
 // So a rewrite's cost is set by how finely the document is divided, and a handler set that looks
 // cheap on prose can be twenty times more expensive on markup of the same size. The allocation
 // column is the same story and does not depend on the machine: 19.7 KB allocated per KB of input
-// at the top, 8.5 bytes per KB at the bottom.
+// at the top, about 8.5 bytes per KB at the bottom.
 //
 // The ranking is a property of the handler set, not of the library, which is why this is a harness
 // rather than a table: point it at your own handlers.
