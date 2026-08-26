@@ -1325,6 +1325,38 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/tee`: stream a document to two destinations at once, one rewritten
+  and one exactly as it arrived, from a single read.** The verbatim copy is the
+  input, so teeing the reader is the whole implementation. What is worth measuring is
+  the gap between the two, because it is the only view from outside of what the
+  rewriter is holding.
+
+  B185: it holds one start tag, and which tags depends on the selectors rather than
+  on whether a handler ran. Widest gap over a 5513-byte `<div>` with five hundred
+  attributes, fed a byte at a time:
+
+      selector                                  widest gap
+      none                                               5
+      a[href]  span[data-x]  p                           5
+      div[data-x]  div[data-absent]  div.absent       5505
+      div#absent  [data-absent]  div  *              5505
+
+  A tag name rules a selector out at the name and the rest of the tag streams. An
+  attribute, class or id cannot be ruled out until the tag ends, so the tag is held
+  whether it matches or not - `div[data-absent]` costs exactly what `div[data-x]`
+  does - and a selector with no tag-name component holds every tag. This refines
+  B78, which distinguished "a handler registered" from "none": the line is the tag
+  name.
+
+  Text is never held - a 10 KB text node ran a gap of three bytes with a text
+  handler and without one - and the one way to hold the document is to do it
+  yourself, which accumulating a text node to `IsLastInTextNode` does. Telling the
+  rewriter's buffer from the caller's is the point of measuring.
+
+  The two destinations also fail differently, and there is no ordering that avoids
+  it: whichever is written first is ahead when the other breaks. The program reports
+  both counts so a partial pair is recognisable rather than surprising.
+
 - **`examples/gip/etag`: compute an entity tag for a rewritten page without waiting
   for the page.** An etag is a header and the output only exists as it is written, so
   hashing the output means either sending the header late or holding the body.
