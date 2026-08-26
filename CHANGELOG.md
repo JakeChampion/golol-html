@@ -1325,6 +1325,36 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/multipart`: rewrite the HTML parts of a multipart body and pass
+  everything else through byte for byte.** B188 is why one rewriter per part is
+  correct rather than merely convenient.
+
+  Multipart is the join B177 warns about, made safe, and the reason is that the
+  delimiter is out of band. A boundary is written by the multipart writer rather than
+  by the rewriter, so a part ending in `<div attr="` keeps its truncated tail and the
+  next part is untouched - measured for five truncation shapes, against the same two
+  fragments concatenated without boundaries, which lose the second one's paragraph.
+
+  A rewriter per part is free until the parts are small. Over 100000 bytes total,
+  one rewriter per part against one rewriter for all of it:
+
+      parts   bytes each   a rewriter per part   one rewriter   ratio
+          1        99990              5.338ms        5.473ms    0.98x
+         10         9990              5.336ms        5.368ms    0.99x
+        100          990              5.668ms         5.58ms    1.02x
+       1000           90              7.661ms        4.984ms    1.54x
+
+  Free above a kilobyte a part, half again as expensive at ninety bytes, where
+  B172's fixed registration cost exceeds the content. There is no reusing a
+  `Writer`, so the answer for a body of many tiny parts is fewer selectors rather
+  than fewer rewriters.
+
+  And closing a part's rewriter after the next part has begun gives `multipart:
+  can't write to finished part` - B186 in a second place, loud, and lost to a
+  deferred Close the same way. A part with no `Content-Type` is not treated as HTML,
+  because guessing would rewrite whatever happened to look like markup: the test
+  includes a `text/plain` part whose content is an anchor.
+
 - **`examples/gip/gunzip`: rewrite a document that arrives gzipped, decompressing as
   it goes.** B187 is the pair of things that go wrong.
 
