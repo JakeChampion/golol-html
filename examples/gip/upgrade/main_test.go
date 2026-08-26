@@ -1,309 +1,273 @@
 package main
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
 	lolhtml "github.com/JakeChampion/golol-html"
 )
 
-var tabs = Rule{
-	Match: "div.tabs",
-	Name:  "my-tabs",
-	Attrs: map[string]string{"data-active": "active"},
-	Parts: map[string]string{"div.tab-title": "title"},
+var corpus = []string{
+	`<img src="http://cdn.example/1.png">`,
+	`<img src="https://cdn.example/1.png">`,
+	`<img src="http://192.168.1.1/x.png">`,
+	`<img src="http://localhost/x.png">`,
+	`<img src="http://intranet/x.png">`,
+	`<a href="http://link.example/p">t</a>`,
+	`<style>body{background:url(http://cdn.example/bg.png)}</style>`,
+	`<style>.a{background:URL( "http://cdn.example/a.png" )}</style>`,
+	`<style>.b{background:url('http://cdn.example/b.png')}</style>`,
+	`<style>.c{background:url(https://ok.example/c.png)}</style>`,
+	`<style>.d{background:url(}</style>`,
+	`<style></style>`,
+	`<div style="background:url(http://cdn.example/i.png)">x</div>`,
+	`<link rel="stylesheet" href="http://cdn.example/s.css">`,
+	`<script src="http://cdn.example/a.js"></script>`,
+	`<form action="http://cdn.example/s"><input formaction="http://cdn.example/t"></form>`,
+	`<video poster="http://cdn.example/p.jpg"><source src="http://cdn.example/v.mp4"></video>`,
+	`<object data="http://cdn.example/o.swf"></object>`,
+	`<head></head>`,
+	`<!DOCTYPE html><html><head><style>a{background:url(http://x.example/y)}</style></head><body><p>t</p></body></html>`,
+	`<p>no urls at all</p>`,
+	``,
 }
 
-func upgrade(t *testing.T, doc string, rules ...Rule) Result {
-	t.Helper()
-	if len(rules) == 0 {
-		rules = []Rule{tabs}
-	}
-	res, err := Upgrade(doc, rules)
+func chunked(in string, n int, u *upgrader) (string, error) {
+	var out bytes.Buffer
+	opts := append(u.options(), lolhtml.WithEncoding(u.encoding))
+	w, err := lolhtml.NewWriter(&out, opts...)
 	if err != nil {
-		t.Fatalf("Upgrade(%q): %v", doc, err)
+		return "", err
 	}
-	return res
+	for i := 0; i < len(in); i += n {
+		end := min(i+n, len(in))
+		if _, err := w.Write([]byte(in[i:end])); err != nil {
+			w.Close()
+			return "", err
+		}
+	}
+	if err := w.Close(); err != nil {
+		return "", err
+	}
+	return out.String(), nil
 }
 
-// TestATargetThatCannotHoldContentIsRefused, which is the mistake this program exists not to
-// make. A rename writes the new name over both tags and whoever parses the output applies the
-// new name's content model, so a void target does one of four things to the widget and none of
-// them is keeping it.
-func TestATargetThatCannotHoldContentIsRefused(t *testing.T) {
-	for _, name := range []string{
-		"br", "img", "hr", "input", "wbr", "area", "col", "meta", "base", "link",
-		"embed", "source", "track",
-	} {
-		err := Rule{Match: "div.tabs", Name: name}.Validate()
-		if err == nil {
-			t.Errorf("%s was accepted as a target", name)
-			continue
-		}
-		if !strings.Contains(err.Error(), "cannot hold content") {
-			t.Errorf("%s: %v", name, err)
-		}
-	}
-
-	// Raw text is the other direction of the same hazard: the widget's markup becomes text.
-	for _, name := range []string{"script", "style", "textarea", "title", "xmp", "plaintext"} {
-		err := Rule{Match: "div.tabs", Name: name}.Validate()
-		if err == nil {
-			t.Errorf("%s was accepted as a target", name)
-			continue
-		}
-		if !strings.Contains(err.Error(), "text rather than markup") {
-			t.Errorf("%s: %v", name, err)
-		}
-	}
-
-	// And a built-in container is refused too, not because it is unsafe here but because a
-	// name without a hyphen is not what this program is for and its content model is not
-	// guaranteed to be a container's.
-	for _, name := range []string{"section", "div", "span"} {
-		if err := (Rule{Match: "div.tabs", Name: name}).Validate(); err == nil {
-			t.Errorf("%s was accepted", name)
-		}
-	}
-
-	// A custom element name is accepted, and it is safe because a hyphenated name is always
-	// an ordinary container.
-	for _, name := range []string{"my-tabs", "x-a", "a-b-c"} {
-		if err := (Rule{Match: "div.tabs", Name: name}).Validate(); err != nil {
-			t.Errorf("%s: %v", name, err)
-		}
-	}
-	if err := (Rule{Match: "div.tabs", Name: "My-Tabs"}).Validate(); err == nil {
-		t.Error("a name starting with a capital was accepted")
-	}
-
-	// Upgrade refuses before it rewrites anything.
-	if _, err := Upgrade(`<div class="tabs">x</div>`,
-		[]Rule{{Match: "div.tabs", Name: "br"}}); err == nil {
-		t.Error("Upgrade accepted a void target")
-	}
+func newUpgrader() *upgrader {
+	return &upgrader{encoding: "utf-8", skip: map[string]bool{}}
 }
 
-// TestWhatARenameIntoAVoidNameWouldDo, so the refusal above is known to be worth having. The
-// output markup looks reasonable in every case; what a parser builds does not.
-func TestWhatARenameIntoAVoidNameWouldDo(t *testing.T) {
-	const doc = `<div class="tabs">x</div>`
-	for _, tt := range []struct{ to, want string }{
-		{"br", `<br class="tabs">x</br>`},
-		{"img", `<img class="tabs">x</img>`},
-		{"col", `<col class="tabs">x</col>`},
-		{"meta", `<meta class="tabs">x</meta>`},
-	} {
-		out, err := lolhtml.RewriteString(doc,
-			lolhtml.OnElement("div.tabs", func(e *lolhtml.Element) error {
-				return e.SetTagName(tt.to)
-			}))
+// TestChunkInvariance is the test this program is shaped around. A CSS
+// url(http://...) can straddle any chunk boundary, and a text handler that
+// rewrote chunk by chunk would silently miss every URL that happened to be
+// split - producing a document that looks fine and still fetches over http. So
+// the style body is accumulated and replaced at the end tag, and this is what
+// says so.
+func TestChunkInvariance(t *testing.T) {
+	for _, doc := range corpus {
+		whole, _, err := upgradeString(doc)
 		if err != nil {
-			t.Fatalf("%s: %v", tt.to, err)
+			t.Fatalf("%q: %v", doc, err)
 		}
-		if out != tt.want {
-			t.Errorf("%s: %q, want %q", tt.to, out, tt.want)
+		for _, n := range []int{1, 2, 3, 5, 19} {
+			got, err := chunked(doc, n, newUpgrader())
+			if err != nil {
+				t.Fatalf("chunk %d of %q: %v", n, doc, err)
+			}
+			if got != whole {
+				t.Errorf("chunk size %d changed the output for %q:\n whole: %q\nchunks: %q",
+					n, doc, whole, got)
+			}
 		}
-		// The stray end tag is the whole problem, and it is right there in the output
-		// with nothing to mark it as a mistake.
-		if !strings.Contains(out, "</"+tt.to+">") {
-			t.Errorf("%s: no stray end tag in %q", tt.to, out)
-		}
-	}
-	// The tree each of those produces is measured in differential/rename_test.go, which is
-	// where x/net/html lives.
-}
-
-// TestAWidgetWhoseEndTagWasOmittedIsSkipped. A rename writes over the token that closed the
-// element, and where the source left this element's end tag out that token belongs to something
-// enclosing - so renaming the items of a list writes over the list's end tag.
-func TestAWidgetWhoseEndTagWasOmittedIsSkipped(t *testing.T) {
-	panels := Rule{Match: "li.panel", Name: "my-panel"}
-
-	const omitted = `<ul><li class="panel">a<li class="panel">b</ul>`
-	res := upgrade(t, omitted, panels)
-	if res.Doc != omitted {
-		t.Errorf("the document changed:\n%s\n%s", omitted, res.Doc)
-	}
-	if got := res.Counts["my-panel"].Skipped; got != 2 {
-		t.Errorf("%d skipped, want 2", got)
-	}
-	if got := res.Counts["my-panel"].Upgraded; got != 0 {
-		t.Errorf("%d upgraded", got)
-	}
-	if !strings.Contains(res.String(), "omitted their end tag") {
-		t.Errorf("the report does not say why:\n%s", res)
-	}
-
-	// With the end tags spelled out, the same widgets upgrade.
-	const spelled = `<ul><li class="panel">a</li><li class="panel">b</li></ul>`
-	res = upgrade(t, spelled, panels)
-	if got := res.Counts["my-panel"].Upgraded; got != 2 {
-		t.Errorf("%d upgraded, want 2", got)
-	}
-	if res.Counts["my-panel"].Skipped != 0 {
-		t.Errorf("%d skipped", res.Counts["my-panel"].Skipped)
-	}
-	if !strings.Contains(res.Doc, `<my-panel class="panel">a</my-panel>`) {
-		t.Errorf("%s", res.Doc)
-	}
-	if !strings.Contains(res.Doc, "</ul>") {
-		t.Errorf("the list lost its end tag:\n%s", res.Doc)
-	}
-
-	// A document with some of each: only the ones that closed themselves are upgraded.
-	const mixed = `<ul><li class="panel">a</li><li class="panel">b<li class="panel">c</li></ul>`
-	res = upgrade(t, mixed, panels)
-	c := res.Counts["my-panel"]
-	if c.Upgraded != 2 || c.Skipped != 1 {
-		t.Errorf("%d upgraded and %d skipped, want 2 and 1: %s", c.Upgraded, c.Skipped, res.Doc)
-	}
-	if !strings.Contains(res.Doc, "</ul>") {
-		t.Errorf("the list lost its end tag:\n%s", res.Doc)
 	}
 }
 
-// TestWhatRenamingAnOmittedEndTagWouldDo, which is what the skip is protecting. This is the
-// measurement, so the two-pass design is known to be worth its pass.
-func TestWhatRenamingAnOmittedEndTagWouldDo(t *testing.T) {
-	out, err := lolhtml.RewriteString(`<ul><li>a<li>b<li>c</ul>`,
-		lolhtml.OnElement("li", func(e *lolhtml.Element) error {
-			return e.SetTagName("my-item")
-		}))
+// TestCSSURLSplitAcrossEveryBoundary is the same claim made exhaustively for one
+// document: whichever byte the write boundary falls on, the URL is still found.
+func TestCSSURLSplitAcrossEveryBoundary(t *testing.T) {
+	doc := `<style>body{background:url(http://cdn.example/bg.png)}</style>`
+	want := `<style>body{background:url(https://cdn.example/bg.png)}</style>`
+
+	for split := 1; split < len(doc); split++ {
+		u := newUpgrader()
+		var out bytes.Buffer
+		opts := append(u.options(), lolhtml.WithEncoding("utf-8"))
+		w, err := lolhtml.NewWriter(&out, opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(doc[:split])); err != nil {
+			t.Fatalf("split %d: %v", split, err)
+		}
+		if _, err := w.Write([]byte(doc[split:])); err != nil {
+			t.Fatalf("split %d: %v", split, err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("split %d: %v", split, err)
+		}
+		if got := out.String(); got != want {
+			t.Errorf("split at %d:\n got: %s\nwant: %s", split, got, want)
+		}
+		if u.cssUpgraded != 1 {
+			t.Errorf("split at %d: cssUpgraded=%d, want 1", split, u.cssUpgraded)
+		}
+	}
+}
+
+// TestNavigationsAreNotUpgraded. Upgrading a link changes where the user goes;
+// upgrading a subresource changes how a byte is fetched. Only the second is safe
+// to do without asking.
+func TestNavigationsAreNotUpgraded(t *testing.T) {
+	in := `<a href="http://link.example/p">t</a><area href="http://link.example/q">`
+	got, u, err := upgradeString(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `<ul><my-item>a<my-item>b<my-item>c</my-item>`; out != want {
-		t.Errorf("got  %q\nwant %q", out, want)
+	if got != in {
+		t.Errorf("a navigation was rewritten:\n got: %s\nwant: %s", got, in)
 	}
-	if strings.Contains(out, "</ul>") {
-		t.Errorf("the list end tag survived: %q", out)
-	}
-
-	// The outermost rename wins, which distinct names show.
-	n := 0
-	out, err = lolhtml.RewriteString(`<ul><li>a<li>b<li>c</ul>`,
-		lolhtml.OnElement("li", func(e *lolhtml.Element) error {
-			n++
-			return e.SetTagName("item-" + string(rune('0'+n)))
-		}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasSuffix(out, "</item-1>") {
-		t.Errorf("%q does not end with the outermost item's name", out)
+	if u.navigations != 2 {
+		t.Errorf("navigations=%d, want 2", u.navigations)
 	}
 }
 
-// TestTheStateMovesAndTheStylingStays, since a class attribute is a list and the state tokens
-// are only some of it.
-func TestTheStateMovesAndTheStylingStays(t *testing.T) {
-	rule := Rule{
-		Match:       "div.tabs",
-		Name:        "my-tabs",
-		Attrs:       map[string]string{"data-active": "active", "data-orient": "orientation"},
-		DropClasses: []string{"tabs", "js-tabs"},
-	}
-	res := upgrade(t, `<div class="tabs widget js-tabs dark" data-active="2" `+
-		`data-orient="v" id="t1">x</div>`, rule)
-	doc := res.Doc
-	for _, want := range []string{
-		`<my-tabs`, `class="widget dark"`, `active="2"`, `orientation="v"`, `id="t1"`,
-		`</my-tabs>`,
+// TestHostsThatCannotBeUpgraded: a private address or a bare hostname usually
+// has no certificate, so upgrading it turns a working page into a broken one.
+func TestHostsThatCannotBeUpgraded(t *testing.T) {
+	for _, tt := range []struct{ host, reason string }{
+		{"localhost", "localhost"},
+		{"api.localhost", "localhost"},
+		{"127.0.0.1", "private address"},
+		{"::1", "private address"},
+		{"10.1.2.3", "private address"},
+		{"192.168.0.1", "private address"},
+		{"172.16.0.1", "private address"},
+		{"169.254.1.1", "private address"},
+		{"8.8.8.8", "IP literal"},
+		{"intranet", "not a public hostname"},
+		{"cdn.example", ""},
+		{"a.b.c.example", ""},
 	} {
-		if !strings.Contains(doc, want) {
-			t.Errorf("the output does not contain %s:\n%s", want, doc)
+		u := newUpgrader()
+		if got := u.cannotUpgrade(tt.host); got != tt.reason {
+			t.Errorf("cannotUpgrade(%q) = %q, want %q", tt.host, got, tt.reason)
 		}
 	}
-	for _, unwanted := range []string{"data-active", "data-orient", "js-tabs", `class="tabs`} {
-		if strings.Contains(doc, unwanted) {
-			t.Errorf("the output still contains %s:\n%s", unwanted, doc)
-		}
-	}
-
-	// Every token dropped means the attribute goes rather than becoming empty.
-	res = upgrade(t, `<div class="tabs" data-active="1">x</div>`, rule)
-	if strings.Contains(res.Doc, "class=") {
-		t.Errorf("an empty class attribute was left behind:\n%s", res.Doc)
-	}
-
-	// An attribute the widget does not have is not invented.
-	res = upgrade(t, `<div class="tabs">x</div>`, rule)
-	if strings.Contains(res.Doc, "active") {
-		t.Errorf("a missing attribute was invented:\n%s", res.Doc)
-	}
 }
 
-// TestOnlyADirectChildBecomesASlot, since a part is a child of the widget and the same markup
-// deeper down belongs to something else.
-func TestOnlyADirectChildBecomesASlot(t *testing.T) {
-	res := upgrade(t, `<div class="tabs">`+
-		`<div class="tab-title">own</div>`+
-		`<div class="inner"><div class="tab-title">nested</div></div>`+
-		`</div>`)
-	if n := strings.Count(res.Doc, `slot="title"`); n != 1 {
-		t.Errorf("%d slots, want 1:\n%s", n, res.Doc)
-	}
-	if !strings.Contains(res.Doc, `<div class="tab-title" slot="title">own</div>`) {
-		t.Errorf("the direct child did not get the slot:\n%s", res.Doc)
-	}
-	if !strings.Contains(res.Doc, `<div class="tab-title">nested</div>`) {
-		t.Errorf("the nested one got a slot:\n%s", res.Doc)
-	}
-}
-
-// TestUpgradingTwiceChangesNothingTheSecondTime, because the selector no longer matches once the
-// element has been renamed - which is idempotence for free rather than by a guard.
-func TestUpgradingTwiceChangesNothingTheSecondTime(t *testing.T) {
-	first := upgrade(t, `<div class="tabs" data-active="2">`+
-		`<div class="tab-title">t</div></div>`)
-	second := upgrade(t, first.Doc)
-	if second.Doc != first.Doc {
-		t.Errorf("the second pass changed the document:\n%s\n%s", first.Doc, second.Doc)
-	}
-	if got := second.Total(func(c *Count) int { return c.Upgraded }); got != 0 {
-		t.Errorf("the second pass upgraded %d", got)
-	}
-}
-
-// TestARuleIsReadFromItsFlagForm, since the flag is the interface.
-func TestARuleIsReadFromItsFlagForm(t *testing.T) {
-	r, err := ParseRule("div.tabs=my-tabs,data-active:active,part=div.tab-title:title,drop=tabs")
+func TestSkipList(t *testing.T) {
+	in := `<img src="http://keep.example/x"><img src="http://go.example/y">`
+	got, u, err := upgradeString(in, func(u *upgrader) {
+		u.skip["keep.example"] = true
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Match != "div.tabs" || r.Name != "my-tabs" {
-		t.Errorf("%+v", r)
+	if !strings.Contains(got, `src="http://keep.example/x"`) {
+		t.Errorf("skipped host was upgraded: %s", got)
 	}
-	if r.Attrs["data-active"] != "active" {
-		t.Errorf("attrs %v", r.Attrs)
+	if !strings.Contains(got, `src="https://go.example/y"`) {
+		t.Errorf("other host was not upgraded: %s", got)
 	}
-	if r.Parts["div.tab-title"] != "title" {
-		t.Errorf("parts %v", r.Parts)
-	}
-	if len(r.DropClasses) != 1 || r.DropClasses[0] != "tabs" {
-		t.Errorf("drop %v", r.DropClasses)
-	}
-
-	for _, bad := range []string{"", "div.tabs", "div.tabs=my-tabs,noseparator",
-		"div.tabs=my-tabs,part=noslot"} {
-		if _, err := ParseRule(bad); err == nil {
-			t.Errorf("%q was accepted", bad)
-		}
-	}
-	if _, err := Upgrade(`<p>x</p>`, nil); err == nil {
-		t.Error("no rules was accepted")
+	if len(u.unupgradable) != 1 {
+		t.Errorf("unupgradable=%v, want one", u.unupgradable)
 	}
 }
 
-// TestADocumentWithNoWidgetsIsUnchanged, which is most of a page.
-func TestADocumentWithNoWidgetsIsUnchanged(t *testing.T) {
-	doc := `<main><p>text &amp; more</p><div class="other">x</div></main>`
-	res := upgrade(t, doc)
-	if res.Doc != doc {
-		t.Errorf("the document changed:\n%s\n%s", doc, res.Doc)
+// TestOnlyTheSchemeChanges: reserialising a URL would also normalise its path,
+// which is not this program's business and would break signed URLs.
+func TestOnlyTheSchemeChanges(t *testing.T) {
+	for _, in := range []string{
+		`<img src="http://cdn.example/a//b/../c?q=1&amp;r=2#frag">`,
+		`<img src="http://cdn.example/%2Fencoded">`,
+		`<img src="http://cdn.example:8080/p">`,
+		`<img src="http://user:pw@cdn.example/p">`,
+	} {
+		got, _, err := upgradeString(in)
+		if err != nil {
+			t.Fatalf("%s: %v", in, err)
+		}
+		want := strings.Replace(in, "http://", "https://", 1)
+		if got != want {
+			t.Errorf("\n got: %s\nwant: %s", got, want)
+		}
 	}
-	if len(res.Counts) != 0 {
-		t.Errorf("%d rules counted", len(res.Counts))
+}
+
+// TestCSSFormsAndCasing: url() is a case-insensitive token and takes three
+// quoting forms, and whitespace inside the parentheses is the document's.
+func TestCSSFormsAndCasing(t *testing.T) {
+	for _, tt := range []struct{ in, want string }{
+		{`url(http://x.example/a)`, `url(https://x.example/a)`},
+		{`URL(http://x.example/a)`, `URL(https://x.example/a)`},
+		{`Url( http://x.example/a )`, `Url( https://x.example/a )`},
+		{`url("http://x.example/a")`, `url("https://x.example/a")`},
+		{`url('http://x.example/a')`, `url('https://x.example/a')`},
+		{`url(  "http://x.example/a"  )`, `url(  "https://x.example/a"  )`},
+		{`url(https://x.example/a)`, `url(https://x.example/a)`},
+		{`url()`, `url()`},
+		{`url(`, `url(`},
+		{`no urls here`, `no urls here`},
+		{`url(http://a.example/1) url(http://b.example/2)`, `url(https://a.example/1) url(https://b.example/2)`},
+	} {
+		u := newUpgrader()
+		got, _ := u.upgradeCSS(tt.in)
+		if got != tt.want {
+			t.Errorf("upgradeCSS(%q)\n got: %s\nwant: %s", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestLegacyEncoding: handlers see UTF-8 whatever the document is, and the
+// output goes back in the document's encoding. A rewrite of a windows-1252 page
+// must not turn into UTF-8 halfway through.
+func TestLegacyEncoding(t *testing.T) {
+	// 0xE9 is é in windows-1252 and invalid alone in UTF-8.
+	in := "<p title=\"caf\xe9\"><img src=\"http://cdn.example/caf\xe9.png\"></p>"
+	var out bytes.Buffer
+	u := &upgrader{encoding: "windows-1252", skip: map[string]bool{}}
+	if err := u.run(strings.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+
+	got := out.Bytes()
+	if bytes.Contains(got, []byte{0xc3, 0xa9}) {
+		t.Errorf("output was re-encoded to UTF-8: % x", got)
+	}
+	if !bytes.Contains(got, []byte("https://cdn.example/caf\xe9.png")) {
+		t.Errorf("the URL was not upgraded in place: % x", got)
+	}
+	if n := bytes.Count(got, []byte{0xe9}); n != 2 {
+		t.Errorf("expected both 0xe9 bytes to survive, found %d: % x", n, got)
+	}
+}
+
+func TestUnknownEncodingIsReportedWithItsLabel(t *testing.T) {
+	u := &upgrader{encoding: "not-an-encoding", skip: map[string]bool{}}
+	err := u.run(strings.NewReader(`<p>x</p>`), &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "not-an-encoding") {
+		t.Errorf("error does not name the label: %v", err)
+	}
+}
+
+func TestIdempotent(t *testing.T) {
+	for _, doc := range corpus {
+		once, _, err := upgradeString(doc)
+		if err != nil {
+			t.Fatalf("%q: %v", doc, err)
+		}
+		twice, u, err := upgradeString(once)
+		if err != nil {
+			t.Fatalf("%q: %v", doc, err)
+		}
+		if twice != once {
+			t.Errorf("not idempotent for %q:\n once: %q\ntwice: %q", doc, once, twice)
+		}
+		if len(u.upgraded) != 0 {
+			t.Errorf("second pass of %q upgraded %v", doc, u.upgraded)
+		}
 	}
 }

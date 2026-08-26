@@ -1,58 +1,26 @@
-// Command upgrade turns legacy widget markup into web component markup: a container becomes a
-// custom element, the state it kept in classes and data attributes becomes properties, and the
-// parts it kept in nested divs become slots.
+// Command upgrade rewrites http:// subresources to https:// as a document
+// streams past, and reports what it changed and what it could not.
 //
-//	$ upgrade -rule 'div.tabs=my-tabs,data-active:active,part=div.tab-title:title' page.html
-//	3 widgets upgraded, 1 skipped
-//	  my-tabs        2 upgraded
-//	  my-accordion   1 upgraded, 1 skipped: its end tag was omitted
+//	upgrade < page.html > out.html
+//	upgrade -encoding windows-1252 -skip localhost,10.0.0.0/8 < legacy.html
 //
-// # Renaming is only safe into a container
+// It covers the three places a mixed-content URL hides: attributes, the style
+// attribute, and the body of a <style> element. The last one is why the CSS is
+// accumulated rather than rewritten chunk by chunk - a url(http://...) can
+// straddle any chunk boundary, and a per-chunk rewrite silently misses those.
 //
-// A rename writes the new name over the start tag and over the end tag, and whoever parses the
-// output applies the new name's content model to what is inside. The library documents what that
-// does to a table or a select. The void direction is worse, because there are four answers and
-// none of them is "the element, with its content". Measured against x/net/html on
-// <div class="w">x</div>:
-//
-//	renamed to   output                          the tree a parser builds
-//	br           <br class="w">x</br>            two br elements, x between them
-//	img hr       <img class="w">x</img>           one element, x its sibling
-//	input wbr    (the same shape)                 one element, x its sibling
-//	area
-//	col          <col class="w">x</col>          no element at all, only x
-//	meta         <meta class="w">x</meta>        the element in <head>, x in <body>
-//
-// br is the only end tag HTML treats as a start tag, so the stray </br> becomes a second
-// element: the rename duplicated the widget. A col outside a table is dropped, so the rename
-// deleted it. A meta belongs in the head, so the rename moved it there and left its content
-// behind. Nothing errors in any of the four.
-//
-// A custom element name always has a hyphen, and a hyphenated name is always an ordinary
-// container, so this program's targets are safe by construction. It refuses a target that is not
-// one anyway - a void name, a raw-text name, or a name with no hyphen - because the mistake is
-// available and silent.
-//
-// # An omitted end tag is a widget this cannot upgrade
-//
-// A rename writes over the token that closed the element, and where the source omitted the
-// element's own end tag that token belongs to something else: renaming the items of
-// <ul><li>a<li>b<li>c</ul> yields <ul><my-item>a<my-item>b<my-item>c</my-item>, where the </ul>
-// has become an </my-item> and the list never closes. The outermost rename wins, so with distinct
-// names the </ul> becomes </item-1>.
-//
-// Whether an element has its own end tag is knowable - the end-tag handler reports the tag that
-// closed it, and a name that differs means the source left this one out - but it is knowable too
-// late, because the rename has to happen at the start tag. So this is two passes: the first
-// records which candidates closed themselves, the second renames only those. The rest are counted
-// and reported, which is the honest answer rather than a corrupted list.
+// A navigation is not a subresource: an <a href="http://..."> is left alone,
+// because upgrading a link changes where the user goes rather than how a
+// resource is fetched. Those are reported separately.
 package main
 
 import (
-	"errors"
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -60,320 +28,306 @@ import (
 	lolhtml "github.com/JakeChampion/golol-html"
 )
 
-// voidNames are the elements that cannot hold content, so a rename into one changes what the
-// document means. The list is HTML's, and every entry is measured in the tests.
-var voidNames = map[string]bool{
-	"area": true, "base": true, "br": true, "col": true, "embed": true, "hr": true,
-	"img": true, "input": true, "link": true, "meta": true, "source": true,
-	"track": true, "wbr": true,
-}
-
-// rawTextNames hold text rather than markup, so a rename into one turns the widget's markup into
-// text - the other direction of the same hazard.
-var rawTextNames = map[string]bool{
-	"script": true, "style": true, "textarea": true, "title": true, "iframe": true,
-	"noembed": true, "noframes": true, "noscript": true, "plaintext": true, "xmp": true,
-}
-
-// Rule is one upgrade: which markup to match, what to call it, and what to carry across.
-type Rule struct {
-	// Match is the selector for the legacy container, and Name the custom element it
-	// becomes.
-	Match string
-	Name  string
-	// Attrs maps a legacy attribute name to the property name to give it.
-	Attrs map[string]string
-	// Parts maps a selector for a child to the slot name it should take.
-	Parts map[string]string
-	// DropClasses is the class tokens to remove, which are the ones that were state
-	// rather than styling.
-	DropClasses []string
-}
-
-// Validate refuses a target this cannot rename into. A custom element name is always a
-// container, which is what makes the rename safe; anything else has a content model of its own.
-func (r Rule) Validate() error {
-	switch {
-	case r.Match == "":
-		return errors.New("a rule needs a selector to match")
-	case r.Name == "":
-		return errors.New("a rule needs a name to rename to")
-	case voidNames[r.Name]:
-		return fmt.Errorf("%s cannot hold content, so renaming a container to it changes "+
-			"what the document means: see the package comment", r.Name)
-	case rawTextNames[r.Name]:
-		return fmt.Errorf("%s holds text rather than markup, so renaming a container to it "+
-			"turns the widget's markup into text", r.Name)
-	case !strings.Contains(r.Name, "-"):
-		return fmt.Errorf("%s is not a custom element name: it needs a hyphen, and without "+
-			"one it is a built-in whose content model may not be a container's", r.Name)
-	case r.Name[0] < 'a' || r.Name[0] > 'z':
-		return fmt.Errorf("%s does not start with a lower-case ASCII letter, so it is not a "+
-			"custom element name", r.Name)
-	}
-	return nil
-}
-
-// Count is what happened for one rule.
-type Count struct {
-	Name string
-	// Upgraded is how many widgets were renamed, and Skipped how many were left alone
-	// because the source omitted their end tag.
-	Upgraded int
-	Skipped  int
-}
-
-// Result is what a run did.
-type Result struct {
-	Doc    string
-	Counts map[string]*Count
-}
-
-func (r Result) Total(f func(*Count) int) int {
-	n := 0
-	for _, c := range r.Counts {
-		n += f(c)
-	}
-	return n
-}
-
-func (r Result) Names() []string {
-	out := make([]string, 0, len(r.Counts))
-	for name := range r.Counts {
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// closes is the first pass: which candidate elements the source closed itself. The key is the
-// element's start-tag offset, which is stable and unique within one document.
-func closes(doc string, rules []Rule) (map[int]bool, error) {
-	own := map[int]bool{}
-	var opts []lolhtml.Option
-	for _, rule := range rules {
-		opts = append(opts, lolhtml.OnElement(rule.Match, func(e *lolhtml.Element) error {
-			at := e.SourceLocation().Start
-			tag := e.TagName()
-			if !e.CanHaveContent() {
-				// Nothing to close, so nothing can be upgraded either.
-				return nil
-			}
-			return e.OnEndTag(func(t *lolhtml.EndTag) error {
-				// An end tag that names this element is this element's. A name
-				// that differs means the source left this one's out, and the
-				// token belongs to something enclosing.
-				if strings.EqualFold(t.Name(), tag) {
-					own[at] = true
-				}
-				return nil
-			})
-		}))
-	}
-	if _, err := lolhtml.RewriteString(doc, opts...); err != nil {
-		return nil, err
-	}
-	return own, nil
-}
-
-// Upgrade rewrites doc, renaming every match whose end tag the source spelled.
-func Upgrade(doc string, rules []Rule) (Result, error) {
-	res := Result{Counts: map[string]*Count{}}
-	if len(rules) == 0 {
-		return res, errors.New("upgrade: no rules")
-	}
-	for _, rule := range rules {
-		if err := rule.Validate(); err != nil {
-			return res, fmt.Errorf("upgrade: %w", err)
-		}
-	}
-
-	own, err := closes(doc, rules)
-	if err != nil {
-		return res, err
-	}
-
-	count := func(name string) *Count {
-		c, ok := res.Counts[name]
-		if !ok {
-			c = &Count{Name: name}
-			res.Counts[name] = c
-		}
-		return c
-	}
-
-	var opts []lolhtml.Option
-	for _, rule := range rules {
-		rule := rule
-		opts = append(opts, lolhtml.OnElement(rule.Match, func(e *lolhtml.Element) error {
-			c := count(rule.Name)
-			if !own[e.SourceLocation().Start] {
-				c.Skipped++
-				return nil
-			}
-			c.Upgraded++
-			return apply(e, rule)
-		}))
-		for sel, slot := range rule.Parts {
-			slot := slot
-			opts = append(opts, lolhtml.OnElement(rule.Match+" > "+sel,
-				func(e *lolhtml.Element) error {
-					return e.SetAttribute("slot", slot)
-				}))
-		}
-	}
-
-	out, err := lolhtml.RewriteString(doc, opts...)
-	if err != nil {
-		return res, err
-	}
-	res.Doc = out
-	return res, nil
-}
-
-// apply carries the state across and renames the element. The rename goes last, because the
-// attribute reads are about the legacy markup and the name is what stops it being legacy.
-func apply(e *lolhtml.Element, rule Rule) error {
-	for from, to := range rule.Attrs {
-		value, ok := e.Attribute(from)
-		if !ok {
-			continue
-		}
-		if err := e.RemoveAttribute(from); err != nil {
-			return err
-		}
-		if err := e.SetAttribute(to, value); err != nil {
-			return err
-		}
-	}
-
-	if len(rule.DropClasses) > 0 {
-		if class, ok := e.Attribute("class"); ok {
-			kept := drop(class, rule.DropClasses)
-			if kept == "" {
-				if err := e.RemoveAttribute("class"); err != nil {
-					return err
-				}
-			} else if err := e.SetAttribute("class", kept); err != nil {
-				return err
-			}
-		}
-	}
-
-	return e.SetTagName(rule.Name)
-}
-
-// drop removes the named tokens from a class attribute, keeping the rest in order. The value is
-// written back as tokens rather than edited as a string, because a class attribute is a list.
-func drop(class string, remove []string) string {
-	gone := map[string]bool{}
-	for _, r := range remove {
-		gone[r] = true
-	}
-	var kept []string
-	for _, token := range strings.Fields(class) {
-		if !gone[token] {
-			kept = append(kept, token)
-		}
-	}
-	return strings.Join(kept, " ")
-}
-
-func (r Result) String() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d widgets upgraded, %d skipped\n",
-		r.Total(func(c *Count) int { return c.Upgraded }),
-		r.Total(func(c *Count) int { return c.Skipped }))
-	for _, name := range r.Names() {
-		c := r.Counts[name]
-		line := fmt.Sprintf("%d upgraded", c.Upgraded)
-		if c.Skipped > 0 {
-			line += fmt.Sprintf(", %d skipped: the source omitted their end tag, and "+
-				"renaming one writes over an enclosing element's", c.Skipped)
-		}
-		fmt.Fprintf(&b, "  %-16s %s\n", name, line)
-	}
-	return b.String()
-}
-
-// ParseRule reads a rule from the flag form:
-//
-//	div.tabs=my-tabs,data-active:active,part=div.tab-title:title,drop=tabs
-func ParseRule(spec string) (Rule, error) {
-	fields := strings.Split(spec, ",")
-	match, name, ok := strings.Cut(fields[0], "=")
-	if !ok {
-		return Rule{}, fmt.Errorf("%q: want selector=name", fields[0])
-	}
-	r := Rule{Match: match, Name: name, Attrs: map[string]string{}, Parts: map[string]string{}}
-	for _, field := range fields[1:] {
-		switch {
-		case strings.HasPrefix(field, "part="):
-			sel, slot, ok := strings.Cut(strings.TrimPrefix(field, "part="), ":")
-			if !ok {
-				return Rule{}, fmt.Errorf("%q: want part=selector:slot", field)
-			}
-			r.Parts[sel] = slot
-		case strings.HasPrefix(field, "drop="):
-			r.DropClasses = append(r.DropClasses,
-				strings.Fields(strings.ReplaceAll(
-					strings.TrimPrefix(field, "drop="), ":", " "))...)
-		default:
-			from, to, ok := strings.Cut(field, ":")
-			if !ok {
-				return Rule{}, fmt.Errorf("%q: want attribute:property", field)
-			}
-			r.Attrs[from] = to
-		}
-	}
-	return r, nil
-}
-
-type ruleList []Rule
-
-func (l *ruleList) String() string { return "" }
-
-func (l *ruleList) Set(v string) error {
-	r, err := ParseRule(v)
-	if err != nil {
-		return err
-	}
-	*l = append(*l, r)
-	return nil
-}
-
 func main() {
-	var rules ruleList
-	flag.Var(&rules, "rule", "selector=name[,attr:prop][,part=sel:slot][,drop=class] - repeatable")
-	report := flag.Bool("report", false, "print the counts instead of the document")
+	encoding := flag.String("encoding", "utf-8", "document encoding, as a WHATWG label")
+	skip := flag.String("skip", "", "comma-separated hosts to leave on http")
+	meta := flag.Bool("meta", false, "inject an upgrade-insecure-requests meta into <head>")
 	flag.Parse()
 
-	var src io.Reader = os.Stdin
-	if flag.NArg() > 0 {
-		f, err := os.Open(flag.Arg(0))
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "upgrade:", err)
-			os.Exit(1)
+	u := &upgrader{encoding: *encoding, injectMeta: *meta, skip: map[string]bool{}}
+	for _, h := range strings.Split(*skip, ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			u.skip[strings.ToLower(h)] = true
 		}
-		defer f.Close()
-		src = f
 	}
-	// The whole document is read, because deciding which widgets closed themselves takes a
-	// pass of its own and the evidence is later than the first place it is needed.
-	doc, err := io.ReadAll(src)
-	if err != nil {
+
+	if err := u.run(os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "upgrade:", err)
 		os.Exit(1)
 	}
-
-	res, err := Upgrade(string(doc), rules)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	fmt.Fprint(os.Stderr, u.report())
+	if len(u.unupgradable) > 0 {
 		os.Exit(1)
 	}
-	if *report {
-		fmt.Print(res)
-		return
+}
+
+// subresourceAttrs are the attributes that cause a fetch. An anchor's href is
+// deliberately absent: see the package comment.
+var subresourceAttrs = []struct{ selector, attr string }{
+	{"img[src], script[src], iframe[src], embed[src], source[src], track[src], audio[src], video[src], input[src], frame[src]", "src"},
+	{`link[href]`, "href"},
+	{"object[data]", "data"},
+	{"video[poster]", "poster"},
+	{"form[action]", "action"},
+	{"button[formaction], input[formaction]", "formaction"},
+}
+
+type upgrader struct {
+	encoding   string
+	injectMeta bool
+	skip       map[string]bool
+
+	upgraded     map[string]int
+	unupgradable []string
+	navigations  int
+	cssUpgraded  int
+
+	// css accumulates the body of the <style> element currently open. A URL can
+	// straddle a chunk boundary, so the whole body is rewritten at the end tag
+	// rather than chunk by chunk.
+	css     strings.Builder
+	inStyle bool
+}
+
+func (u *upgrader) run(src io.Reader, dst io.Writer) error {
+	opts := append(u.options(), lolhtml.WithEncoding(u.encoding))
+	w, err := lolhtml.NewWriter(dst, opts...)
+	if err != nil {
+		return err
 	}
-	fmt.Print(res.Doc)
+	if _, err := io.Copy(w, src); err != nil {
+		w.Close()
+		return err
+	}
+	return w.Close()
+}
+
+func (u *upgrader) count(host string) {
+	if u.upgraded == nil {
+		u.upgraded = map[string]int{}
+	}
+	u.upgraded[host]++
+}
+
+func (u *upgrader) options() []lolhtml.Option {
+	opts := make([]lolhtml.Option, 0, len(subresourceAttrs)+5)
+
+	for _, sa := range subresourceAttrs {
+		sa := sa
+		opts = append(opts, lolhtml.OnElement(sa.selector, func(e *lolhtml.Element) error {
+			raw, ok := e.Attribute(sa.attr)
+			if !ok {
+				return nil
+			}
+			got, n := u.upgradeURL(raw)
+			if n == 0 {
+				return nil
+			}
+			return e.SetAttribute(sa.attr, got)
+		}))
+	}
+
+	opts = append(opts,
+		// A style attribute can hold url(), and it is an attribute rather than
+		// text, so it never arrives split.
+		lolhtml.OnElement("[style]", func(e *lolhtml.Element) error {
+			raw, ok := e.Attribute("style")
+			if !ok {
+				return nil
+			}
+			got, n := u.upgradeCSS(raw)
+			if n == 0 {
+				return nil
+			}
+			u.cssUpgraded += n
+			return e.SetAttribute("style", got)
+		}),
+
+		// A <style> body. Accumulated whole, replaced at the end tag.
+		lolhtml.OnElement("style", func(e *lolhtml.Element) error {
+			u.css.Reset()
+			u.inStyle = true
+			return e.OnEndTag(func(t *lolhtml.EndTag) error {
+				u.inStyle = false
+				got, n := u.upgradeCSS(u.css.String())
+				u.cssUpgraded += n
+				// Re-emitted unconditionally, even when nothing changed. The
+				// text handler has already removed every chunk, so returning
+				// early here would delete the stylesheet instead of leaving it
+				// alone - which is what an earlier version of this did, and
+				// only the idempotence test noticed.
+				//
+				// HTML, not Text: this is CSS going back into a raw text
+				// element, where escaping would corrupt it rather than protect
+				// anything. It is the document's own bytes with http: swapped
+				// for https:, so it introduces nothing new, and a "</style"
+				// could not have survived the parse to reach us.
+				return t.Before(got, lolhtml.HTML)
+			})
+		}),
+		lolhtml.OnText("style", func(t *lolhtml.TextChunk) error {
+			if !u.inStyle {
+				return nil
+			}
+			u.css.WriteString(t.Text())
+			// Removed here and re-emitted whole at the end tag, so the
+			// rewritten body replaces the original rather than joining it.
+			t.Remove()
+			return nil
+		}),
+
+		// Navigations are counted, not changed.
+		lolhtml.OnElement("a[href], area[href]", func(e *lolhtml.Element) error {
+			if href, ok := e.Attribute("href"); ok && isHTTP(href) {
+				u.navigations++
+			}
+			return nil
+		}),
+
+		lolhtml.OnElement("head", func(e *lolhtml.Element) error {
+			if !u.injectMeta {
+				return nil
+			}
+			return e.Prepend(
+				`<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">`,
+				lolhtml.HTML)
+		}),
+	)
+
+	return opts
+}
+
+// upgradeURL rewrites one http:// URL, reporting how many it changed so a caller
+// can tell "nothing to do" from "done".
+func (u *upgrader) upgradeURL(raw string) (string, int) {
+	if !isHTTP(raw) {
+		return raw, 0
+	}
+	p, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		u.unupgradable = append(u.unupgradable, raw+" (unparseable)")
+		return raw, 0
+	}
+	host := strings.ToLower(p.Hostname())
+	if reason := u.cannotUpgrade(host); reason != "" {
+		u.unupgradable = append(u.unupgradable, raw+" ("+reason+")")
+		return raw, 0
+	}
+	u.count(host)
+	// Only the scheme changes. Reserialising through url.String would also
+	// normalise the path, which is not this program's business.
+	return "https" + strings.TrimPrefix(strings.TrimSpace(raw), "http"), 1
+}
+
+// cannotUpgrade names the reason a host has to stay on http, or "" if it can be
+// upgraded. A private address or a bare hostname usually has no certificate, and
+// upgrading it turns a working page into a broken one.
+func (u *upgrader) cannotUpgrade(host string) string {
+	if u.skip[host] {
+		return "skipped by request"
+	}
+	if host == "" {
+		return "no host"
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return "localhost"
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+			return "private address"
+		}
+		return "IP literal"
+	}
+	if !strings.Contains(host, ".") {
+		return "not a public hostname"
+	}
+	return ""
+}
+
+// upgradeCSS rewrites http:// inside url() tokens. It walks the string rather
+// than using a regexp so that the whole file is not scanned twice and so the
+// count is exact.
+func (u *upgrader) upgradeCSS(css string) (string, int) {
+	var b strings.Builder
+	n := 0
+	for i := 0; i < len(css); {
+		j := indexFoldFrom(css, "url(", i)
+		if j < 0 {
+			b.WriteString(css[i:])
+			break
+		}
+		b.WriteString(css[i : j+4])
+		k := strings.IndexByte(css[j+4:], ')')
+		if k < 0 {
+			b.WriteString(css[j+4:])
+			break
+		}
+		inner := css[j+4 : j+4+k]
+		got, changed := u.upgradeQuoted(inner)
+		b.WriteString(got)
+		b.WriteByte(')')
+		n += changed
+		i = j + 4 + k + 1
+	}
+	return b.String(), n
+}
+
+// upgradeQuoted handles the three forms a url() token takes: bare, single
+// quoted, and double quoted.
+func (u *upgrader) upgradeQuoted(inner string) (string, int) {
+	body := strings.TrimSpace(inner)
+	if body == "" {
+		return inner, 0
+	}
+	// Whitespace inside the parentheses is preserved: the token is the
+	// document's, and this program changes a scheme and nothing else.
+	at := strings.Index(inner, body)
+	lead, tail := inner[:at], inner[at+len(body):]
+
+	quote := ""
+	if len(body) >= 2 && (body[0] == '"' || body[0] == '\'') && body[len(body)-1] == body[0] {
+		quote = string(body[0])
+		body = body[1 : len(body)-1]
+	}
+
+	got, n := u.upgradeURL(body)
+	return lead + quote + got + quote + tail, n
+}
+
+func isHTTP(s string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "http://")
+}
+
+// indexFoldFrom finds needle in s at or after start, case insensitively. CSS
+// keywords are case insensitive, so URL( and url( are the same token.
+func indexFoldFrom(s, needle string, start int) int {
+	if start >= len(s) {
+		return -1
+	}
+	i := strings.Index(strings.ToLower(s[start:]), needle)
+	if i < 0 {
+		return -1
+	}
+	return start + i
+}
+
+func (u *upgrader) report() string {
+	hosts := make([]string, 0, len(u.upgraded))
+	total := 0
+	for h, n := range u.upgraded {
+		hosts = append(hosts, fmt.Sprintf("%s=%d", h, n))
+		total += n
+	}
+	sort.Strings(hosts)
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "upgraded=%d css=%d navigations-left=%d unupgradable=%d\n",
+		total, u.cssUpgraded, u.navigations, len(u.unupgradable))
+	if len(hosts) > 0 {
+		fmt.Fprintf(&sb, "hosts: %s\n", strings.Join(hosts, " "))
+	}
+	for _, s := range u.unupgradable {
+		fmt.Fprintf(&sb, "left on http: %s\n", s)
+	}
+	return sb.String()
+}
+
+func upgradeString(in string, opts ...func(*upgrader)) (string, *upgrader, error) {
+	u := &upgrader{encoding: "utf-8", skip: map[string]bool{}}
+	for _, o := range opts {
+		o(u)
+	}
+	var out bytes.Buffer
+	err := u.run(strings.NewReader(in), &out)
+	return out.String(), u, err
 }
