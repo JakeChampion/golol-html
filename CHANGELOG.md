@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- `WithEncoding`: say that a byte-order mark is not sniffed either, and that it is
+  the one declaration which outranks the caller's. The option already says a
+  `<meta charset>` is never consulted, and that agrees with a browser, because a
+  `<meta>` ranks below a transport charset. A BOM ranks above it. Measured
+  against the sniffing algorithm in `golang.org/x/net/html/charset`: a UTF-8 BOM
+  answers "utf-8, certain" whether the declared label is `windows-1252`,
+  `shift_jis` or absent. Here the label wins regardless, so a proxy passing a
+  header charset to this option decodes differently from the browser it is
+  proxying for whenever the body has a mark - `\xef\xbb\xbf<p>café</p>` declared
+  windows-1252 gives handlers "ï»¿" and "cafÃ©" where a browser reads "café".
+  The mark is also reported as text, at 0..3, so anything accumulating text gets
+  a character the page never shows.
+
+- `examples/gip/bom`: the two lines that fix it - read the first three bytes,
+  prefer what they say over the declared label, and drop the mark from the text
+  while keeping it in the output, since removing those bytes would change what
+  the next consumer sniffs. It refuses UTF-16 rather than mangling it: the
+  rewriter cannot process markup that is not ASCII-compatible, and a text handler
+  turns the mark itself into U+FFFD.
+
 - Added `CheckComment` and `ErrCommentBreakout`, for text a caller is about to
   put inside a comment it assembled itself. `Comment.SetText` refuses text that
   would end the comment early and says there is no escaping that would work; a

@@ -713,6 +713,25 @@ func OnDocumentEnd(fn func(*DocumentEnd) error) Option {
 // and the label has to come from wherever the caller actually learned it - a
 // Content-Type header, a database column, a filename convention.
 //
+// A byte-order mark is not sniffed either, and it is the one that matters, because
+// it ranks the other way round. A <meta charset> ranks below a transport-level
+// charset, so taking the header's word for it agrees with a browser; a leading BOM
+// ranks above it. Measured against the sniffing algorithm in
+// golang.org/x/net/html/charset: a UTF-8 BOM gives "utf-8, certain" whether the
+// declared label is windows-1252, shift_jis or nothing at all, and a UTF-16 mark
+// gives utf-16le or utf-16be the same way. Here the label wins regardless. So a
+// proxy passing a header charset to this option decodes the body differently from
+// the browser it is proxying for, whenever the body has a mark - handed
+// "\xef\xbb\xbf<p>café</p>" as windows-1252, handlers are given "ï»¿" and
+// "cafÃ©" where the browser reads "café". Nothing errors, and with no text handler
+// the output is byte-identical either way, so only the handlers' view is wrong.
+//
+// The mark also arrives as text: the first chunk of that document is U+FEFF over
+// its own three bytes, so anything accumulating text gets a character the page
+// never shows. Both are two lines to fix in a caller - read the first three bytes,
+// prefer what they say, and drop the mark from the text - which is
+// examples/gip/bom.
+//
 // Getting it wrong is quiet, and how quiet depends on what is registered. The
 // strings handlers are given are wrong either way: the same bytes read as utf-8
 // and as windows-1252 give "café" and "cafÃ©" from one attribute. Whether the
