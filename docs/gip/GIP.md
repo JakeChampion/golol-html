@@ -276,6 +276,15 @@ nothing:
   bash 3.2, where `set -e` aborts on a non-final pipeline element even when the
   pipeline succeeds, so that step failed unconditionally on macOS while
   printing nothing. Use the assignment form the Makefile uses.
+- **`cp` into `examples/gip/<name>/` overwrites whatever is there, and the
+  test suite will not notice.** GIP 148 wrote its app to `examples/gip/upgrade`,
+  which had been taken since PR #13 by a mixed-content HTTPS upgrader. Both its
+  files were replaced, so its tests went with it, so CI was green and the PR
+  merged. 143 directories is more than anyone remembers. Phase 0 says to check
+  for duplicates and this is the check it means: `ls examples/gip/<name>` must
+  fail before you write there, and the name has to be about what the app does
+  rather than what it does it to - "upgrade" was already ambiguous between
+  upgrading a URL scheme and upgrading markup.
 - **The shell's working directory persists between commands, and a relative
   path written for the repository root then resolves somewhere else.** That has
   cost time twice: once on a `cd` into a subdirectory that broke the next

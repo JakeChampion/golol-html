@@ -213,6 +213,17 @@
   documentation says which of those applies where.
 
 ### Fixed
+- **`examples/gip/upgrade` was overwritten by another app and restored.** GIP 148
+  wrote its widget-modernising app to `examples/gip/upgrade`, a name taken since
+  PR #13 by the mixed-content HTTPS upgrader. `cp` replaced both files, including
+  the tests, so nothing failed and the PR merged green.
+
+  The HTTPS upgrader is back, unchanged, and the widget app is
+  `examples/gip/widgets`. The trap is in `docs/gip/GIP.md`: a name has to be
+  checked before it is written to, because 143 example directories is more than
+  anyone remembers, and a name should say what the app does rather than what it
+  does it to - "upgrade" was already ambiguous between a URL scheme and markup.
+
 - **`examples/gip/queue` reported a build share of 1.33, which cannot be.** The
   two-queue method runs the work pass and the overhead pass separately, and
   whichever goes second pays for the first one's rubbish - the work pass allocates
@@ -1314,7 +1325,7 @@
   order they were written.
 
 ### Testing
-- **`examples/gip/upgrade`: turn legacy widget markup into web component markup.**
+- **`examples/gip/widgets`: turn legacy widget markup into web component markup.**
   A container becomes a custom element, the state it kept in classes and data
   attributes becomes properties, and the parts it kept in nested divs become slots.
 

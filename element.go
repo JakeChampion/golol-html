@@ -153,7 +153,7 @@ func (e *Element) TagNamePreserveCase() string {
 // No error in any of this, and the output is exactly the markup that was asked for. So
 // a rename is safe when the new element accepts what the old one held, which is a
 // question about the two content models rather than about this method:
-// examples/gip/modernise renames only within that set, and examples/gip/upgrade
+// examples/gip/modernise renames only within that set, and examples/gip/widgets
 // refuses a target that is not a container. Measured in differential/rename_test.go.
 func (e *Element) SetTagName(name string) error {
 	p, err := e.live()
