@@ -105,6 +105,30 @@
   than the one I had. And its allocation comparison used twelve distinct keys, so
   it was measuring the fixed cost rather than the report; with 200,000 it is 19.2
   MB streamed against 40.1 MB built.
+- `IsRawText`: say what it is not the predicate for. It answers the insertion
+  question - can content written into this element end it - and the other
+  question those ten names come up in is whether character references decode,
+  where the answer is this list minus `textarea` and `title`. Getting that
+  backwards is silent both ways: unescaping a `<style>`'s content makes it say
+  something it does not say, and not unescaping a `<title>`'s loses the decoding
+  a parser performs. The NUL rule does key on the list exactly.
+
+- `differential`: sweep the four source-versus-parsed-text rules across all 144
+  element names in the HTML index, rather than the hand-written tables in
+  `preprocess_test.go` and `rawtext_test.go`. Those tables were right; what was
+  missing is that they are complete - the same gap that let the raw-text guard
+  ship covering four elements out of ten. CR and CRLF become LF in every
+  element with no exception; a NUL becomes U+FFFD in exactly the ten raw-text
+  elements and is dropped in the other 134; references decode in all but eight;
+  and one leading LF is dropped by `pre`, `listing` and `textarea` only, not by
+  `xmp`.
+
+- `examples/gip/texttruth`: compose those four rules into the conversion, so a
+  word counter or a search index can get what the page says from what the
+  rewriter reports. Checked end to end against `x/net/html`. Its own bug, caught
+  by its own test: an empty `<pre>` emits no text chunk, so the flag for "the
+  next text loses a newline" outlived the element and ate the newline after it -
+  `<pre></pre>\nx` said "x". It is cleared on the end tag now.
 
 ### Added
 - **`CheckRawText`, because the text paths cannot apply the breakout guard.**
