@@ -1356,11 +1356,15 @@
   are what a search will match. It adds nothing where the library is clearer:
   `li + li` says "Unsupported combinator `+`" and that needs no help.
 
-  Two of its own bugs, both found before landing: the comment marker was `#`, which
-  ate the `#id` selector and reported a shorter list than it was given; and the
-  timing assertions were unguarded, which on the Windows runner's 340µs tick would
-  have compared two figures reading zero. They are guarded on the measured tick now
-  and skipped out loud, per the rule in `docs/gip/GIP.md`.
+  Three of its own bugs. The comment marker was `#`, which ate the `#id` selector and
+  reported a shorter list than it was given. The timing assertions were unguarded,
+  which on the Windows runner's 340µs tick would have compared two figures reading
+  zero. And then, guarded on the tick and still gating a *ratio*, they failed on the
+  musl runner at 1.46x against a threshold of 1.5x - because there the fixed
+  per-selector cost is nine times larger and the superlinear part is proportionally
+  smaller. A threshold on that ratio is a threshold on the machine, which is what
+  `docs/gip/GIP.md` exists to stop, so the gate is the allocation count and the
+  durations are logged and compared nowhere.
 
 - **`examples/gip/doctypepick`: choose what a rewrite does from the document's
   doctype, and only from a doctype the document's own parser will honour.** B192 is

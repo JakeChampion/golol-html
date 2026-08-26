@@ -42,6 +42,12 @@
 // selectors: a stylesheet-coverage tool, a sanitiser with a per-element allowlist, a rule engine
 // fed from configuration.
 //
+// How superlinear depends on the machine, which is why the tests gate the allocation count and only
+// log the durations. On the project's musl runner the per-selector cost went from 6872ns at a
+// hundred selectors to 10063ns at two thousand - a factor of 1.46 rather than the 2.4 above -
+// because there the fixed cost per selector is nine times larger and dominates. The shape is the
+// same; the multiplier is the machine's.
+//
 // One consequence is this program's own shape. Validating a thousand selectors one at a time took
 // 1.55ms against 1.944ms for registering them together, so checking them separately is not a cost
 // paid for better errors - past that size it is cheaper outright.
