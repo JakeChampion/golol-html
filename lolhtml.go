@@ -1802,6 +1802,18 @@ func (ct ContentType) String() string {
 // SourceLocation is the half-open byte range a unit occupied in the input
 // document, counted from the first byte fed to the rewriter.
 //
+// Slicing your own input at these offsets while streaming takes one precaution:
+// retain from the end of the last unit you were told about, not from the last
+// point where nothing was pending. A start tag spans writes, and the handler for
+// it runs after its first bytes were already handed over - fed three bytes at a
+// time, the handler for `<div id=a>` at offset 0 fires while a caller that
+// dropped its buffer between units is holding input from offset 9, and the
+// element it is asked to slice begins before anything it kept. Tokens do not
+// overlap, so the end of the last reported unit is a safe floor, and retention
+// between units is then bounded by the largest single token rather than by
+// nothing. examples/gip/dupsection does this to copy a section without holding
+// the document.
+//
 // The bytes fed, before anything is decoded or transcoded. Under [WithEncoding]
 // the reported text of a unit is UTF-8 and the range is not: a text chunk reading
 // "café" in a windows-1252 document has a four-byte range, because that is what
