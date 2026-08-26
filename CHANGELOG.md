@@ -1325,6 +1325,36 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/gunzip`: rewrite a document that arrives gzipped, decompressing as
+  it goes.** B187 is the pair of things that go wrong.
+
+  A gzipped body is a size claim the sender controls twice, so the limit has to go
+  after the decompressor. Measured, 50991 compressed bytes expanding to 52428800:
+
+      no limit                        52428800 bytes reached the rewriter
+      io.LimitReader after gunzip      1048576 bytes, as asked
+      io.LimitReader before gunzip    52428800 bytes - the limit was never near
+
+  The last row is the natural mistake, because the thing being limited is called the
+  input and the input that arrived was the compressed one.
+
+  And a limit is silent unless asked to speak. `io.LimitReader` ends the stream at
+  the limit, which to everything downstream looks exactly like the document ending:
+  the copy succeeds, `Close` succeeds, and the output is half a page that nothing
+  complains about. Reading one byte past the limit is what separates a short
+  document from a truncated one.
+
+  A truncated stream can also deliver every byte. Cut at 90 per cent, the deflate
+  data is complete and only the trailer is missing - so the whole document arrived
+  and the checksum that would have vouched for it did not. The error is about
+  integrity rather than completeness, and it arrives after the bytes have been
+  written, which is why the program reports what it wrote alongside it.
+
+  One bug of my own, found by its own test: `parseSize` used `fmt.Sscanf("%d")`,
+  which stops at the first character it does not understand and reports success - so
+  `-limit 1x` meant one byte and `-limit 1.5m` meant one. It uses `strconv.ParseInt`
+  now, and the test rejects nine spellings rather than five.
+
 - **`examples/gip/gzipout`: rewrite into a gzip writer and check the round trip.**
   Two Closers in a chain, and B186 is the reason it is worth an example.
 
