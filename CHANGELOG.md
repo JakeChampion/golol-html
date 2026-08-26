@@ -1325,6 +1325,38 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/servertiming`: time a rewrite and write what it measured into the
+  document it rewrote.** A Server-Timing *header* would be better and is not
+  available: a header is sent before the body and the duration is known after it, so
+  the value goes in a comment at the document end - which is also the only position
+  left, since an insertion can only go where the rewriter has not been.
+
+  Two things it measures rather than assumes.
+
+  What timing costs, because the obvious worry is that instrumenting every handler
+  call swamps the work. It does not. Two clock reads against a handler call that is
+  a crossing into C, fastest of fifty runs on an M3 Pro:
+
+      page              plain      one clock read   a read per handler call
+      486 bytes         12.9µs     12.8µs           13.1µs
+      4806 bytes         105µs     105.9µs          110.6µs
+      49806 bytes      1.030ms     1.017ms          1.032ms
+
+  About six per cent at the middle size and inside the noise at the other two, with
+  no extra allocations per call. So per-handler timing is affordable, which matters
+  because the alternative - timing the whole rewrite and dividing - cannot tell a
+  slow selector from a slow document.
+
+  And whether the figure is a figure at all. The clock tick is measured and
+  reported, and a rewrite that did not last twenty of them gets a comment saying so
+  instead of a number - the lesson `examples/gip/queue` paid for, applied before it
+  bites rather than after.
+
+  B181 is the third thing: the comment does not always survive. It is swallowed by
+  the same truncated inputs as an element, and a document ending inside a comment
+  *merges* with it, so one comment comes out carrying both the page's text and the
+  marker. Counting comments says it arrived and so does searching for its text.
+
 - **`examples/gip/esi`: expand Edge Side Includes both ways and report where the
   two disagree.** `examples/gip/include` is the one to copy - it uses
   `WithESITags`, fetches in the handler rather than in the sink, and implements the
