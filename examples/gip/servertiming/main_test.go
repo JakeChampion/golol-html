@@ -79,26 +79,52 @@ func TestTheHandlerTimeIsInsideTheRewriteTime(t *testing.T) {
 		t.Errorf("%d calls", m.Calls)
 	}
 
-	// The per-call figure is only a figure where the clock can see a call, and a call is
-	// under a microsecond. On the project's Windows runner the tick is about 340µs and two
-	// hundred calls sum to zero, so what is asserted is that the program says which case it
-	// is in rather than that the number is positive.
+	// There are three states and the machine decides which one this run is in, so the
+	// assertion is that the comment matches the state rather than that any figure is
+	// positive. A handler call is under a microsecond and the Windows runner's tick is about
+	// 350µs, where a 200-paragraph rewrite is a dozen ticks and every call is invisible - so
+	// that machine is always in the first state here.
 	t.Logf("tick %v, rewrite %v, handlers %v over %d calls",
 		m.Tick, m.Rewrite, m.Handlers, m.Calls)
-	if m.CallsResolvable() {
+	comment, report := m.Comment(), m.String()
+	switch {
+	case !m.Resolvable():
+		// Nothing about duration can be said, so nothing is.
+		if !strings.Contains(comment, "not measured") {
+			t.Errorf("an unresolvable rewrite gave a figure: %s", comment)
+		}
+		if strings.Contains(comment, "dur=") {
+			t.Errorf("an unresolvable rewrite gave a duration: %s", comment)
+		}
+		if !strings.Contains(report, "too few to mean anything") {
+			t.Errorf("the report does not say so:\n%s", report)
+		}
+	case !m.CallsResolvable():
+		// The rewrite registered and the calls did not.
+		if !strings.Contains(comment, "rewrite;dur=") {
+			t.Errorf("a resolvable rewrite has no figure: %s", comment)
+		}
+		if !strings.Contains(comment, "below this clock") {
+			t.Errorf("the comment does not say the calls were unresolvable: %s", comment)
+		}
+		if strings.Contains(comment, "handlers;dur=") {
+			t.Errorf("the comment gave a handler figure anyway: %s", comment)
+		}
+		if !strings.Contains(report, "cannot resolve") {
+			t.Errorf("the report does not say so:\n%s", report)
+		}
+	default:
+		// Both registered.
 		if m.PerCall() <= 0 {
 			t.Errorf("a resolvable run has a per-call figure of %v", m.PerCall())
 		}
-		if !strings.Contains(m.Comment(), "handlers;dur=") {
-			t.Errorf("the comment has no handler figure: %s", m.Comment())
+		for _, want := range []string{"rewrite;dur=", "handlers;dur="} {
+			if !strings.Contains(comment, want) {
+				t.Errorf("the comment lacks %s: %s", want, comment)
+			}
 		}
-	} else {
-		if !strings.Contains(m.Comment(), "below this clock") {
-			t.Errorf("the comment does not say the calls were unresolvable: %s",
-				m.Comment())
-		}
-		if !strings.Contains(m.String(), "cannot resolve") {
-			t.Errorf("the report does not say so:\n%s", m)
+		if !strings.Contains(report, "per call") {
+			t.Errorf("the report has no per-call figure:\n%s", report)
 		}
 	}
 
@@ -111,11 +137,13 @@ func TestTheHandlerTimeIsInsideTheRewriteTime(t *testing.T) {
 	if strings.Contains(plain.Comment(), "handlers;") {
 		t.Errorf("the comment claims handler time: %s", plain.Comment())
 	}
-	if plain.Resolvable() && !strings.Contains(plain.Comment(), "rewrite;dur=") {
-		t.Errorf("a resolvable run has no rewrite figure: %s", plain.Comment())
+	if plain.Resolvable() != strings.Contains(plain.Comment(), "rewrite;dur=") {
+		t.Errorf("resolvable = %v but the comment is %s",
+			plain.Resolvable(), plain.Comment())
 	}
-	if !plain.Resolvable() && !strings.Contains(plain.Comment(), "not measured") {
-		t.Errorf("an unresolvable run gave a figure: %s", plain.Comment())
+	if plain.Resolvable() == strings.Contains(plain.Comment(), "not measured") {
+		t.Errorf("resolvable = %v but the comment is %s",
+			plain.Resolvable(), plain.Comment())
 	}
 }
 
@@ -176,6 +204,90 @@ func TestHandlerCallsBelowTheClockTickAreReportedAsSuch(t *testing.T) {
 	}
 	if got := fine.PerCall(); got != 800*time.Nanosecond {
 		t.Errorf("PerCall() = %v", got)
+	}
+}
+
+// TestTheThreeStatesAreAllReportedDifferently, deterministically, so the machine-dependent test
+// above is checking expectations that have themselves been checked. A handler call and a whole
+// rewrite are three orders of magnitude apart, so a clock can resolve neither, the rewrite only,
+// or both - and each has its own output.
+func TestTheThreeStatesAreAllReportedDifferently(t *testing.T) {
+	for _, tt := range []struct {
+		name              string
+		m                 Measurement
+		rewriteResolvable bool
+		callsResolvable   bool
+		inComment         []string
+		notInComment      []string
+		inReport          string
+	}{
+		{
+			name: "neither",
+			m: Measurement{Tick: 350 * time.Microsecond, Rewrite: 4 * time.Millisecond,
+				Calls: 200, Handlers: 0, PerHandler: true},
+			inComment:    []string{"not measured", "350µs"},
+			notInComment: []string{"dur=", "below this clock"},
+			inReport:     "too few to mean anything",
+		},
+		{
+			name: "the rewrite only",
+			m: Measurement{Tick: 350 * time.Microsecond, Rewrite: 20 * time.Millisecond,
+				Calls: 200, Handlers: 100 * time.Microsecond, PerHandler: true},
+			rewriteResolvable: true,
+			inComment:         []string{"rewrite;dur=20.000", "below this clock's 350µs tick"},
+			notInComment:      []string{"handlers;dur=", "not measured"},
+			inReport:          "cannot resolve",
+		},
+		{
+			name: "both",
+			m: Measurement{Tick: 41 * time.Nanosecond, Rewrite: time.Millisecond,
+				Calls: 200, Handlers: 160 * time.Microsecond, PerHandler: true},
+			rewriteResolvable: true,
+			callsResolvable:   true,
+			inComment:         []string{"rewrite;dur=1.000", `handlers;dur=0.160;desc="200 calls"`},
+			notInComment:      []string{"not measured", "below this clock"},
+			inReport:          "per call",
+		},
+	} {
+		if got := tt.m.Resolvable(); got != tt.rewriteResolvable {
+			t.Errorf("%s: Resolvable() = %v", tt.name, got)
+		}
+		if got := tt.m.CallsResolvable(); got != tt.callsResolvable {
+			t.Errorf("%s: CallsResolvable() = %v", tt.name, got)
+		}
+		comment := tt.m.Comment()
+		for _, want := range tt.inComment {
+			if !strings.Contains(comment, want) {
+				t.Errorf("%s: the comment lacks %q: %s", tt.name, want, comment)
+			}
+		}
+		for _, unwanted := range tt.notInComment {
+			if strings.Contains(comment, unwanted) {
+				t.Errorf("%s: the comment contains %q: %s", tt.name, unwanted, comment)
+			}
+		}
+		if !strings.Contains(tt.m.String(), tt.inReport) {
+			t.Errorf("%s: the report lacks %q:\n%s", tt.name, tt.inReport, tt.m)
+		}
+		// Whatever it says, it is a comment, so the document stays valid.
+		out, err := lolhtml.RewriteString(`<p>x</p>`,
+			lolhtml.OnDocumentEnd(func(d *lolhtml.DocumentEnd) error {
+				return d.Append(comment, lolhtml.HTML)
+			}))
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		n := 0
+		if _, err := lolhtml.RewriteString(out,
+			lolhtml.OnDocumentComment(func(*lolhtml.Comment) error {
+				n++
+				return nil
+			})); err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Errorf("%s: %d comments in %s", tt.name, n, out)
+		}
 	}
 }
 

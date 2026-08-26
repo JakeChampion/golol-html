@@ -39,10 +39,18 @@
 //
 // Affordable where it is possible at all, which is not everywhere. A handler call is under a
 // microsecond, and a clock that ticks more coarsely than that measures every call as zero: on the
-// project's Windows runner the tick is about 340µs, so two hundred calls summed to exactly zero.
-// That is not a small number and this does not print it as one - the comment says how many calls
-// there were and that the clock could not see them. The figure to trust on such a machine is the
-// whole-rewrite one, which is milliseconds.
+// project's Windows runner the tick is about 350µs, and two hundred calls there summed to zero in
+// one run and to 1.1 ticks in another. That is not a small number and this does not print it as
+// one - the comment says how many calls there were and that the clock could not see them.
+//
+// The same tick sets a floor under the whole-rewrite figure too. Twenty ticks of a 350µs clock is
+// 7ms, which is a rewrite of a few hundred kilobytes; below that there is nothing to report on
+// that machine, and the comment says so rather than rounding. So the three states this can be in
+// are all reachable and all reported:
+//
+//	the rewrite is unresolvable        no duration at all, and why
+//	the rewrite is, the calls are not  a rewrite figure and the call count
+//	both are                           both figures
 //
 // # A duration below the clock tick is not a measurement
 //
