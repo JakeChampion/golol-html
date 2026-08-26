@@ -263,79 +263,6 @@ func TestTheSameElementHasTheSameRangeInTwoPasses(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
-// TestAStrayEndTagIsNamedByNoHandler pins the paragraph that says the units do not tile the
-// document. Every handler the library has, registered on "*", and the four bytes of a `</p>`
-// with no `<p>` in front of it reach none of them - while the rewriter writes them out.
-func TestAStrayEndTagIsNamedByNoHandler(t *testing.T) {
-	for _, tt := range []struct {
-		doc     string
-		unnamed string
-	}{
-		{`<p>a</p></p>`, `</p>`},
-		{`</p>stray`, `</p>`},
-		{`<div></span></div>`, `</span>`},
-		{`</br>x`, `</br>`},
-		{`</img>x`, `</img>`},
-		{`</p class=x>y`, `</p class=x>`},
-		{`</>x`, `</>`},
-		{`<svg></circle></svg>`, `</circle>`},
-		{`<ul><li>a</li></ul></li>`, `</li>`},
-
-		// One space and it is a bogus comment instead, which a handler does see.
-		{`</ x>y`, ""},
-		{`<!doctype html><p>hi</p><!--c--><ul><li>a<li>b</ul>`, ""},
-	} {
-		var out bytes.Buffer
-		var covered []lolhtml.SourceLocation
-		note := func(l lolhtml.SourceLocation) {
-			if l.Start != l.End {
-				covered = append(covered, l)
-			}
-		}
-		w, err := lolhtml.NewWriter(&out,
-			lolhtml.OnDoctype(func(d *lolhtml.Doctype) error { note(d.SourceLocation()); return nil }),
-			lolhtml.OnDocumentComment(func(c *lolhtml.Comment) error { note(c.SourceLocation()); return nil }),
-			lolhtml.OnDocumentText(func(tc *lolhtml.TextChunk) error { note(tc.SourceLocation()); return nil }),
-			lolhtml.OnElement("*", func(e *lolhtml.Element) error {
-				note(e.SourceLocation())
-				if !e.CanHaveContent() {
-					return nil
-				}
-				return e.OnEndTag(func(et *lolhtml.EndTag) error { note(et.SourceLocation()); return nil })
-			}),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := w.Write([]byte(tt.doc)); err != nil {
-			t.Fatal(err)
-		}
-		if err := w.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if out.String() != tt.doc {
-			t.Errorf("%q: a pass with observers only emitted %q", tt.doc, out.String())
-		}
-
-		sort.Slice(covered, func(i, j int) bool { return covered[i].Start < covered[j].Start })
-		var gaps []string
-		pos := 0
-		for _, l := range covered {
-			if l.Start > pos {
-				gaps = append(gaps, tt.doc[pos:l.Start])
-			}
-			if l.End > pos {
-				pos = l.End
-			}
-		}
-		if pos < len(tt.doc) {
-			gaps = append(gaps, tt.doc[pos:])
-		}
-		if strings.Join(gaps, "|") != tt.unnamed {
-			t.Errorf("%q: unnamed %q, want %q", tt.doc, gaps, tt.unnamed)
-||||||| 4dd407e
-=======
 // TestATextChunksRangeMovesWithTheWritePattern pins the exception to the invariance the type
 // promises. The text is right at every write size; the range is not, and the recipe of slicing
 // the input at it fails with it.
@@ -473,7 +400,80 @@ func TestTheOtherUnitsRangesDoNotMoveWithTheWritePattern(t *testing.T) {
 			if got := report(size); got != want {
 				t.Errorf("%q size %d: %s, want %s", doc, size, got, want)
 			}
->>>>>>> origin/main
+		}
+	}
+}
+
+// TestAStrayEndTagIsNamedByNoHandler pins the paragraph that says the units do not tile the
+// document. Every handler the library has, registered on "*", and the four bytes of a `</p>`
+// with no `<p>` in front of it reach none of them - while the rewriter writes them out.
+func TestAStrayEndTagIsNamedByNoHandler(t *testing.T) {
+	for _, tt := range []struct {
+		doc     string
+		unnamed string
+	}{
+		{`<p>a</p></p>`, `</p>`},
+		{`</p>stray`, `</p>`},
+		{`<div></span></div>`, `</span>`},
+		{`</br>x`, `</br>`},
+		{`</img>x`, `</img>`},
+		{`</p class=x>y`, `</p class=x>`},
+		{`</>x`, `</>`},
+		{`<svg></circle></svg>`, `</circle>`},
+		{`<ul><li>a</li></ul></li>`, `</li>`},
+
+		// One space and it is a bogus comment instead, which a handler does see.
+		{`</ x>y`, ""},
+		{`<!doctype html><p>hi</p><!--c--><ul><li>a<li>b</ul>`, ""},
+	} {
+		var out bytes.Buffer
+		var covered []lolhtml.SourceLocation
+		note := func(l lolhtml.SourceLocation) {
+			if l.Start != l.End {
+				covered = append(covered, l)
+			}
+		}
+		w, err := lolhtml.NewWriter(&out,
+			lolhtml.OnDoctype(func(d *lolhtml.Doctype) error { note(d.SourceLocation()); return nil }),
+			lolhtml.OnDocumentComment(func(c *lolhtml.Comment) error { note(c.SourceLocation()); return nil }),
+			lolhtml.OnDocumentText(func(tc *lolhtml.TextChunk) error { note(tc.SourceLocation()); return nil }),
+			lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+				note(e.SourceLocation())
+				if !e.CanHaveContent() {
+					return nil
+				}
+				return e.OnEndTag(func(et *lolhtml.EndTag) error { note(et.SourceLocation()); return nil })
+			}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(tt.doc)); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if out.String() != tt.doc {
+			t.Errorf("%q: a pass with observers only emitted %q", tt.doc, out.String())
+		}
+
+		sort.Slice(covered, func(i, j int) bool { return covered[i].Start < covered[j].Start })
+		var gaps []string
+		pos := 0
+		for _, l := range covered {
+			if l.Start > pos {
+				gaps = append(gaps, tt.doc[pos:l.Start])
+			}
+			if l.End > pos {
+				pos = l.End
+			}
+		}
+		if pos < len(tt.doc) {
+			gaps = append(gaps, tt.doc[pos:])
+		}
+		if strings.Join(gaps, "|") != tt.unnamed {
+			t.Errorf("%q: unnamed %q, want %q", tt.doc, gaps, tt.unnamed)
 		}
 	}
 }
