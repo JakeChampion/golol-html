@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Added `DecodesCharacterReferences`, the predicate for the reading question.
+  `IsRawText` answers the writing one - can content written into this element end
+  it - and the same ten names come up in a second question with a different
+  answer: whether a parser decodes character references in the content. That set
+  is `IsRawText` minus `textarea` and `title`, the escapable raw-text pair.
+
+  Getting it backwards is silent in both directions: unescaping a `<style>`'s
+  content makes it say something it does not say, and not unescaping a
+  `<title>`'s loses the decoding a parser performs. Until now a caller reading
+  text had to copy those two names out of a doc comment - which `IsRawText`'s own
+  documentation argues against, on the grounds that a copied list falls behind
+  the parser silently. `examples/gip/texttruth` and the differential suite both
+  carried that literal; they ask the library now, and the differential tests
+  still ask the parser about every element name in the HTML index, so the
+  library's answer is measured rather than trusted.
+
 - Added `CheckComment` and `ErrCommentBreakout`, for text a caller is about to
   put inside a comment it assembled itself. `Comment.SetText` refuses text that
   would end the comment early and says there is no escaping that would work; a
