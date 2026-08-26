@@ -1845,6 +1845,24 @@ func (ct ContentType) String() string {
 //	a doctype      the whole declaration
 //	a text chunk   the bytes of that chunk
 //
+// The units do not tile the document. A stray end tag - one with no start tag to
+// pair with - reaches no handler at all: an end tag is observable only through
+// [Element.OnEndTag], and there is no element to register that on. Its bytes are
+// still written to the output. So `<p>a</p></p>` reports ranges covering its first
+// eight bytes and nothing for the last four, and a tool that rebuilds a document
+// from the ranges it was told about has to treat the gaps between them as content
+// rather than as an impossibility. Measured for `</p>`, `</span>`, `</br>`,
+// `</img>`, `</p class=x>`, `</>` and `</circle>`, with the document written in one
+// call. One space decides it: `</ x>` is not a tag but a bogus comment, so a
+// comment handler does see that.
+//
+// A range can be empty. The final chunk of a text node carries no bytes, and its
+// range is the zero-width point where the node ended - which is the way to find a
+// text node's extent, from the first chunk's Start to the last chunk's End. A
+// replacement character the rewriter produced for a byte that could not be decoded
+// can have one too: fed "caf\xe9" as UTF-8, the chunk reporting U+FFFD stands at a
+// point rather than over any bytes. So the length of the reported text and the
+// length of the range are unrelated numbers.
 // A range can be empty. The final chunk of a text node has a range that is the
 // zero-width point where the node ended - which is the way to find a text node's
 // extent, from the first chunk's Start to the last chunk's End. Its range, not its
