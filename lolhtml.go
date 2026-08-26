@@ -1827,8 +1827,9 @@ func (ct ContentType) String() string {
 // eight bytes and nothing for the last four, and a tool that rebuilds a document
 // from the ranges it was told about has to treat the gaps between them as content
 // rather than as an impossibility. Measured for `</p>`, `</span>`, `</br>`,
-// `</img>`, `</p class=x>`, `</>` and `</circle>`. One space decides it: `</ x>` is
-// not a tag but a bogus comment, so a comment handler does see that.
+// `</img>`, `</p class=x>`, `</>` and `</circle>`, with the document written in one
+// call. One space decides it: `</ x>` is not a tag but a bogus comment, so a
+// comment handler does see that.
 //
 // A range can be empty. The final chunk of a text node carries no bytes, and its
 // range is the zero-width point where the node ended - which is the way to find a

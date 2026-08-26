@@ -12,8 +12,8 @@
   reported drops them: `<p>a</p></p><b>c</b>` comes back as
   `<p>a</p><b>c</b>`. Measured for `</p>`, `</span>`, `</br>`, `</img>`,
   `</p class=x>`, `</>`, `</circle>` and a trailing `</li>`; with every handler
-  the library has registered on `*`, those are the only unnamed bytes in the
-  documents measured. One space decides it - `</ x>` is a bogus comment, not a
+  the library has registered on `*` and the document written in one call, those
+  are the only unnamed bytes in the documents measured. One space decides it - `</ x>` is a bogus comment, not a
   tag, and a comment handler sees it.
 
 - `examples/gip/locate`: grep for HTML - report every match's source location

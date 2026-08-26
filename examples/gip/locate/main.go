@@ -19,6 +19,10 @@
 // reconstructs a document from the spans it was told about silently drops them. Measured for
 // `</p>`, `</span>`, `</br>`, `</img>`, `</p class=x>`, `</>` and `</circle>`: all invisible.
 //
+// Cover writes the document in one call, which is the scope of the claim that stray end tags are
+// the only unnamed bytes. What a text chunk's range covers does depend on the write pattern, and
+// that is a separate question from this one.
+//
 // This follows from B76 - end tags are observable only through Element.OnEndTag, so an end tag
 // with no start tag has no element to hang off - but the consequence is sharper than the cause:
 // it is not that a stray end tag is awkward to observe, it is that no handler exists that ever
