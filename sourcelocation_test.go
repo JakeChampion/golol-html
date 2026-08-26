@@ -9,6 +9,7 @@ package lolhtml_test
 // is the rest of what the type promises.
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"testing"
@@ -258,5 +259,146 @@ func TestTheSameElementHasTheSameRangeInTwoPasses(t *testing.T) {
 	}
 	if seen != 3 || strings.Count(out, `data-pass="2"`) != 3 {
 		t.Errorf("matched %d of 3: %q", seen, out)
+	}
+}
+
+// TestATextChunksRangeMovesWithTheWritePattern pins the exception to the invariance the type
+// promises. The text is right at every write size; the range is not, and the recipe of slicing
+// the input at it fails with it.
+func TestATextChunksRangeMovesWithTheWritePattern(t *testing.T) {
+	const doc = `<p>a€b</p>` // twelve bytes, one three-byte character
+
+	type chunk struct {
+		text  string
+		loc   lolhtml.SourceLocation
+		slice string
+	}
+	report := func(size int) []chunk {
+		var got []chunk
+		var out bytes.Buffer
+		w, err := lolhtml.NewWriter(&out, lolhtml.OnDocumentText(func(tc *lolhtml.TextChunk) error {
+			l := tc.SourceLocation()
+			if l.Start == l.End && tc.Text() == "" {
+				return nil
+			}
+			got = append(got, chunk{tc.Text(), l, doc[l.Start:l.End]})
+			return nil
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < len(doc); i += size {
+			end := min(i+size, len(doc))
+			if _, err := w.Write([]byte(doc[i:end])); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	whole := report(len(doc) + 1)
+	if len(whole) != 1 || whole[0].loc != (lolhtml.SourceLocation{Start: 3, End: 8}) ||
+		whole[0].slice != whole[0].text {
+		t.Fatalf("fed in one call: %v, want one chunk 3..8 whose slice is its text", whole)
+	}
+
+	var sliceWrong, unnamed []int
+	for size := 1; size <= len(doc); size++ {
+		got := report(size)
+		covered := map[int]bool{}
+		bad := false
+		for _, c := range got {
+			if c.slice != c.text {
+				bad = true
+			}
+			for i := c.loc.Start; i < c.loc.End; i++ {
+				covered[i] = true
+			}
+		}
+		if bad {
+			sliceWrong = append(sliceWrong, size)
+		}
+		for i := 3; i < 8; i++ { // the text bytes of this document
+			if !covered[i] {
+				unnamed = append(unnamed, size)
+				break
+			}
+		}
+		t.Logf("size %2d: %v", size, got)
+	}
+
+	// Which sizes fail is lol-html's buffering, and pinning that list would break on a change
+	// that is not a regression. That some size fails is the documented claim.
+	if len(sliceWrong) == 0 {
+		t.Error("slicing the input at a text chunk's range gave the chunk's text at every " +
+			"write size, so the exception documented on SourceLocation is not real")
+	}
+	if len(unnamed) == 0 {
+		t.Error("every text byte was named by some chunk at every write size, so the range " +
+			"union is write-invariant after all")
+	}
+	t.Logf("the slice is not the text at sizes %v; text bytes named by nothing at sizes %v",
+		sliceWrong, unnamed)
+}
+
+// TestTheOtherUnitsRangesDoNotMoveWithTheWritePattern is the other side of it, and the reason
+// the documented workaround works: everything except a text chunk reports the same range however
+// the input arrived, multi-byte content included.
+func TestTheOtherUnitsRangesDoNotMoveWithTheWritePattern(t *testing.T) {
+	for _, doc := range []string{
+		`<p class="é">x</p>`,
+		`<!--é-->`,
+		`<p title="€"/>`,
+		`<!doctype html><p>é</p><!--ü-->`,
+		`<script>if (a<b) {} // é</script>`,
+		`<ul><li>€<li>b</ul>`,
+	} {
+		report := func(size int) string {
+			var got []string
+			var out bytes.Buffer
+			note := func(kind string, l lolhtml.SourceLocation) {
+				got = append(got, fmt.Sprintf("%s %v", kind, l))
+			}
+			w, err := lolhtml.NewWriter(&out,
+				lolhtml.OnDoctype(func(d *lolhtml.Doctype) error { note("doctype", d.SourceLocation()); return nil }),
+				lolhtml.OnDocumentComment(func(c *lolhtml.Comment) error { note("comment", c.SourceLocation()); return nil }),
+				lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+					note("element", e.SourceLocation())
+					if !e.CanHaveContent() {
+						return nil
+					}
+					return e.OnEndTag(func(et *lolhtml.EndTag) error {
+						note("end", et.SourceLocation())
+						return nil
+					})
+				}),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < len(doc); i += size {
+				end := min(i+size, len(doc))
+				if _, err := w.Write([]byte(doc[i:end])); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			return strings.Join(got, " ")
+		}
+
+		want := report(len(doc) + 1)
+		if want == "" {
+			t.Fatalf("%q: nothing reported", doc)
+		}
+		for size := 1; size <= len(doc); size++ {
+			if got := report(size); got != want {
+				t.Errorf("%q size %d: %s, want %s", doc, size, got, want)
+			}
+		}
 	}
 }
