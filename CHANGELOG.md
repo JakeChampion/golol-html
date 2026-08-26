@@ -1325,6 +1325,35 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/stopafter`: rewrite until a marker and copy everything after it.**
+  The mechanism is B189's, from `examples/gip/headonly`; what is new is that the
+  marker can be any kind of unit, and B190 - where the rewrite resumes is not the
+  same for all of them.
+
+      marker            the prefix ends            resume at
+      a comment         before the comment         the comment's Start
+      an element        before its start tag       the element's Start
+      an end tag        before the end tag         the end tag's Start
+      text              before that chunk          the last chunk's End
+
+  The first three read alike: the stopping unit was not emitted, so resume where it
+  begins. Text is the exception, because a node arrives in several chunks and the
+  earlier ones are written before the marker is recognised - so the prefix holds the
+  whole node and the resume point is its end. Measured, on
+  `<p>before STOP here</p><p>after</p>`: resuming at 3 emits the text twice,
+  resuming at 19 is exact. The test asserts the duplication as well as the fix, so
+  the choice is measured rather than asserted.
+
+  And a marker inside a raw-text element is not a marker - for a comment handler.
+  Measured for script, style, textarea and title: the bytes of a comment inside one
+  are that element's text, so nothing stops. The text path does not get that for
+  free, which was a bug in my first version: a document-level text handler is handed
+  raw text like any other text, so a bare marker inside a script stopped the
+  rewrite. The fix is the handler order - a selector-associated text handler runs
+  before the document-level one for the same chunk - so a handler on those four
+  marks the chunk before the general one decides about it, and the report counts the
+  sightings that do not count.
+
 - **`examples/gip/headonly`: rewrite the head of a document and pass the body
   through without parsing it.** A rewriter runs to Close and cannot be switched off
   part way, so "only the head" looks like it has to mean handlers that check a flag
