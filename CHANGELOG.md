@@ -1325,6 +1325,47 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/selectorcheck`: report every selector a rewrite cannot use, before
+  it starts.** B193, in two halves.
+
+  `NewWriter` returns on the first rejection, so a list with five bad selectors names
+  one - fix it and the next appears, five round trips for five mistakes. Checking
+  each selector on its own names them all, and it is the only way to.
+
+  It is also cheaper at scale, because registering selectors together is superlinear
+  in time. Fastest of ten on an M3 Pro:
+
+      selectors      build   µs per selector   allocations   per selector
+             10        8µs             0.700            73           7.30
+            100       81µs             0.810           571           5.71
+            500      615µs             1.228          2734           5.47
+           1000    1.956ms             1.956          5408           5.41
+           2000    5.896ms             2.948         10718           5.36
+           4000   23.702ms             5.926         21524           5.38
+
+  Four times the selectors for twelve times the time, while allocations stay at about
+  5.4 each, flat from five hundred up. B172 recorded the allocation figure; this is
+  the other half, and it matters for the programs that have thousands of selectors: a
+  stylesheet-coverage tool, a sanitiser with a per-element allowlist, a rule engine
+  fed from configuration. Validating a thousand selectors one at a time took 1.55ms
+  against 1.944ms together.
+
+  The program also adds a line where the library's message misleads - `:not(div p)`
+  is rejected for the combinator inside the parentheses and reported as an
+  unsupported pseudo-class, per B175 - while keeping the library's own words, which
+  are what a search will match. It adds nothing where the library is clearer:
+  `li + li` says "Unsupported combinator `+`" and that needs no help.
+
+  Three of its own bugs. The comment marker was `#`, which ate the `#id` selector and
+  reported a shorter list than it was given. The timing assertions were unguarded,
+  which on the Windows runner's 340µs tick would have compared two figures reading
+  zero. And then, guarded on the tick and still gating a *ratio*, they failed on the
+  musl runner at 1.46x against a threshold of 1.5x - because there the fixed
+  per-selector cost is nine times larger and the superlinear part is proportionally
+  smaller. A threshold on that ratio is a threshold on the machine, which is what
+  `docs/gip/GIP.md` exists to stop, so the gate is the allocation count and the
+  durations are logged and compared nowhere.
+
 - **`examples/gip/doctypepick`: choose what a rewrite does from the document's
   doctype, and only from a doctype the document's own parser will honour.** B192 is
   why the second half of that sentence is the turn.
