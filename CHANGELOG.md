@@ -1325,6 +1325,31 @@
   order they were written.
 
 ### Testing
+- **`examples/gip/buildinfo`: stamp a page with the commit that produced it, and
+  say where the stamp went.** The value is known before the rewrite starts, which
+  is the opposite of `examples/gip/servertiming` and makes the top of the document
+  available. Available is not guaranteed, and the difference is the program.
+
+  A rewriter reports the elements the source contains, not the ones a tree builder
+  adds. The tree always holds `html`, `head` and `body`; the source usually does
+  not, so `<!doctype html><p>x</p>` reports one element and a rewrite anchored on
+  `head` does nothing at all. `Doctype` cannot help either - it has `Remove` and no
+  insertions. So the anchor is the first element of any kind, and the document end
+  when there are none: empty, only text, only a comment, or only a doctype.
+
+  The other half is a trade worth stating. At the first element, "is this page
+  already stamped" is not knowable - an existing stamp could be anywhere later in
+  the document - so `-at=top` is not idempotent, and running it twice gives two
+  stamps and a report that says it noticed, too late. At the document end every
+  comment has gone past, so `-at=end` is idempotent and puts the stamp where a human
+  reading source and a byte-range fetch of the first kilobyte will both miss it.
+  Six passes of `-at=end` leave one stamp; two passes of `-at=top` leave two.
+
+  B182 settles the question the top placement raises: a comment between the doctype
+  and the first element does not stop the doctype counting. Measured against
+  x/net/html, one comment before it, two, a comment after it and whitespace before
+  it are all standards mode; no doctype and a legacy doctype are quirks.
+
 - **`examples/gip/servertiming`: time a rewrite and write what it measured into the
   document it rewrote.** A Server-Timing *header* would be better and is not
   available: a header is sent before the body and the duration is known after it, so
