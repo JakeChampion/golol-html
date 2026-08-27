@@ -35,17 +35,16 @@ jobs:
           # unchanged and the next night's log is what to read. timeout-minutes
           # bounds the damage if it turns out to be slower.
           - target: FuzzRewrite
-            asan: false
             rate: 1700000
-          - target: FuzzOperations
-            asan: false
-            rate: 2000000
           # FuzzOperations is the one that drives the cgo boundary, so it is
-          # also the one worth the cost of running under AddressSanitizer.
-          # Roughly 12x slower: 2.6M executions a night against 31.8M without.
+          # the one whose inputs are worth the cost of AddressSanitizer. That
+          # used to be a third row fuzzing it under -asan at 170k executions a
+          # minute against 2M without; it is now the replay step below, which
+          # puts the same inputs under ASan without the engine. See there for
+          # why the engine is what could not stay.
           - target: FuzzOperations
-            asan: true
-            rate: 170000
+            rate: 2000000
+            replay: true
     runs-on: ubuntu-24.04
     # Counted rather than timed, so duration now depends on runner speed. This
     # bounds a pathologically slow runner instead of letting it burn six hours.
@@ -68,17 +67,17 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ steps.cache-dir.outputs.dir }}
-          key: fuzz-${{ matrix.target }}-asan${{ matrix.asan }}-${{ github.run_id }}
+          # The prefix is the target alone. It still matches the keys written
+          # while the sanitizer was a matrix dimension - fuzz-<target>-asanfalse-
+          # and -asantrue- - so the corpora built up to here are restored rather
+          # than abandoned, and the most recent of them wins.
+          key: fuzz-${{ matrix.target }}-${{ github.run_id }}
           restore-keys: |
-            fuzz-${{ matrix.target }}-asan${{ matrix.asan }}-
+            fuzz-${{ matrix.target }}-
 
       - name: Fuzz
         run: |
           minutes="${{ inputs.minutes || '15' }}"
-          flags=""
-          if [ "${{ matrix.asan }}" = "true" ]; then
-            flags="-asan"
-          fi
 
           # Counted, not timed. A duration gives the fuzzing coordinator a
           # deadline context; when it expires, workers are mid-RPC and the
@@ -95,7 +94,7 @@ jobs:
           echo "fuzzing ${{ matrix.target }} for ${execs} executions (~${minutes}m)"
 
           set +e
-          go test $flags -run '^$' -fuzz '^${{ matrix.target }}$' \
+          go test -run '^$' -fuzz '^${{ matrix.target }}$' \
             -fuzztime "${execs}x" . 2>&1 | tee fuzz.log
           rc=${PIPESTATUS[0]}
           set -e
@@ -132,8 +131,69 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v5
         with:
-          name: crasher-${{ matrix.target }}-asan${{ matrix.asan }}
+          name: crasher-${{ matrix.target }}
           path: testdata/fuzz/
+          if-no-files-found: ignore
+
+      # AddressSanitizer over every input the search found, with the search
+      # itself never under it. `go test -asan -fuzz` is the combination that
+      # produced go.dev/issue/72766 - a global-buffer-overflow reported zero
+      # bytes after internal/fuzz._counters, the engine's own coverage counters,
+      # which the linker moves and ASan then poisons a redzone across - and the
+      # intermittent "sanitizer_allocator_secondary.h:297 IsAligned(p,
+      # page_size_)" check failure in #327. Both are the engine's memory rather
+      # than this library's, and neither is reachable from here: a fuzz target
+      # run without -fuzz is an ordinary test over the files it is given.
+      #
+      # It buys the search back as well. Under -asan this target managed 170k
+      # executions a minute against 2M without, so the night now searches
+      # roughly twelve times as far and ASan still sees everything the search
+      # kept.
+      #
+      # A cache entry and a committed seed are the same file format, so copying
+      # the corpus into testdata/fuzz/<target> is all "replay" means.
+      - name: Replay the corpus under AddressSanitizer
+        if: ${{ matrix.replay }}
+        run: |
+          corpus="${{ steps.cache-dir.outputs.dir }}/github.com/JakeChampion/golol-html/${{ matrix.target }}"
+          n=0
+          [ -d "$corpus" ] && n=$(find "$corpus" -type f | wc -l)
+          if [ "$n" -eq 0 ]; then
+            echo "::error::no corpus under $corpus. The step above fuzzed for" \
+                 "millions of executions, so an empty corpus is not a quiet" \
+                 "pass - it means this replay would have measured nothing."
+            exit 1
+          fi
+          echo "replaying ${n} generated inputs, plus the seeds, under AddressSanitizer"
+
+          mkdir -p "testdata/fuzz/${{ matrix.target }}"
+          # cp -R of the directory's contents rather than a glob: a mature
+          # corpus is thousands of files and a glob is an argument list.
+          cp -R "$corpus/." "testdata/fuzz/${{ matrix.target }}/"
+
+          set +e
+          go test -asan -count=1 -run '^${{ matrix.target }}$' . 2>&1 | tee replay.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          [ "$rc" -eq 0 ] && exit 0
+
+          # Keep only what failed. testdata now holds the whole corpus, and an
+          # artifact of ten thousand inputs that passed hides the one that did
+          # not. A failing seed has no file to keep; it is in the source.
+          mkdir -p replay-crashers
+          grep -oE "FAIL: ${{ matrix.target }}/[^ ]+" replay.log | sed 's|.*/||' |
+            while read -r entry; do
+              cp "testdata/fuzz/${{ matrix.target }}/${entry}" replay-crashers/ 2>/dev/null || true
+            done
+          echo "::error::${{ matrix.target }} failed replaying its corpus under AddressSanitizer"
+          exit "$rc"
+
+      - name: Upload the input that failed under AddressSanitizer
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: replay-crasher-${{ matrix.target }}
+          path: replay-crashers/
           if-no-files-found: ignore
 
       - name: Save corpus
@@ -142,4 +202,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ steps.cache-dir.outputs.dir }}
-          key: fuzz-${{ matrix.target }}-asan${{ matrix.asan }}-${{ github.run_id }}
+          key: fuzz-${{ matrix.target }}-${{ github.run_id }}
