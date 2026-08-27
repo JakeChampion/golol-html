@@ -18,6 +18,19 @@
   still ask the parser about every element name in the HTML index, so the
   library's answer is measured rather than trusted.
 
+- CI: one run per pull request at a time, superseding rather than queueing. This
+  matrix is sixteen jobs, so a branch pushed twice in a minute costs thirty-two,
+  and the superseded ones sit in the queue ahead of the runs that matter. Pushes
+  to `main` are exempt, because each is a distinct commit that has to be gated on
+  its own.
+
+  The sanitizer's fuzz step also gets `ASAN_OPTIONS=allocator_may_return_null=1`,
+  as an attempt at the intermittent failure described in #327 - ASan's own
+  allocator failing an internal check rather than detecting anything. It is
+  unverified and says so in the workflow: `-asan` is unsupported on darwin/arm64,
+  so it cannot be reproduced locally, and the evidence will be whether the flake
+  recurs.
+
 - Added `CheckComment` and `ErrCommentBreakout`, for text a caller is about to
   put inside a comment it assembled itself. `Comment.SetText` refuses text that
   would end the comment early and says there is no escaping that would work; a
