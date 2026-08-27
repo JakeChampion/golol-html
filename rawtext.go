@@ -98,16 +98,12 @@ var ErrRawTextBreakout = errors.New("lolhtml: inserted content would end the raw
 // cannot.
 //
 // It is the predicate for the insertion question - can content written into this
-// element end it - and it is not the predicate for the other question these ten
-// names come up in: whether character references in the content are decoded. Two
-// of them are escapable raw text, where references do decode, so a program reading
-// text and deciding whether to unescape it wants this list minus textarea and
-// title. Getting that backwards is silent either way: unescaping a style's content
-// makes it say something it does not say, and not unescaping a title's loses the
-// decoding a parser performs. The NUL rule does key on this list exactly - inside
-// these ten a NUL becomes U+FFFD, elsewhere a parser drops it - and both are
-// measured against the parser for every element name in
-// differential/texttruth_test.go, with the whole conversion in
+// element end it - and not for the other question these ten names come up in:
+// whether character references in the content are decoded. That one is
+// [DecodesCharacterReferences], which is this list minus textarea and title. The
+// NUL rule does key on this list exactly - inside these ten a NUL becomes U+FFFD,
+// elsewhere a parser drops it - and both are measured against the parser for every
+// element name in differential/texttruth_test.go, with the whole conversion in
 // examples/gip/texttruth.
 //
 // The comparison is by tag name and is case-insensitive for ASCII, so it accepts
@@ -122,6 +118,54 @@ func IsRawText(tag string) bool {
 	}
 	lower := strings.ToLower(tag)
 	return lower != tag && isRawTextLower(lower)
+}
+
+// DecodesCharacterReferences reports whether an HTML parser decodes character
+// references in the content of an element named tag.
+//
+// It is the predicate for the reading question, where [IsRawText] is the
+// predicate for the writing one. The same ten names come up in both, and the
+// answers are different sets: of the ten elements whose content is not markup,
+// eight leave references alone and two - textarea and title, the escapable
+// raw-text pair - decode them. Everything else decodes, because its content is
+// markup.
+//
+// So a program deciding whether to unescape the text it was handed wants this,
+// and IsRawText would be wrong by exactly those two names. Wrong in both
+// directions and silently: unescaping a <style>'s content makes it say something
+// it does not say, and not unescaping a <title>'s loses the decoding a parser
+// performs. The NUL rule does key on IsRawText exactly - inside those ten a NUL
+// becomes U+FFFD, elsewhere a parser drops it.
+//
+// Measured against golang.org/x/net/html for every element name in the HTML
+// index, in both directions, by TestTheDecodeListIsTheParsersList in the
+// differential suite - which is what makes this a question the library can answer
+// rather than two names to copy out of a doc comment. examples/gip/texttruth
+// composes it with the other three rules that separate reported text from parsed
+// text.
+//
+// Comparison is by tag name, case-insensitive for ASCII, as for IsRawText. It
+// does not consider namespaces: in SVG and MathML none of these elements is raw
+// text, so a <title> inside an <svg> holds ordinary markup and decodes. A name
+// that is not an element decodes, which is the right answer for content that is
+// parsed as markup.
+func DecodesCharacterReferences(tag string) bool {
+	if !IsRawText(tag) {
+		return true
+	}
+	return escapableRawText(tag)
+}
+
+// escapableRawText reports whether tag is one of the two raw-text elements whose
+// content still has its character references decoded. Kept next to
+// rawTextElements so the two lists cannot drift apart unnoticed.
+func escapableRawText(tag string) bool {
+	switch tag {
+	case "textarea", "title":
+		return true
+	}
+	lower := strings.ToLower(tag)
+	return lower != tag && (lower == "textarea" || lower == "title")
 }
 
 func isRawTextLower(tag string) bool {

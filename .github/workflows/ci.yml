@@ -8,6 +8,16 @@ on:
 permissions:
   contents: read
 
+# One run per ref at a time, and supersede rather than queue - but only for pull
+# requests. A branch that is pushed twice in a minute does not need both runs, and
+# this matrix is sixteen jobs, so the second one is not free: superseded runs sit
+# in the queue ahead of the ones that matter and delay them. Pushes to main are
+# exempt, because each of those is a distinct commit that has to be gated on its
+# own and cancelling one would leave a commit nothing tested.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Host-independent checks, run once rather than repeated per platform.
   lint:
@@ -197,6 +207,23 @@ jobs:
       - name: Fuzz the seed corpus under AddressSanitizer
         # Short: this is about running the corpus through ASan, not about
         # finding new inputs. The nightly job does the depth.
+        #
+        # allocator_may_return_null is an attempt at the intermittent failure in
+        # this step, which is ASan's own allocator failing an internal check -
+        # "sanitizer_allocator_secondary.h:297 IsAligned(p, page_size_)" - rather
+        # than anything it detected. It has hit two unrelated branches, only on
+        # amd64, only in this step and not in the plain -asan run above, and a
+        # re-run of the same commit passes. The suspicion is the fuzzing engine's
+        # large mappings meeting ASan's secondary allocator, which the plain run
+        # never reaches.
+        #
+        # Unverified: -asan is unsupported on darwin/arm64, so this cannot be
+        # reproduced or confirmed locally. The evidence will be whether the flake
+        # recurs. If it does, the next step is to move this to the nightly job,
+        # which already does the depth, and leave the PR gate as the plain -asan
+        # run.
+        env:
+          ASAN_OPTIONS: allocator_may_return_null=1
         run: go test -asan -run '^$' -fuzz FuzzRewrite -fuzztime 60s .
 
   # The README promises a minimum Go version, and a promise nothing checks
