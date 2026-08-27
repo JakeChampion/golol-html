@@ -24,12 +24,41 @@
   to `main` are exempt, because each is a distinct commit that has to be gated on
   its own.
 
-  The sanitizer's fuzz step also gets `ASAN_OPTIONS=allocator_may_return_null=1`,
-  as an attempt at the intermittent failure described in #327 - ASan's own
-  allocator failing an internal check rather than detecting anything. It is
-  unverified and says so in the workflow: `-asan` is unsupported on darwin/arm64,
-  so it cannot be reproduced locally, and the evidence will be whether the flake
-  recurs.
+- CI: the sanitizer job no longer fuzzes, which is the fix for the intermittent
+  failure in #327. `go test -asan -count=1 .` stays; the sixty seconds of
+  `go test -asan -run '^$' -fuzz FuzzRewrite` that followed it are gone, and so is
+  the `ASAN_OPTIONS=allocator_may_return_null=1` attempt at the flake.
+
+  That step's own comment said it was about running the corpus through ASan
+  rather than finding new inputs - and the corpus was already covered. A fuzz
+  target run without `-fuzz` is an ordinary test over its seeds, twelve of them
+  for `FuzzRewrite` and thirty-six for `FuzzOperations`, and the plain `-asan`
+  run above it runs every one. What the step added was the fuzzing engine under
+  ASan, and the engine is the part that does not survive it.
+
+  It fails in the engine's own memory rather than in anything this library
+  touches. `go test -asan -fuzz` reports a global-buffer-overflow zero bytes
+  after `internal/fuzz._counters` - the zero-sized global whose address the
+  linker rewrites to the start of the coverage counters, so ASan poisons a
+  redzone across the counters and every execution reads into it. That is
+  go.dev/issue/72766, fixed in Go 1.25 by excluding those two symbols from
+  instrumentation, and it still fails twelve runs out of twelve under 1.24.7.
+  The failure in #327 is the same shape one layer down: ASan's own
+  `sanitizer_allocator_secondary.h:297 IsAligned(p, page_size_)` invariant, with
+  no finding reported, only on amd64, and only in that step.
+  `allocator_may_return_null` governs what ASan does with an allocation it
+  declines to serve, not a check inside the allocator, so it was never going to
+  help. Eight sixty-second runs on a Go 1.25.1 amd64 host did not reproduce it,
+  so the mechanism of that one is still unproven; what is proven is that this
+  combination has already been broken once at the toolchain level.
+
+  ASan over inputs a search found moves to the nightly fuzz job, which now
+  fuzzes without the sanitizer and replays the corpus under it: the same inputs,
+  no engine under ASan, and about twelve times as much search, since
+  `FuzzOperations` managed 170k executions a minute under `-asan` against 2M
+  without. Its `asan: true` matrix row is gone, its corpus cache is restored by
+  a key that still matches the ones written before this change, and an empty
+  corpus fails the step rather than passing quietly.
 
 - Doc figures: correct the one that was wrong, gate it, and stamp the one that had
   drifted with the toolchain it came from.

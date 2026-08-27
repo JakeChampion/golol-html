@@ -201,30 +201,39 @@ jobs:
           go-version: '1.25'
           cache: false
 
-      - name: Tests under AddressSanitizer
+      # This runs every seed corpus entry through ASan as well as every test:
+      # a fuzz target with no -fuzz is an ordinary test over the inputs its
+      # f.Add calls supply, and `go test -v` names them, twelve for FuzzRewrite
+      # and thirty-six for FuzzOperations. That is what the fuzz step this job
+      # used to end with claimed to be for, so the corpus is still covered here
+      # and the step is gone.
+      #
+      # It is gone because the engine, not the corpus, is what -asan does not
+      # survive. `go test -asan -fuzz` reports a global-buffer-overflow zero
+      # bytes after internal/fuzz._counters - the fuzzing engine's own coverage
+      # counters, a zero-sized global whose address the linker rewrites to the
+      # counter section, so ASan poisons a redzone over the counters and every
+      # execution trips it. That is go.dev/issue/72766, fixed in Go 1.25 by
+      # excluding those two symbols from instrumentation, and it still fails
+      # twelve times out of twelve under 1.24.7.
+      #
+      # The intermittent failure in #327 is the same shape one layer down: ASan
+      # failing its own invariant, "sanitizer_allocator_secondary.h:297
+      # IsAligned(p, page_size_)", with no finding reported, only on amd64, only
+      # in the -fuzz step and never in this one, and passing on a re-run of the
+      # same commit. allocator_may_return_null went in as an attempt at it and
+      # comes out with the step: it governs what ASan does with an allocation it
+      # declines to serve, and this is a check inside the allocator, so there
+      # was no mechanism by which it would have helped. Eight sixty-second runs
+      # on a 1.25.1 amd64 host did not reproduce the failure, so its own
+      # mechanism is still unproven - what is proven is that this combination
+      # has already been broken once at the toolchain level, in the engine's
+      # memory rather than in ours.
+      #
+      # ASan over inputs the search found still happens, in the nightly fuzz
+      # job, which fuzzes without the sanitizer and replays the corpus under it.
+      - name: Tests and seed corpora under AddressSanitizer
         run: go test -asan -count=1 .
-
-      - name: Fuzz the seed corpus under AddressSanitizer
-        # Short: this is about running the corpus through ASan, not about
-        # finding new inputs. The nightly job does the depth.
-        #
-        # allocator_may_return_null is an attempt at the intermittent failure in
-        # this step, which is ASan's own allocator failing an internal check -
-        # "sanitizer_allocator_secondary.h:297 IsAligned(p, page_size_)" - rather
-        # than anything it detected. It has hit two unrelated branches, only on
-        # amd64, only in this step and not in the plain -asan run above, and a
-        # re-run of the same commit passes. The suspicion is the fuzzing engine's
-        # large mappings meeting ASan's secondary allocator, which the plain run
-        # never reaches.
-        #
-        # Unverified: -asan is unsupported on darwin/arm64, so this cannot be
-        # reproduced or confirmed locally. The evidence will be whether the flake
-        # recurs. If it does, the next step is to move this to the nightly job,
-        # which already does the depth, and leave the PR gate as the plain -asan
-        # run.
-        env:
-          ASAN_OPTIONS: allocator_may_return_null=1
-        run: go test -asan -run '^$' -fuzz FuzzRewrite -fuzztime 60s .
 
   # The README promises a minimum Go version, and a promise nothing checks
   # rots. This builds and tests against the oldest supported toolchain, so
