@@ -184,7 +184,12 @@ func TestTheSurfaceIsNotAccidentallyGrowing(t *testing.T) {
 	// no escaping that would work; a comment assembled by hand out of HTML
 	// content had no guard, which SetText's own documentation named without
 	// offering one. DocumentEnd.Append takes markup, so that path is ordinary.
-	const want = 144
+	// 145: DecodesCharacterReferences, because IsRawText answers the writing
+	// question and a program reading text needs the other one - the same ten
+	// names, a different set by exactly textarea and title. Its own doc comment
+	// argues against copying names out of a doc comment, which is what every
+	// caller of the reading path was doing.
+	const want = 145
 
 	names := exportedNames(t)
 	if len(names) != want {
