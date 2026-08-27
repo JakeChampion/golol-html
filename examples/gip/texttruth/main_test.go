@@ -59,7 +59,7 @@ func TestIsRawTextIsTheWrongPredicateForDecoding(t *testing.T) {
 			t.Errorf("IsRawText(%q) is false, so this list is not the raw-text list", tag)
 			continue
 		}
-		if !noDecode[tag] {
+		if !noDecode(tag) {
 			rawButDecodes = append(rawButDecodes, tag)
 		}
 	}
@@ -74,7 +74,7 @@ func TestIsRawTextIsTheWrongPredicateForDecoding(t *testing.T) {
 	}
 
 	// And the consequence, measured rather than argued: using IsRawText for the decode rule
-	// leaves a title undecoded.
+	// leaves a title undecoded. The library's own predicate does not.
 	got, err := ParsedText([]byte(`<title>a &amp; b</title>`))
 	if err != nil {
 		t.Fatal(err)
