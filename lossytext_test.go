@@ -21,13 +21,19 @@ import (
 //	body                     with an element handler   with a text handler
 //	gzip of a small page                    identical   longer, and not gzip any more
 //	a PNG header                            identical   two bytes longer
-//	256 random bytes                        identical   482 bytes
+//	every byte value, 0x00 to 0xFF          identical   512 bytes
 //	JSON, valid UTF-8                       identical   identical
 //	a windows-1252 page read as UTF-8       identical   two bytes longer
 //
 // Neither case reports an error. With only element handlers the body passes through untouched -
 // which means a proxy that rewrites compressed responses silently rewrites nothing, the other
 // half of the same mistake.
+//
+// That row said "256 random bytes ... 482 bytes" and the package documentation said the same, while
+// the case below feeds every byte value in order, which comes out at 512 - measured through
+// rewriteWith, the helper this file uses. The figure looks like one left behind when the input
+// stopped being random, and nothing gated it: the assertions here are that a lossy body grows and a
+// valid one does not, which both figures satisfy.
 func TestARewriteIsLosslessUntilATextHandlerIsRegistered(t *testing.T) {
 	var gz bytes.Buffer
 	zw := gzip.NewWriter(&gz)
@@ -78,6 +84,15 @@ func TestARewriteIsLosslessUntilATextHandlerIsRegistered(t *testing.T) {
 			if b.lossy && len(text) <= len(b.body) {
 				t.Errorf("the replacement character should have made it longer: %d against %d",
 					len(text), len(b.body))
+			}
+			// The one figure two doc comments quote, gated so it cannot rot again.
+			// It did: both said 482 for this input, where the answer is 512.
+			if b.name == "every byte value" && len(text) != 512 {
+				t.Errorf("every byte value came to %d bytes, not the 512 quoted in the "+
+					"table above and in the package documentation's "+
+					"Content-Encoding table. If the decoder changed and this is "+
+					"the new right answer, update both comments rather than this "+
+					"number", len(text))
 			}
 		})
 	}
