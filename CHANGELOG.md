@@ -40,6 +40,26 @@
   Its test caught that the danger needs a literal `-->` in the source.
   `Attribute` returns raw source, so `&gt;` stays encoded and is harmless; a
   literal `>` is legal inside a quoted attribute value and is not.
+- Package documentation, Cost: quantify the rule. "A rewrite's cost tracks how
+  many times your handlers run, not how long the document is" was already there;
+  what was missing is how much that varies. At a fixed 200 KB the spread across
+  document shapes is about 1900x, from 103.6 ns/byte for a list of `<li>` with no
+  closing tags down to 0.055 for one element with a 200 KB attribute value. The
+  worst shape costs three handler calls per item - the element, its text, and the
+  empty chunk that ends the text node - and it is a navigation menu rather than a
+  pathological document.
+
+- `examples/gip/worstshape`: the harness, pointed at your own handler set. It
+  runs sixteen shapes at a fixed byte count and ranks them. The gates are the
+  numbers that do not depend on the machine - handler calls and allocations per
+  byte, and that the ordering by one tracks the ordering by the other - with the
+  times logged and asserted nowhere.
+
+  "Asserted nowhere" took a second attempt. It checked that each shape took some
+  nonzero time, which is the timing rule broken in a third form: the Windows
+  runner reports the cheapest shapes as exactly 0 ns, because they take a few
+  microseconds and its clock ticks every 340µs. The tool now measures the tick,
+  says when a figure is below it, and compares allocations instead.
 
 - `SourceLocation`: say that a text chunk is the exception to the
   write-invariance the section promises. When a multi-byte character straddles a
