@@ -1697,7 +1697,7 @@
 //	body                     element handlers only   with a text handler
 //	gzip of a small page                 identical   longer, and not gzip any more
 //	a PNG header                         identical   two bytes longer
-//	256 arbitrary bytes                  identical   482 bytes
+//	every byte value, 0x00 to 0xFF       identical   512 bytes
 //	valid UTF-8                          identical   identical
 //
 // A text handler decodes and re-encodes, so a byte that is not valid in the
