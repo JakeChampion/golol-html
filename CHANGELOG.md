@@ -59,6 +59,26 @@
   `Element.SetUserData` and the pipeline peak-heap figures in the package
   documentation.
 
+- `WithEncoding`: say that a byte-order mark is not sniffed either, and that it is
+  the one declaration which outranks the caller's. The option already says a
+  `<meta charset>` is never consulted, and that agrees with a browser, because a
+  `<meta>` ranks below a transport charset. A BOM ranks above it. Measured
+  against the sniffing algorithm in `golang.org/x/net/html/charset`: a UTF-8 BOM
+  answers "utf-8, certain" whether the declared label is `windows-1252`,
+  `shift_jis` or absent. Here the label wins regardless, so a proxy passing a
+  header charset to this option decodes differently from the browser it is
+  proxying for whenever the body has a mark - `\xef\xbb\xbf<p>café</p>` declared
+  windows-1252 gives handlers "ï»¿" and "cafÃ©" where a browser reads "café".
+  The mark is also reported as text, at 0..3, so anything accumulating text gets
+  a character the page never shows.
+
+- `examples/gip/bom`: the two lines that fix it - read the first three bytes,
+  prefer what they say over the declared label, and drop the mark from the text
+  while keeping it in the output, since removing those bytes would change what
+  the next consumer sniffs. It refuses UTF-16 rather than mangling it: the
+  rewriter cannot process markup that is not ASCII-compatible, and a text handler
+  turns the mark itself into U+FFFD.
+
 - `examples/gip/needsrewrite`: decide whether a document needs rewriting before
   rewriting it, which is the question a proxy asks constantly and mostly answers
   "no". Worth about a third of the pass - and three of my four implementations
@@ -121,6 +141,34 @@
   runner reports the cheapest shapes as exactly 0 ns, because they take a few
   microseconds and its clock ticks every 340µs. The tool now measures the tick,
   says when a figure is below it, and compares allocations instead.
+
+- `Attribute`: say that it has no source location, and that its bytes cannot be
+  recovered from the ones that do. `Element.SourceLocation` is the whole start
+  tag, and searching that for one attribute's range fails on markup the library
+  preserves - a duplicate name, two entries with the same name *and* value, a
+  name that is a substring of another (`a=` inside `data-a=`), and a bare
+  attribute with no `=` at all. The first two have no answer, since a repeated
+  attribute is kept rather than dropped. So an offset-keyed tool can act on an
+  element or a start tag and not on one attribute of it.
+
+- `examples/gip/shrink`: reduce a failing document to its essence, with the
+  rewriter proposing the cuts - element extents, start tags, comments, doctypes
+  and text nodes, with byte halving as the fallback for what structure cannot
+  reach (attributes among them, per the above).
+
+  Two measurements it produced, both against what I expected. Proposing every
+  structural cut before any byte cut - the obvious design - cost 595 oracle calls
+  on a document wrapped in thirty divs against 34 for plain halving, because the
+  cuts structure proposes are mostly the ones that remove the failure. Ordering
+  all candidates by size brings that to 55, and then structure wins 6 of 9
+  documents, 308 calls against 331: a real but modest gain, which is what the
+  test now asserts rather than the sweeping one I started with.
+
+  It also demonstrates the classic reduction mistake concretely. On a document
+  holding two failures, an oracle that asks only "does it fail" reduces
+  `<div><script>a</script></div><div><style>b</style></div>` to `<style>` where
+  the original failure was the script's - a different error with different advice
+  in it.
 
 - `SourceLocation`: say that a text chunk is the exception to the
   write-invariance the section promises. When a multi-byte character straddles a
