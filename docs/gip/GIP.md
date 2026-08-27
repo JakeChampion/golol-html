@@ -223,6 +223,17 @@ and where a counted share and a timed share disagree in magnitude they still
 rank the same configurations in the same order. Assert the timed figure only
 where the clock can resolve it, and log what that skipped.
 
+That includes asserting a duration is merely **above zero**, which is the form
+this rule was broken in for the third time. `examples/gip/worstshape` checked
+that every shape it measured took some nonzero time - a sanity check on its own
+bookkeeping, not a performance claim - and the Windows runner failed it, because
+the cheapest shapes take a few microseconds and a 340µs tick reports those as
+exactly 0. Zero is the clock's answer. The three forms this has now taken, all
+the same mistake: a per-item figure (`examples/gip/queue`), a ratio between two
+figures (`examples/gip/selectorcheck`), and a floor of zero on a single figure.
+If a number came from a clock, nothing about it belongs in an `if` - print it,
+and gate on the count beside it.
+
 `main_test.go` must contain at least **three** non-trivial tests: not
 `assert(2+2 == 4)`, but the invariants that would actually break if you got it
 wrong. At least one of the three must be a property over the whole input rather

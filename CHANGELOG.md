@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Added `DecodesCharacterReferences`, the predicate for the reading question.
+  `IsRawText` answers the writing one - can content written into this element end
+  it - and the same ten names come up in a second question with a different
+  answer: whether a parser decodes character references in the content. That set
+  is `IsRawText` minus `textarea` and `title`, the escapable raw-text pair.
+
+  Getting it backwards is silent in both directions: unescaping a `<style>`'s
+  content makes it say something it does not say, and not unescaping a
+  `<title>`'s loses the decoding a parser performs. Until now a caller reading
+  text had to copy those two names out of a doc comment - which `IsRawText`'s own
+  documentation argues against, on the grounds that a copied list falls behind
+  the parser silently. `examples/gip/texttruth` and the differential suite both
+  carried that literal; they ask the library now, and the differential tests
+  still ask the parser about every element name in the HTML index, so the
+  library's answer is measured rather than trusted.
+
 - CI: one run per pull request at a time, superseding rather than queueing. This
   matrix is sixteen jobs, so a branch pushed twice in a minute costs thirty-two,
   and the superseded ones sit in the queue ahead of the runs that matter. Pushes
@@ -37,6 +53,26 @@
   Its test caught that the danger needs a literal `-->` in the source.
   `Attribute` returns raw source, so `&gt;` stays encoded and is harmless; a
   literal `>` is legal inside a quoted attribute value and is not.
+- Package documentation, Cost: quantify the rule. "A rewrite's cost tracks how
+  many times your handlers run, not how long the document is" was already there;
+  what was missing is how much that varies. At a fixed 200 KB the spread across
+  document shapes is about 1900x, from 103.6 ns/byte for a list of `<li>` with no
+  closing tags down to 0.055 for one element with a 200 KB attribute value. The
+  worst shape costs three handler calls per item - the element, its text, and the
+  empty chunk that ends the text node - and it is a navigation menu rather than a
+  pathological document.
+
+- `examples/gip/worstshape`: the harness, pointed at your own handler set. It
+  runs sixteen shapes at a fixed byte count and ranks them. The gates are the
+  numbers that do not depend on the machine - handler calls and allocations per
+  byte, and that the ordering by one tracks the ordering by the other - with the
+  times logged and asserted nowhere.
+
+  "Asserted nowhere" took a second attempt. It checked that each shape took some
+  nonzero time, which is the timing rule broken in a third form: the Windows
+  runner reports the cheapest shapes as exactly 0 ns, because they take a few
+  microseconds and its clock ticks every 340µs. The tool now measures the tick,
+  says when a figure is below it, and compares allocations instead.
 
 - `SourceLocation`: say that a text chunk is the exception to the
   write-invariance the section promises. When a multi-byte character straddles a

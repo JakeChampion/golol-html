@@ -32,12 +32,11 @@ import (
 	"golang.org/x/net/html"
 )
 
-// noDecode is the list examples/gip/texttruth carries. The test below is the reason it can be a
-// literal: it asks the parser about every element name there is.
-var noDecode = map[string]bool{
-	"iframe": true, "noembed": true, "noframes": true, "noscript": true,
-	"plaintext": true, "script": true, "style": true, "xmp": true,
-}
+// noDecode asks the library, which is the point of lolhtml.DecodesCharacterReferences existing:
+// the eight names used to be a literal here and in examples/gip/texttruth, copied out of a doc
+// comment. The tests below still ask the parser about every element name there is, so the
+// library's answer is measured rather than trusted.
+func noDecodeTag(tag string) bool { return !lolhtml.DecodesCharacterReferences(tag) }
 
 // eatsLeadingNewline is the other list, which is not a raw-text set.
 var eatsLeadingNewline = map[string]bool{"pre": true, "listing": true, "textarea": true}
@@ -91,7 +90,7 @@ func TestTheDecodeListIsTheParsersList(t *testing.T) {
 			continue
 		}
 		checked++
-		if want := !noDecode[tag]; decoded != want {
+		if want := !noDecodeTag(tag); decoded != want {
 			t.Errorf("<%s>: the parser %s the reference, and the recipe says it does %s",
 				tag, map[bool]string{true: "decodes", false: "does not decode"}[decoded],
 				map[bool]string{true: "not", false: ""}[!want])
@@ -103,34 +102,41 @@ func TestTheDecodeListIsTheParsersList(t *testing.T) {
 	}
 }
 
-// TestTheDecodeListIsIsRawTextMinusTwo is the finding: the predicate the library exports is not
-// the one this rule needs, and the difference is exactly textarea and title.
+// TestTheDecodeListIsIsRawTextMinusTwo is the finding that made
+// lolhtml.DecodesCharacterReferences worth exporting: the two predicates differ, and by exactly
+// two names. Asked of the parser rather than of the library, since asking the library both
+// questions would only confirm what it already believes.
 func TestTheDecodeListIsIsRawTextMinusTwo(t *testing.T) {
 	var rawText, differ []string
 	for _, tag := range everyElementName {
-		if lolhtml.IsRawText(tag) {
-			rawText = append(rawText, tag)
-			if !noDecode[tag] {
-				differ = append(differ, tag)
-			}
+		if !lolhtml.IsRawText(tag) {
+			continue
 		}
-		if noDecode[tag] && !lolhtml.IsRawText(tag) {
-			t.Errorf("<%s> does not decode references and IsRawText is false, so the decode "+
-				"list is not a subset of the raw-text list", tag)
+		rawText = append(rawText, tag)
+
+		text := parsedText(t, "<"+tag+">x&amp;y</"+tag+">")
+		switch {
+		case strings.Contains(text, "x&y"):
+			differ = append(differ, tag) // raw text, and the parser still decodes it
+		case strings.Contains(text, "x&amp;y"):
+		default:
+			t.Errorf("<%s>: parser text %q has neither form", tag, text)
 		}
 	}
 	if len(rawText) != 10 {
 		t.Errorf("IsRawText is true for %d names (%v), want the documented ten",
 			len(rawText), rawText)
 	}
-	if strings.Join(differ, " ") != "textarea title" {
-		t.Errorf("raw-text elements that still decode: %v, want textarea and title", differ)
+	if got := strings.Join(differ, " "); got != "textarea title" {
+		t.Errorf("raw-text elements the parser still decodes: %q, want \"textarea title\"", got)
 	}
-
-	// And the consequence, measured against the parser: using IsRawText for this rule leaves
-	// a title's references undecoded, where the parser decodes them.
-	if got := parsedText(t, `<title>a &amp; b</title>`); got != "a & b" {
-		t.Errorf("the parser's text for a title is %q, so the premise of this test is wrong", got)
+	// And the library agrees with the parser about those two, which is the claim its doc
+	// comment makes.
+	for _, tag := range differ {
+		if !lolhtml.DecodesCharacterReferences(tag) {
+			t.Errorf("the parser decodes <%s> and DecodesCharacterReferences says it does not",
+				tag)
+		}
 	}
 }
 
@@ -271,7 +277,7 @@ func recipe(doc string) (string, error) {
 				return nil
 			}
 			text = strings.ReplaceAll(text, "\x00", "�")
-			if noDecode[raw] {
+			if noDecodeTag(raw) {
 				b.WriteString(text)
 			} else {
 				b.WriteString(stdhtml.UnescapeString(text))
