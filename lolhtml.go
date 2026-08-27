@@ -1493,6 +1493,30 @@
 // that lists every attribute to find a single one costs four times the number of
 // attributes on the element.
 //
+// How much that costs depends on the shape of the document and not much on its
+// size, and the spread is wide. Held at 200 KB with two element selectors and the
+// document-level text and comment handlers, measured on an M3 Pro, fastest of
+// seven passes:
+//
+//	shape                              ns/byte   alloc B/KB    calls
+//	a list of <li> with no </li>     103.565     19,667.8  120,000
+//	unclosed <div>s                   50.974      6,561.0   40,000
+//	anchors with three attributes     42.233      3,284.0   17,646
+//	<p>ab</p> repeated                41.267      7,290.0   44,444
+//	table rows                        35.122      5,180.9   31,578
+//	<div></div> repeated              29.497      2,986.3   18,181
+//	nesting 18,000 deep               25.376      2,986.9   18,183
+//	stray </div>s                      3.144          8.5        0
+//	one 200 KB attribute value         0.055          8.6        1
+//
+// A factor of about 1900 at the same byte count. The worst shape is a list of
+// items without closing tags, at three calls each - the element, its text, and the
+// empty chunk that ends the text node - and it is a navigation menu rather than a
+// pathological document. The floor of 8.5 bytes per KB is what a document nothing
+// matches costs; a page of stray end tags sits there because no handler ever sees
+// one at all. examples/gip/worstshape is the harness, pointed at your own
+// handlers.
+//
 // A text handler starts at two calls per text node - the content and its empty
 // boundary marker - and two is a floor for a node whose bytes decode rather than a
 // floor in general. A node that is nothing but a truncated multi-byte sequence is
@@ -1673,7 +1697,7 @@
 //	body                     element handlers only   with a text handler
 //	gzip of a small page                 identical   longer, and not gzip any more
 //	a PNG header                         identical   two bytes longer
-//	256 arbitrary bytes                  identical   482 bytes
+//	every byte value, 0x00 to 0xFF       identical   512 bytes
 //	valid UTF-8                          identical   identical
 //
 // A text handler decodes and re-encodes, so a byte that is not valid in the

@@ -2,6 +2,63 @@
 
 ## Unreleased
 
+- Added `DecodesCharacterReferences`, the predicate for the reading question.
+  `IsRawText` answers the writing one - can content written into this element end
+  it - and the same ten names come up in a second question with a different
+  answer: whether a parser decodes character references in the content. That set
+  is `IsRawText` minus `textarea` and `title`, the escapable raw-text pair.
+
+  Getting it backwards is silent in both directions: unescaping a `<style>`'s
+  content makes it say something it does not say, and not unescaping a
+  `<title>`'s loses the decoding a parser performs. Until now a caller reading
+  text had to copy those two names out of a doc comment - which `IsRawText`'s own
+  documentation argues against, on the grounds that a copied list falls behind
+  the parser silently. `examples/gip/texttruth` and the differential suite both
+  carried that literal; they ask the library now, and the differential tests
+  still ask the parser about every element name in the HTML index, so the
+  library's answer is measured rather than trusted.
+
+- CI: one run per pull request at a time, superseding rather than queueing. This
+  matrix is sixteen jobs, so a branch pushed twice in a minute costs thirty-two,
+  and the superseded ones sit in the queue ahead of the runs that matter. Pushes
+  to `main` are exempt, because each is a distinct commit that has to be gated on
+  its own.
+
+  The sanitizer's fuzz step also gets `ASAN_OPTIONS=allocator_may_return_null=1`,
+  as an attempt at the intermittent failure described in #327 - ASan's own
+  allocator failing an internal check rather than detecting anything. It is
+  unverified and says so in the workflow: `-asan` is unsupported on darwin/arm64,
+  so it cannot be reproduced locally, and the evidence will be whether the flake
+  recurs.
+
+- Doc figures: correct the one that was wrong, gate it, and stamp the one that had
+  drifted with the toolchain it came from.
+
+  The Content-Encoding table in the package documentation said "256 arbitrary
+  bytes ... 482 bytes", and `lossytext_test.go`'s table said the same. The case
+  they describe feeds every byte value in order, and the answer is 512 - measured
+  through the helper that test uses. It reads like a number left behind when the
+  input stopped being random. Nothing caught it because nothing gated it: the
+  assertion is that a lossy body grows, which 482 and 512 both satisfy. It is
+  gated now, with a message naming both comments to update if the decoder ever
+  legitimately changes the answer.
+
+  `Element.OnEndTag` said "about 30 MB against about 6 MB ... roughly 300 bytes
+  per element". Measured on Go 1.25.8 it is 27.0 MB, 4.2 MB and about 240 bytes.
+  The figures were hedged and directionally right, so this is a re-measurement
+  rather than a correction - but the section quoted no toolchain, and this
+  project's own rules say to name it, because that is the axis allocation figures
+  move on.
+
+  Two other figures were checked and stand: `NamespaceURI` returning the package
+  constants costs zero allocations rather than one per element (measured 1025
+  either way over 1000 elements), and the write-amplification claim is gated
+  one-sidedly in `writecount_test.go`, which is the right way to pin an
+  approximate count. Two remain ungated and unverified here because measuring
+  them needs a 64 MB document: the user-data heap figures on
+  `Element.SetUserData` and the pipeline peak-heap figures in the package
+  documentation.
+
 - Added `CheckComment` and `ErrCommentBreakout`, for text a caller is about to
   put inside a comment it assembled itself. `Comment.SetText` refuses text that
   would end the comment early and says there is no escaping that would work; a
@@ -24,6 +81,27 @@
   Its test caught that the danger needs a literal `-->` in the source.
   `Attribute` returns raw source, so `&gt;` stays encoded and is harmless; a
   literal `>` is legal inside a quoted attribute value and is not.
+- Package documentation, Cost: quantify the rule. "A rewrite's cost tracks how
+  many times your handlers run, not how long the document is" was already there;
+  what was missing is how much that varies. At a fixed 200 KB the spread across
+  document shapes is about 1900x, from 103.6 ns/byte for a list of `<li>` with no
+  closing tags down to 0.055 for one element with a 200 KB attribute value. The
+  worst shape costs three handler calls per item - the element, its text, and the
+  empty chunk that ends the text node - and it is a navigation menu rather than a
+  pathological document.
+
+- `examples/gip/worstshape`: the harness, pointed at your own handler set. It
+  runs sixteen shapes at a fixed byte count and ranks them. The gates are the
+  numbers that do not depend on the machine - handler calls and allocations per
+  byte, and that the ordering by one tracks the ordering by the other - with the
+  times logged and asserted nowhere.
+
+  "Asserted nowhere" took a second attempt. It checked that each shape took some
+  nonzero time, which is the timing rule broken in a third form: the Windows
+  runner reports the cheapest shapes as exactly 0 ns, because they take a few
+  microseconds and its clock ticks every 340µs. The tool now measures the tick,
+  says when a figure is below it, and compares allocations instead.
+
 - `Attribute`: say that it has no source location, and that its bytes cannot be
   recovered from the ones that do. `Element.SourceLocation` is the whole start
   tag, and searching that for one attribute's range fails on markup the library

@@ -22,7 +22,8 @@
 // everything corrupts a stylesheet - `<style>a{content:"&amp;"}</style>` says "&amp;" and not
 // "&" - and one that skips everything lolhtml.IsRawText reports loses the decoding in a title.
 // IsRawText is the right predicate for the NUL rule and the wrong one for this rule, and the
-// difference is exactly those two names.
+// difference is exactly those two names - which is why the library answers it directly, as
+// lolhtml.DecodesCharacterReferences.
 //
 // The leading-newline list is the one that is not any raw-text set: pre, listing and textarea
 // drop one, xmp does not, and a CRLF there counts as the one newline. It applies to the text
@@ -53,13 +54,11 @@ import (
 // Checked in the tests, since "they agree" is the kind of thing that stops being true.
 var unescape = stdhtml.UnescapeString
 
-// noDecode are the elements whose character references an HTML parser does not decode. It is
-// lolhtml.IsRawText minus textarea and title. Measured against the parser for every element name
-// in differential/texttruth_test.go, so it cannot fall behind it silently.
-var noDecode = map[string]bool{
-	"iframe": true, "noembed": true, "noframes": true, "noscript": true,
-	"plaintext": true, "script": true, "style": true, "xmp": true,
-}
+// noDecode asks the library. This used to be a literal list of eight names copied out of a doc
+// comment - which is what lolhtml.DecodesCharacterReferences now answers, so that a program reading
+// text cannot fall behind the parser silently. It is lolhtml.IsRawText minus textarea and title,
+// and the differential suite measures both against the parser for every element name.
+func noDecode(tag string) bool { return !lolhtml.DecodesCharacterReferences(tag) }
 
 // eatsLeadingNewline are the elements that drop one newline immediately after the start tag.
 // Not a raw-text set: textarea is raw text and pre and listing are not, and xmp is raw text and
@@ -146,7 +145,7 @@ func convert(text, in string, eatNewline bool) string {
 	}
 	// Raw text of either kind: NUL becomes the replacement character.
 	text = strings.ReplaceAll(text, "\x00", "�")
-	if noDecode[in] {
+	if noDecode(in) {
 		return text
 	}
 	return unescape(text) // textarea and title

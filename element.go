@@ -993,14 +993,16 @@ func (e *Element) IsRemoved() bool {
 //
 // Each registration costs memory until the rewrite ends, not until the end tag
 // arrives. Measured on 100,000 sibling <div>s with a handler on "*" that registers
-// one end-tag handler each: the live handle count rises to 100,001 and never falls
-// until the Writer is closed, and the Go side allocates about 30 MB against about
-// 6 MB for the same rewrite without the registration - roughly 300 bytes per
-// element, and the same for a wide document as for a deep one.
+// one end-tag handler each, Go 1.25.8: the live handle count rises to 100,001 and
+// never falls until the Writer is closed, and the Go side allocates 27.0 MB
+// against 4.2 MB for the same rewrite without the registration - about 240 bytes
+// per element, and the same for a wide document as for a deep one. The toolchain
+// is named because that is the axis these figures move on; earlier readings on an
+// older Go were about 30 MB, 6 MB and 300 bytes.
 //
 // [MemorySettings.MaxMemory] does not bound it: the same document completes under a
-// 64 KiB limit while allocating those 30 MB, because that limit is lol-html's
-// parsing buffer and this is the binding's handle table. So a rewrite that must
+// 64 KiB limit while allocating those tens of megabytes, because that limit is
+// lol-html's parsing buffer and this is the binding's handle table. So a rewrite that must
 // hold a memory budget has to bound its input, and register this only where an
 // element actually needs it - a narrow selector, or a condition checked before
 // registering rather than inside the callback. Measured in endtagcost_test.go.
