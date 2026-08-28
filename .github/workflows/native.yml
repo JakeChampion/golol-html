@@ -3,22 +3,37 @@ name: native
 # Rebuilds the vendored liblolhtml.a archives. Run it when the pinned lol-html
 # revision in scripts/build-native.sh changes. The result is a pull request, so
 # the binaries that ship are always reviewable and always CI-tested first.
+#
+# Neither input carries a default here. The pinned revision and the toolchain
+# live in scripts/build-native.sh and are read back from it below, because two
+# copies drift: bump one and not the other and this workflow rebuilds the old
+# revision while `make native` builds the new one, and `make verify` then fails
+# with a hash mismatch that looks exactly like tampering. Leave both empty to
+# build the pin; fill one in to try something else without editing the script.
 on:
   workflow_dispatch:
     inputs:
       lol_html_ref:
-        description: 'lol-html git ref to build'
+        description: 'lol-html git ref to build (default: the pin in scripts/build-native.sh)'
         required: false
-        default: '608cc4a66b7ab4fcbe1bbdeb25df8f265572b11c'
+        default: ''
       rust_toolchain:
-        description: 'Rust toolchain (c-api needs >= 1.89)'
+        description: 'Rust toolchain, >= 1.89 (default: the pin in scripts/build-native.sh)'
         required: false
-        default: '1.95.0'
+        default: ''
 
+# Read by default. Only collect writes anything, and it says so itself: the
+# smoke matrix links archives and runs tests, one row of it inside a container
+# that bind-mounts the workspace, and none of that should be holding a token
+# that can push to the repository whose vendored binaries it is checking.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
+# Actions are pinned by commit SHA with the release in a trailing comment, for
+# the reason given in ci.yml. It matters most here: create-pull-request below is
+# third-party code running with a token that can push the branch that becomes
+# the vendored-binary pull request, which is the exact artefact the provenance
+# story exists to protect.
 jobs:
   # One runner builds every archive. Restricting the crate type to staticlib
   # means no linker for the target is involved, so cross-compiling is just
@@ -26,6 +41,11 @@ jobs:
   # rather than from seven differently-provisioned runners.
   build:
     runs-on: ubuntu-24.04
+    # Resolved once here and consumed by collect, so the pull request describes
+    # what was actually built rather than what was asked for.
+    outputs:
+      lol_html_ref: ${{ steps.pins.outputs.lol_html_ref }}
+      rust_toolchain: ${{ steps.pins.outputs.rust_toolchain }}
     permissions:
       contents: read
       # Provenance attestation signs the archives against this workflow run, so
@@ -35,12 +55,25 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # The script is the single source of truth for both values: it prints its
+      # own defaults, and honours LOL_HTML_REF and RUST_TOOLCHAIN from the
+      # environment, so passing the dispatch inputs straight through resolves
+      # "the input if one was given, the pin otherwise" in one place. Empty
+      # inputs are indistinguishable from unset to `${VAR:-default}`.
+      - name: Resolve the pinned revision and toolchain
+        id: pins
+        env:
+          LOL_HTML_REF: ${{ inputs.lol_html_ref }}
+          RUST_TOOLCHAIN: ${{ inputs.rust_toolchain }}
+        run: |
+          scripts/build-native.sh --print-pins | tee -a "$GITHUB_OUTPUT"
 
       - name: Install Rust
         run: |
-          rustup toolchain install ${{ inputs.rust_toolchain }} --profile minimal
-          rustup default ${{ inputs.rust_toolchain }}
+          rustup toolchain install ${{ steps.pins.outputs.rust_toolchain }} --profile minimal
+          rustup default ${{ steps.pins.outputs.rust_toolchain }}
 
       - name: Install llvm-strip and llvm-nm
         # llvm's binutils read Mach-O, ELF and COFF, which a cross build needs.
@@ -50,8 +83,8 @@ jobs:
 
       - name: Build every archive
         env:
-          LOL_HTML_REF: ${{ inputs.lol_html_ref }}
-          RUST_TOOLCHAIN: ${{ inputs.rust_toolchain }}
+          LOL_HTML_REF: ${{ steps.pins.outputs.lol_html_ref }}
+          RUST_TOOLCHAIN: ${{ steps.pins.outputs.rust_toolchain }}
         run: scripts/build-native.sh --all
 
       - name: Summarise
@@ -67,9 +100,17 @@ jobs:
       # it does not fail a build over a policy it cannot satisfy.
       - name: Attest build provenance
         if: ${{ !github.event.repository.private }}
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
-          subject-path: 'internal/lib/*/liblolhtml.a'
+          # The header as well as the archives. It is the ABI contract shim.c
+          # and every cgo call compile against, this workflow replaces it
+          # wholesale alongside them, and a changed prototype or enum value is
+          # as capable of producing memory-unsafe behaviour as a changed
+          # archive. It is checksummed with them too - see write_sums in
+          # scripts/build-native.sh and the collect job below.
+          subject-path: |
+            internal/lib/*/liblolhtml.a
+            internal/include/lol_html.h
 
       - name: Note that provenance was skipped
         if: ${{ github.event.repository.private }}
@@ -77,7 +118,7 @@ jobs:
           echo "::notice::Provenance attestation skipped: GitHub does not support it" \
                "for user-owned private repositories. Make the repository public to enable it."
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: archives
           path: |
@@ -117,9 +158,9 @@ jobs:
             musl: true
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           name: archives
           path: artifacts
@@ -134,7 +175,7 @@ jobs:
           cp artifacts/include/lol_html.h internal/include/lol_html.h
           ls -l "internal/lib/${{ matrix.target }}/liblolhtml.a"
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         if: ${{ !matrix.musl }}
         with:
           go-version: '1.25'
@@ -175,10 +216,14 @@ jobs:
   collect:
     needs: [build, smoke]
     runs-on: ubuntu-24.04
+    # The one job that writes: it pushes the branch and opens the pull request.
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           name: archives
           path: artifacts
@@ -188,24 +233,45 @@ jobs:
           set -euxo pipefail
           cp -R artifacts/lib/. internal/lib/
           cp artifacts/include/lol_html.h internal/include/lol_html.h
-          cd internal/lib && find . -name 'liblolhtml.a' | sort | xargs sha256sum > SHA256SUMS
+          # Archives and the header, exactly as write_sums in
+          # scripts/build-native.sh does it, so a local `make native` and this
+          # workflow produce the same file. The header is outside internal/lib,
+          # hence the ../include path; ci.yml checks from internal/lib, which
+          # resolves it.
+          cd internal/lib \
+            && { find . -name 'liblolhtml.a' | sort; echo ../include/lol_html.h; } \
+               | xargs sha256sum > SHA256SUMS
           cat SHA256SUMS
 
-      - uses: peter-evans/create-pull-request@v7
+      # NATIVE_PR_TOKEN, when it exists, is a fine-grained personal access token
+      # or GitHub App installation token with contents:write and
+      # pull-requests:write on this repository. It is what makes the pull
+      # request get checks: GitHub raises no workflow events for anything done
+      # with the default GITHUB_TOKEN, so a pull request opened with that token
+      # shows zero checks and the ci workflow - checksum verification on all
+      # seven platforms, lint, ASan, minimum-go, differential, properties,
+      # consume - never runs on the one branch whose binaries it exists to gate.
+      #
+      # The secret is optional. Without it the expression falls back to the
+      # default token, the pull request is still opened, and the step after this
+      # one says out loud that it will need a human to trigger the checks.
+      - uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
+        id: pr
         with:
+          token: ${{ secrets.NATIVE_PR_TOKEN || github.token }}
           branch: native/rebuild
           # Only the vendored artefacts. Without this the downloaded
           # artifacts/ directory is committed too, duplicating every archive.
           add-paths: |
             internal/lib
             internal/include
-          title: 'Rebuild vendored liblolhtml.a (${{ inputs.lol_html_ref }})'
-          commit-message: 'Rebuild vendored liblolhtml.a from ${{ inputs.lol_html_ref }}'
+          title: 'Rebuild vendored liblolhtml.a (${{ needs.build.outputs.lol_html_ref }})'
+          commit-message: 'Rebuild vendored liblolhtml.a from ${{ needs.build.outputs.lol_html_ref }}'
           body: |
             Rebuilt by the `native` workflow.
 
-            - lol-html ref: `${{ inputs.lol_html_ref }}`
-            - Rust toolchain: `${{ inputs.rust_toolchain }}`
+            - lol-html ref: `${{ needs.build.outputs.lol_html_ref }}`
+            - Rust toolchain: `${{ needs.build.outputs.rust_toolchain }}`
 
             Every archive was cross-built on one runner and then linked and
             tested on the platform it targets, including Alpine under musl.
@@ -213,8 +279,8 @@ jobs:
             Checksums are in `internal/lib/SHA256SUMS`. Reproduce locally with
             `make verify`.
 
-            Each archive carries a signed provenance attestation from this run,
-            unless the repository is private - GitHub does not support
+            Each archive, and the vendored header, carries a signed provenance
+            attestation from this run, unless the repository is private - GitHub does not support
             attestations for user-owned private repositories, in which case the
             step is skipped with a notice. Verify with `make attest-verify`, or
             for one file:
@@ -223,3 +289,26 @@ jobs:
             gh attestation verify internal/lib/<target>/liblolhtml.a \
               --repo ${{ github.repository }}
             ```
+
+      # secrets cannot be read from a step-level `if:`, so the condition is a
+      # value in the environment rather than a skipped step.
+      - name: Say whether the pull request will get checks
+        env:
+          HAS_TOKEN: ${{ secrets.NATIVE_PR_TOKEN != '' }}
+          PR: ${{ steps.pr.outputs.pull-request-url }}
+        run: |
+          if [ -z "${PR}" ]; then
+            echo "::notice::No pull request: the rebuild produced no change."
+            exit 0
+          fi
+          if [ "${HAS_TOKEN}" = "true" ]; then
+            echo "::notice::Opened ${PR} with NATIVE_PR_TOKEN, so ci runs on it."
+            exit 0
+          fi
+          echo "::warning title=No CI on the rebuild pull request::${PR} was opened" \
+               "with the default GITHUB_TOKEN, which raises no workflow events, so" \
+               "the ci workflow will not run on it. Close and reopen the pull" \
+               "request by hand to trigger the checks, or configure the optional" \
+               "NATIVE_PR_TOKEN secret (a token with contents:write and" \
+               "pull-requests:write) so this workflow does it for you. Do not merge" \
+               "vendored binaries that no ci run has seen."

@@ -1,7 +1,7 @@
 GO ?= go
 REPO ?= JakeChampion/golol-html
 
-.PHONY: all test race vet lint bench differential properties platforms workflows modules changelog changelog-fold native native-all verify attest-verify tidy clean
+.PHONY: all test race vet lint bench differential properties platforms workflows modules pins changelog changelog-fold native native-all verify attest-verify tidy clean
 
 all: test
 
@@ -10,8 +10,14 @@ test:
 	cd differential && $(GO) test ./...
 	cd properties && $(GO) test ./...
 
+# One invocation per module, like `test` and `vet` and for the same reason: ./...
+# stops at a module boundary. CI runs the detector in all three, so covering only
+# the root here would mean a race in the property or differential harnesses
+# passes before a push and fails in CI.
 race:
 	$(GO) test -race -count=1 ./...
+	cd differential && $(GO) test -race -count=1 ./...
+	cd properties && $(GO) test -race -count=1 -rapid.checks=$(CHECKS) ./...
 
 # One vet per module: ./... stops at a module boundary, so the root's invocation
 # covers neither of the others. scripts/check-modules.sh keeps CI honest about
@@ -23,7 +29,7 @@ vet:
 
 # Not `gofmt -l . | ... | (! read)`: that idiom aborts under macOS bash 3.2
 # with set -e even when it passes.
-lint: vet platforms workflows modules changelog
+lint: vet platforms workflows modules pins changelog
 	@unformatted=$$(gofmt -l .); \
 	if [ -n "$$unformatted" ]; then \
 		echo "unformatted files:"; echo "$$unformatted"; \
@@ -47,6 +53,11 @@ workflows:
 # Catch a module that CI does not vet or test.
 modules:
 	scripts/check-modules.sh
+
+# Catch a copy of the pinned lol-html revision that has drifted from the one in
+# scripts/build-native.sh.
+pins:
+	scripts/check-pins.sh
 
 # Check the changelog fragments. Pass BASE=origin/main to also check that this
 # branch adds one rather than editing CHANGELOG.md, which is what CI does.
@@ -87,8 +98,13 @@ verify:
 # Requires the gh CLI. Archives built before the attestation step existed, or
 # built in a private fork (GitHub does not support attestations for user-owned
 # private repositories), have nothing to verify and will fail.
+#
+# The header is checked with them: it is the ABI contract the cgo calls compile
+# against, and the same workflow run replaces both. It joins the attestation
+# subject and SHA256SUMS at the next rebuild, so until the native workflow has
+# run once since that change there is nothing to verify for it either.
 attest-verify:
-	@for f in internal/lib/*/liblolhtml.a; do \
+	@for f in internal/lib/*/liblolhtml.a internal/include/lol_html.h; do \
 		printf '==> %s\n' "$$f"; \
 		gh attestation verify "$$f" --repo $(REPO) || exit 1; \
 	done

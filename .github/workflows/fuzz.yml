@@ -17,6 +17,8 @@ on:
 permissions:
   contents: read
 
+# Actions are pinned by commit SHA with the release in a trailing comment, for
+# the reason given in ci.yml.
 jobs:
   fuzz:
     strategy:
@@ -36,12 +38,21 @@ jobs:
           # bounds the damage if it turns out to be slower.
           - target: FuzzRewrite
             rate: 1700000
-          # FuzzOperations is the one that drives the cgo boundary, so it is
-          # the one whose inputs are worth the cost of AddressSanitizer. That
-          # used to be a third row fuzzing it under -asan at 170k executions a
-          # minute against 2M without; it is now the replay step below, which
-          # puts the same inputs under ASan without the engine. See there for
-          # why the engine is what could not stay.
+            # Replayed as well. This target crosses the cgo boundary on every
+            # execution - fuzz_test.go calls it a crash check for the C
+            # boundary - and its generated inputs never used to meet the
+            # sanitizer at all: ci.yml's sanitize job covers its twelve
+            # committed seeds, and nothing covered the millions of inputs a
+            # night finds. A heap overrun that corrupts memory without crashing
+            # would go unnoticed for any input only the search knows about.
+            replay: true
+          # FuzzOperations is the other one that drives the cgo boundary. ASan
+          # over it used to be a third matrix row fuzzing under -asan at 170k
+          # executions a minute against 2M without; it is now the replay step
+          # below, which puts the same inputs under ASan without the engine.
+          # See there for why the engine is what could not stay - what was
+          # removed is the engine under the sanitizer, not the corpus, and
+          # neither row may turn back into the former.
           - target: FuzzOperations
             rate: 2000000
             replay: true
@@ -50,9 +61,9 @@ jobs:
     # bounds a pathologically slow runner instead of letting it burn six hours.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.25'
           cache: false
@@ -64,7 +75,7 @@ jobs:
       # Go keeps generated corpus entries in GOCACHE. Restoring them means the
       # search continues rather than restarting from the seeds every night.
       - name: Restore corpus
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ steps.cache-dir.outputs.dir }}
           # The prefix is the target alone. It still matches the keys written
@@ -129,11 +140,16 @@ jobs:
       # leaving it in a discarded runner.
       - name: Upload the failing input
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: crasher-${{ matrix.target }}
           path: testdata/fuzz/
           if-no-files-found: ignore
+          # A finding is the whole point of the night, and nothing here can
+          # commit it - this workflow is contents:read. Keep it for as long as
+          # an artifact can be kept, so the window to turn it into a seed under
+          # testdata/fuzz/ is months rather than the default fortnight.
+          retention-days: 90
 
       # AddressSanitizer over every input the search found, with the search
       # itself never under it. `go test -asan -fuzz` is the combination that
@@ -145,7 +161,7 @@ jobs:
       # than this library's, and neither is reachable from here: a fuzz target
       # run without -fuzz is an ordinary test over the files it is given.
       #
-      # It buys the search back as well. Under -asan this target managed 170k
+      # It buys the search back as well. Under -asan FuzzOperations managed 170k
       # executions a minute against 2M without, so the night now searches
       # roughly twelve times as far and ASan still sees everything the search
       # kept.
@@ -190,16 +206,36 @@ jobs:
 
       - name: Upload the input that failed under AddressSanitizer
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: replay-crasher-${{ matrix.target }}
           path: replay-crashers/
           if-no-files-found: ignore
+          retention-days: 90
+
+      # The cache is a working copy, not storage. GitHub evicts entries unused
+      # for seven days, LRU-evicts at the repository cap, and disables a cron
+      # workflow after sixty days of repository inactivity - so a quiet month
+      # discards everything the search has learned, silently, with nothing to
+      # restore from. An artifact is a second copy somebody can download: to
+      # re-seed the cache, or to commit entries into testdata/fuzz/<target>,
+      # where a cache entry and a committed seed are the same file format.
+      - name: Upload the corpus
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: corpus-${{ matrix.target }}
+          path: ${{ steps.cache-dir.outputs.dir }}/github.com/JakeChampion/golol-html/${{ matrix.target }}
+          # A corpus this step cannot find is worth saying out loud, but it is
+          # not worth failing the night over: the replay step above already
+          # fails on an empty corpus for the rows that replay.
+          if-no-files-found: warn
+          retention-days: 90
 
       - name: Save corpus
         # Save even on failure: the corpus that found a bug is worth keeping.
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ steps.cache-dir.outputs.dir }}
           key: fuzz-${{ matrix.target }}-${{ github.run_id }}
