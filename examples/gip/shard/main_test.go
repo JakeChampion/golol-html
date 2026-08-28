@@ -170,25 +170,26 @@ func TestTheSchemeIsTheCallers(t *testing.T) {
 	}
 }
 
-// TestARelativePathIsMadeAbsolute, which is the one guess this program does make -
-// and it makes it visible in the output rather than silently.
-func TestARelativePathIsMadeAbsolute(t *testing.T) {
-	got, _ := shard(t, `<img src="i/a.png">`, std())
-	if !strings.Contains(got, "/i/a.png") {
+// TestAPageRelativePathIsLeftAlone, which is the guess this program refuses to
+// make. "i/a.png" on /blog/post.html is /blog/i/a.png, and there is nothing in
+// the document that says so - moving it to a host would name /i/a.png instead,
+// which is a different file and a 404 nobody sees until the page is loaded.
+func TestAPageRelativePathIsLeftAlone(t *testing.T) {
+	got, res := shard(t, `<img src="i/a.png">`, std())
+	if got != `<img src="i/a.png">` {
+		t.Errorf("got %q, want it unchanged", got)
+	}
+	if res.Sharded != 0 || res.Relative != 1 {
+		t.Errorf("%v: want it counted as page-relative and not sharded", res)
+	}
+	// A document mixing the two spellings shards only the one that names a path
+	// from the root, so one file cannot end up on two hosts.
+	got, res = shard(t, `<img src="i/a.png"><img src="/i/a.png">`, std())
+	if strings.Count(got, "//static") != 1 {
 		t.Errorf("got %q", got)
 	}
-	// The host comes from the path as written, so the two spellings can differ - a
-	// document mixing them gets two hosts for one file, which the report shows.
-	a, b := Host(hosts, "i/a.png"), Host(hosts, "/i/a.png")
-	if a == b {
-		t.Skip("these two spellings happen to hash to the same host")
-	}
-	got, res := shard(t, `<img src="i/a.png"><img src="/i/a.png">`, std())
-	if strings.Count(got, "//static") != 2 {
-		t.Errorf("got %q", got)
-	}
-	if len(res.PerHost) != 2 {
-		t.Errorf("%v: the same file on one host from two spellings", res)
+	if len(res.PerHost) != 1 {
+		t.Errorf("%v: the same file on two hosts from two spellings", res)
 	}
 }
 

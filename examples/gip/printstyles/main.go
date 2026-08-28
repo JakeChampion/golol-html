@@ -88,7 +88,6 @@ func validClass(v string) bool {
 }
 
 func (s *styler) options() []lolhtml.Option {
-	sawHead := false
 	placed := s.stylesheet == ""
 	haveSheet := false
 	seen := 0
@@ -123,11 +122,21 @@ func (s *styler) options() []lolhtml.Option {
 	if s.stylesheet != "" {
 		opts = append(opts,
 			lolhtml.OnElement("head", func(e *lolhtml.Element) error {
-				sawHead = true
 				if !e.CanHaveContent() {
 					return nil
 				}
 				return e.OnEndTag(func(end *lolhtml.EndTag) error {
+					// The name guard, and it is load-bearing here. </head> is
+					// omissible, and when it is left out this callback runs at
+					// whatever end tag did close the head - </body> or </html>
+					// - which is a position outside the head entirely. Writing
+					// there put the stylesheet after the document's content and
+					// reported it as linked. A foreign name means the head was
+					// closed implicitly, and the handler below is where that
+					// case is served.
+					if end.Name() != "head" {
+						return nil
+					}
 					if placed {
 						return nil
 					}
@@ -141,8 +150,18 @@ func (s *styler) options() []lolhtml.Option {
 				})
 			}),
 
-			lolhtml.OnElement("body", func(e *lolhtml.Element) error {
-				if sawHead || placed {
+			// The implied end of the head: a parser closes it at the first
+			// element that is not head content, whether or not a </head> or a
+			// <body> is written. Inserting before that element inserts at the
+			// end of the head, which is where the link belongs - and it is the
+			// only position available, since by the time an end tag says the
+			// head is over the rewriter has passed it.
+			//
+			// A handler on "body" alone does not cover this: <body> is
+			// omissible too, and a page that spells neither tag - <head><title>
+			// t</title><p>x - has a head and would get nothing at all.
+			lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+				if placed || headContent[e.TagName()] {
 					return nil
 				}
 				placed = true
@@ -163,6 +182,16 @@ func (s *styler) options() []lolhtml.Option {
 	}
 
 	return opts
+}
+
+// headContent is what may appear before the body begins: the elements a parser
+// keeps in the head, plus the two that enclose it. A start tag of anything else
+// closes the head, whether or not the document says so.
+var headContent = map[string]bool{
+	"html": true, "head": true,
+	"base": true, "basefont": true, "bgsound": true, "link": true,
+	"meta": true, "noframes": true, "noscript": true, "script": true,
+	"style": true, "template": true, "title": true,
 }
 
 // link is the stylesheet element. Assembled as markup, so the href is escaped

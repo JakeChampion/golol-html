@@ -167,8 +167,9 @@ func (n *nav) neighbours() (prev, next string) {
 const relSelector = `link[rel~="next"], link[rel~="prev"], link[rel~="previous"]`
 
 // writeOptions is the writing pass's handler set, separated from writePass so a
-// test can drive it with chunked input. writePass writes the document in one
-// call, which would otherwise make chunk invariance untestable here.
+// test can drive it with chunked input. writePass copies the document in, so
+// where the chunk boundaries fall is not its choice and chunk invariance would
+// otherwise be untestable here.
 func (n *nav) writeOptions() []lolhtml.Option {
 	prev, next := n.neighbours()
 	if prev == "" && next == "" {
@@ -183,10 +184,17 @@ func (n *nav) writeOptions() []lolhtml.Option {
 		// An existing rel=next or rel=prev is rewritten rather than joined: two
 		// of either is a contradiction, and a stale one is worse than none.
 		lolhtml.OnElement(relSelector, func(e *lolhtml.Element) error {
+			// rel is a token list, and the selector above matched it as one:
+			// "[rel~=next]" is true of rel="alternate next". Deciding with
+			// rel == "next" therefore calls every multi-token rel a prev, so
+			// that alternate link's href is overwritten with the previous
+			// page's - and, because the handler then marks prev as done, the
+			// real rel=prev is never inserted either. Ask the same question the
+			// selector asked.
 			rel := strings.ToLower(strings.TrimSpace(stdhtml.UnescapeString(attr(e, "rel"))))
-			kind := "next"
-			if rel != "next" {
-				kind = "prev"
+			kind := "prev"
+			if hasToken(rel, "next") {
+				kind = "next"
 			}
 			want := next
 			if kind == "prev" {
@@ -238,13 +246,16 @@ func (n *nav) writeOptions() []lolhtml.Option {
 	}
 }
 
-func (n *nav) writePass(doc []byte, w io.Writer) error {
+// writePass runs the writing handlers over src. It takes a reader rather than
+// the bytes, because the one-pass mode has no bytes: the whole point of giving
+// the neighbours is that the document goes through without being held.
+func (n *nav) writePass(src io.Reader, w io.Writer) error {
 	n.passes++
 	out, err := lolhtml.NewWriter(w, n.writeOptions()...)
 	if err != nil {
 		return err
 	}
-	if _, err := out.Write(doc); err != nil {
+	if _, err := io.Copy(out, src); err != nil {
 		out.Close()
 		return err
 	}
@@ -276,6 +287,17 @@ func (n *nav) insertMissing(done map[string]bool, prev, next string, insert func
 	return insert(sb.String())
 }
 
+// hasToken reports whether a whitespace-separated token list contains want,
+// which is what a "[rel~=want]" selector tests.
+func hasToken(list, want string) bool {
+	for _, tok := range strings.Fields(list) {
+		if tok == want {
+			return true
+		}
+	}
+	return false
+}
+
 func attr(e *lolhtml.Element, name string) string {
 	v, _ := e.Attribute(name)
 	return v
@@ -288,16 +310,22 @@ func (n *nav) run(r io.Reader, w io.Writer) error {
 	if err := n.validate(); err != nil {
 		return err
 	}
+	if n.given() && n.current == 0 {
+		// One pass, and nothing is held: the reader goes straight into the
+		// rewriter. Reading it all first would give the same output at the same
+		// cost as the two-pass mode's buffer, which is the cost the flags exist
+		// to avoid - and it would do it silently, because nothing about the
+		// result would say so.
+		return n.writePass(r, w)
+	}
 	doc, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
-	if !n.given() || n.current != 0 {
-		if err := n.readPass(doc); err != nil {
-			return err
-		}
+	if err := n.readPass(doc); err != nil {
+		return err
 	}
-	return n.writePass(doc, w)
+	return n.writePass(bytes.NewReader(doc), w)
 }
 
 func navString(in string, opts ...func(*nav)) (string, *nav, error) {

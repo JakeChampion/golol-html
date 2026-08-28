@@ -26,9 +26,18 @@
 // No error, nothing odd in the output. So a modernising rewrite is only safe where
 // the new element's content model accepts what the old one held, and this program
 // renames only within that set: center, marquee, big, strike, tt, nobr, blink, font
-// to div or span, acronym to abbr, dir to ul, listing and xmp to pre - the last two
-// carrying a warning, because their content was text and becomes markup. See
-// differential/rename_test.go.
+// to div or span, acronym to abbr, dir to ul. See differential/rename_test.go.
+//
+// The third row above is why listing and xmp are not in that set, even though <pre>
+// is obviously what they meant. They are raw-text elements: what is between their
+// tags is text, and a parser builds no elements from it. Renaming the tag does not
+// touch a byte of that text, but whoever parses the output reads it as markup, so
+// a <xmp> holding "<b>x</b>" - four visible characters and a word - comes out as a
+// <pre> holding a bold "x", and one holding "<img src=x onerror=...>" comes out as
+// a live element. A warning is not a fix for that; the rename is only safe when the
+// content is known, which a streaming rewrite does not know at the start tag where
+// SetTagName has to be called. See [lolhtml.Element.SetTagName] and
+// [lolhtml.IsRawText].
 //
 // # What it will not do
 //
@@ -38,6 +47,8 @@
 //     same thing, so they are reported and left.
 //   - plaintext: nothing closes it, so a rename leaves the new element open to the
 //     end of the document.
+//   - listing and xmp: <pre> is the right replacement and the rename is not safe to
+//     make blind, because their content is text and <pre>'s is markup.
 package main
 
 import (
@@ -76,9 +87,7 @@ var Renames = map[string]rename{
 	"acronym": {to: "abbr", class: ""},
 	"dir":     {to: "ul", class: ""},
 	"font":    {to: "span", class: ""}, // its classes come from its attributes
-	"listing": {to: "pre", class: "", warn: "its content was text and is now markup"},
-	"xmp":     {to: "pre", class: "", warn: "its content was text and is now markup"},
-	"image":   {to: "img", class: ""}, // a spelling of img: the parser renames it anyway
+	"image":   {to: "img", class: ""},  // a spelling of img: the parser renames it anyway
 }
 
 // Left are the obsolete elements this program will not rename, with why.
@@ -93,6 +102,8 @@ var Left = map[string]string{
 	"spacer":    "CSS margin, which needs the stylesheet",
 	"basefont":  "CSS on a common ancestor, which needs the stylesheet",
 	"plaintext": "nothing closes it, so a rename would leave the new element open",
+	"listing":   "its content is text, not markup, and <pre>'s is markup",
+	"xmp":       "its content is text, not markup, and <pre>'s is markup",
 }
 
 // FontAttributes are font's presentation attributes and the class each becomes. The

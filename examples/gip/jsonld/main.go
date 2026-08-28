@@ -27,7 +27,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	stdhtml "html"
 	"io"
 	"os"
 	"sort"
@@ -246,6 +245,13 @@ func kindOf(v any) string {
 // the raw JSON rather than from the parsed value: a block that failed to parse
 // still usually has a legible @type, and saying which block is broken is more
 // useful than saying that one is.
+//
+// Read, and not decoded. The same rule check states applies here: this is a
+// script body, so a parser does not decode character references in it and
+// neither may this - a @type of "A&amp;B" is seven characters to encoding/json
+// and to every JSON-LD consumer, and unescaping it would print "A&B", a value
+// that appears nowhere in the document and that a reader grepping for it will
+// not find.
 func typeOf(raw string) string {
 	i := strings.Index(raw, `"@type"`)
 	if i < 0 {
@@ -255,7 +261,7 @@ func typeOf(raw string) string {
 	if j := strings.Index(rest, `"`); j >= 0 {
 		rest = rest[j+1:]
 		if k := strings.Index(rest, `"`); k >= 0 {
-			return stdhtml.UnescapeString(rest[:k])
+			return rest[:k]
 		}
 	}
 	return "?"

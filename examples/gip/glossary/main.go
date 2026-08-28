@@ -25,6 +25,16 @@
 // Not inside code, a heading, or anything where a link would be wrong: kbd, samp,
 // var, pre, script, style, textarea, title.
 //
+// And not inside a raw-text element, which is a separate rule from the taste one
+// above and a harder one. The mentions are linked by replacing a whole text node
+// with lolhtml.HTML, and the library does not raw-text check a TextChunk
+// insertion - it has no way to know which element the chunk came from. So a <a
+// href> written into an <xmp> or a <noscript> is not a link, it is the literal
+// text of that element as far as a parser is concerned, and a "</xmp>" arriving
+// from anywhere would end it. A hand-written list of names is the wrong guard
+// for that, because it falls behind the parser silently; lolhtml.IsRawText is
+// the list, measured against the parser.
+//
 // And the text has to be matched across chunk boundaries, so the mentions are
 // found in the accumulated text of a node rather than per chunk - a term split
 // across two chunks is not a term to a per-chunk search, and where the chunks
@@ -55,7 +65,11 @@ type Term struct {
 // Glossary is the terms found, keyed by their lower-cased text.
 type Glossary map[string]Term
 
-// noLink are the elements inside which a link would be wrong.
+// noLink are the elements inside which a link would be wrong. It is a taste
+// judgement, not a correctness one - the correctness half is lolhtml.IsRawText,
+// applied alongside this map below. The two overlap on script, style, textarea
+// and title, which are here because a link in them reads wrong and there because
+// their content is not markup at all.
 var noLink = map[string]bool{
 	"a": true, "dl": true, "code": true, "kbd": true, "samp": true, "var": true,
 	"pre": true, "script": true, "style": true, "textarea": true, "title": true,
@@ -241,17 +255,42 @@ func Rewrite(dst io.Writer, src io.Reader) (Result, error) {
 
 	w, err := lolhtml.NewWriter(dst,
 		lolhtml.OnElement("*", func(e *lolhtml.Element) error {
-			if !noLink[e.TagName()] || !e.CanHaveContent() {
+			tag := e.TagName()
+			// IsRawText as well as the map: inserting HTML into one of those
+			// ten writes text, not markup, and the library cannot check a
+			// TextChunk insertion for us. Six of the ten - iframe, noembed,
+			// noframes, noscript, xmp, plaintext - are not in noLink and never
+			// would be, which is the point of asking rather than listing.
+			if !noLink[tag] && !lolhtml.IsRawText(tag) {
 				return nil
 			}
-			tag := e.TagName()
+			if !e.CanHaveContent() {
+				return nil
+			}
 			depth++
-			return e.OnEndTag(func(t *lolhtml.EndTag) error {
-				// These all have mandatory end tags, so a foreign one means the
-				// document ended inside the element.
-				if t.Name() != tag {
-					return nil
-				}
+			return e.OnEndTag(func(*lolhtml.EndTag) error {
+				// No name guard here, deliberately. The usual guard - ignore an
+				// end tag whose name is not this element's - is for a handler
+				// that writes at the end tag's position, because a foreign one
+				// is somewhere else in the document. This handler writes
+				// nothing; it only has to undo its own increment exactly once,
+				// and OnEndTag runs at most once per element.
+				//
+				// Guarding on the name here is what breaks the counter, because
+				// not every one of these elements has a mandatory end tag:
+				// </option> is omissible, so <option>x<option>y</select> closes
+				// both options at the </select> and reports "select" for both.
+				// Misnesting does the same to an element that does have one:
+				// <p><code>x</p> closes the code at the </p>. Either way the
+				// guarded decrement never runs, depth stays above zero, and the
+				// text handler below silently stops linking for the rest of the
+				// document.
+				//
+				// The remaining inexactness is conservative: an element closed
+				// by a sibling's start tag is reported at a later end tag (see
+				// Element.OnEndTag), so a few nodes stay excluded that need not
+				// be. Missing a link is the safe direction; a link inside a
+				// <code> is not.
 				depth--
 				return nil
 			})

@@ -142,6 +142,13 @@ type stopper struct {
 	// rolling window over its text - a play call can straddle a chunk boundary.
 	inScript int
 	tail     string
+	// reported is whether the script this position is inside has already been
+	// counted. A separate flag rather than zeroing inScript: the end tag
+	// decrements the counter whatever it holds, so zeroing it once made the
+	// count negative for the rest of the document, and a negative count is not
+	// "outside a script" to the guard in text - every paragraph of prose was
+	// then scanned for play calls, and the next script was skipped instead.
+	reported bool
 }
 
 func (s *stopper) options() []lolhtml.Option {
@@ -204,6 +211,9 @@ func (s *stopper) script(e *lolhtml.Element) error {
 	return e.OnEndTag(func(*lolhtml.EndTag) error {
 		s.inScript--
 		s.tail = ""
+		if s.inScript <= 0 {
+			s.reported = false
+		}
 		return nil
 	})
 }
@@ -212,7 +222,7 @@ func (s *stopper) script(e *lolhtml.Element) error {
 // search per chunk: a chunk boundary can fall inside the call, and missing it would
 // make this program report less than it should.
 func (s *stopper) text(t *lolhtml.TextChunk) error {
-	if s.inScript == 0 {
+	if s.inScript == 0 || s.reported {
 		return nil
 	}
 	window := s.tail + squeeze(t.Text())
@@ -225,7 +235,8 @@ func (s *stopper) text(t *lolhtml.TextChunk) error {
 	if found {
 		s.res.Scripts++
 		// One report per script is enough: the answer is "a person has to look".
-		s.inScript = 0
+		// The flag, not the counter - the counter belongs to the end tag.
+		s.reported = true
 		s.tail = ""
 		return nil
 	}

@@ -22,6 +22,12 @@
 // runs relative to the markup around it, and a script placed late in the body was
 // often placed there deliberately - the pattern predates defer.
 //
+// "Inside the body" is not "after a <body> tag". That start tag is omissible and
+// a minifier will have removed it, so the body is taken to begin at the first
+// element that is not head content - see headContent below. A rewrite that waits
+// for the tag defers the whole body of any page that leaves it out, which is the
+// one thing this list says it will not do.
+//
 // One cosmetic thing it cannot help. There is no way to write a bare attribute
 // through this API, so the output says defer="" where the page's own scripts say
 // defer. Any parser treats those as the same attribute, since presence is what a
@@ -77,6 +83,25 @@ func (d *deferrer) options() []lolhtml.Option {
 	inBody := false
 
 	return []lolhtml.Option{
+		// The body starts at the first element that is not head content, which
+		// is usually not a <body> tag at all. The body start tag is omissible
+		// and minifiers strip it, and lol-html reports the tokens the document
+		// spells rather than the elements a parser builds - so a handler on
+		// "body" alone never fires for <head>...</head><p>x<script src>, and
+		// every script in that page's body is deferred while the report says
+		// nothing was. That is precisely the change this program promises not
+		// to make, so the implied start tag is worked out here instead.
+		//
+		// Registered first, because handlers on one element run in registration
+		// order and the script handler below has to see the answer for the
+		// element it is looking at.
+		lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+			if !inBody && !headContent[e.TagName()] {
+				inBody = true
+			}
+			return nil
+		}),
+
 		lolhtml.OnElement("body", func(e *lolhtml.Element) error {
 			if !e.CanHaveContent() {
 				return nil
@@ -135,6 +160,19 @@ func (d *deferrer) options() []lolhtml.Option {
 	}
 }
 
+// headContent is what may appear before the body begins: the elements a parser
+// keeps in the head, plus the two that enclose it. A start tag of anything else
+// is the implied <body>.
+//
+// noscript is here because it is allowed in the head; a <noscript> in the body
+// has an element before it that already started the body.
+var headContent = map[string]bool{
+	"html": true, "head": true,
+	"base": true, "basefont": true, "bgsound": true, "link": true,
+	"meta": true, "noframes": true, "noscript": true, "script": true,
+	"style": true, "template": true, "title": true,
+}
+
 // hostIsSkipped reports whether a host is on the skip list, matched as a suffix
 // so a subdomain of a skipped host is skipped too.
 func (d *deferrer) hostIsSkipped(host string) bool {
@@ -150,13 +188,27 @@ func (d *deferrer) hostIsSkipped(host string) bool {
 
 // hostOf reads the host out of a URL without a full parse: a relative src has no
 // host and is first-party by definition.
+//
+// The "//" that introduces a host is only that in two places - at the very start
+// of the URL, or straight after a scheme. Looking for the first one anywhere in
+// the string invents a host out of a path that happens to contain a doubled
+// slash, and out of a query that mentions one: "/assets//a.js" reads as the host
+// "a.js" and "a.js?v=//evil.com" as "evil.com". Both are first-party URLs, and
+// both would then be matched against -skip-host - so the flag silently skips
+// scripts it should defer and defers scripts it should skip.
+//
+// The result is lower-cased, because a host is case-insensitive and the caller
+// compares it.
 func hostOf(raw string) string {
 	s := raw
-	if i := strings.Index(s, "//"); i >= 0 {
-		s = s[i+2:]
-	} else {
-		return ""
+	if !strings.HasPrefix(s, "//") {
+		i := strings.Index(s, ":")
+		if i <= 0 || !isScheme(s[:i]) || !strings.HasPrefix(s[i+1:], "//") {
+			return ""
+		}
+		s = s[i+1:]
 	}
+	s = s[2:]
 	if i := strings.IndexAny(s, "/?#"); i >= 0 {
 		s = s[:i]
 	}
@@ -166,7 +218,23 @@ func hostOf(raw string) string {
 	if i := strings.Index(s, ":"); i >= 0 {
 		s = s[:i]
 	}
-	return s
+	return strings.ToLower(s)
+}
+
+// isScheme reports whether s is a URL scheme: a letter, then letters, digits,
+// "+", "-" and ".". Anything else before a colon is part of a path or a query,
+// and what follows it is not an authority.
+func isScheme(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z':
+		case i > 0 && (c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.'):
+		default:
+			return false
+		}
+	}
+	return s != ""
 }
 
 func decoded(s string) string { return stdhtml.UnescapeString(s) }

@@ -27,6 +27,10 @@
 //     program's decision
 //   - a URL already on one of the shard hosts is left where it is, so a second run
 //     changes nothing - even though the hash would have chosen the same host anyway
+//   - a URL relative to the page rather than to the site - "img/a.png", with no
+//     leading slash - is left alone, because where it points depends on the
+//     document's own URL and the rewrite does not know that. Putting a host in
+//     front of it would silently name a different file
 //   - a srcset is sharded member by member, each by its own path, because a
 //     browser picks one member and the point is that the member is cached
 package main
@@ -65,6 +69,7 @@ type Result struct {
 	Sharded  int            // URLs moved to a shard host
 	Already  int            // URLs already on one
 	Absolute int            // URLs with a host of their own
+	Relative int            // URLs relative to the page, which cannot be moved
 	Attrs    int            // attributes looked at
 	PerHost  map[string]int // how many landed on each host
 }
@@ -74,8 +79,8 @@ func (r Result) String() string {
 	for _, h := range sortedKeys(r.PerHost) {
 		hosts = append(hosts, fmt.Sprintf("%s=%d", h, r.PerHost[h]))
 	}
-	return fmt.Sprintf("shard: moved %d of %d urls (%s); %d already sharded, %d off-site",
-		r.Sharded, r.Attrs, strings.Join(hosts, " "), r.Already, r.Absolute)
+	return fmt.Sprintf("shard: moved %d of %d urls (%s); %d already sharded, %d off-site, %d page-relative",
+		r.Sharded, r.Attrs, strings.Join(hosts, " "), r.Already, r.Absolute, r.Relative)
 }
 
 func sortedKeys(m map[string]int) []string {
@@ -141,6 +146,21 @@ func (s *sharder) one(raw string) string {
 		}
 		return ""
 	}
+	// Page-relative, and this program will not guess where the page is. A src of
+	// "img/a.png" resolves against the directory the document was served from -
+	// /blog/img/a.png for /blog/post.html - and putting a host in front of it
+	// produces https://shard/img/a.png, which is a different file. There is no
+	// fix from here: the document does not say what its own URL is, and the
+	// rewrite has no way to ask. So these are counted and left as they are.
+	//
+	// The same test declines a fragment ("#top"), a bare query, and any scheme
+	// without an authority ("mailto:", "tel:"), for the same reason: none of
+	// them names a path a host can be put in front of.
+	if !strings.HasPrefix(raw, "/") {
+		s.res.Relative++
+		return ""
+	}
+
 	path := raw
 	if i := strings.IndexAny(path, "?#"); i >= 0 {
 		path = path[:i]
@@ -158,7 +178,7 @@ func (s *sharder) one(raw string) string {
 	if prefix != "" {
 		prefix += ":"
 	}
-	return prefix + "//" + host + slash(raw)
+	return prefix + "//" + host + raw
 }
 
 // onShard reports whether an absolute URL is already on one of the hosts.
@@ -176,16 +196,6 @@ func (s *sharder) onShard(raw string) bool {
 		}
 	}
 	return false
-}
-
-// slash keeps a document-relative URL working once a host is in front of it: a path
-// with no leading slash was relative to the page, and this program will not guess
-// where that is, so those are left alone by the caller of this function.
-func slash(raw string) string {
-	if strings.HasPrefix(raw, "/") {
-		return raw
-	}
-	return "/" + raw
 }
 
 // srcset shards each member by its own path.

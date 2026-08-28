@@ -12,6 +12,11 @@
 // The manifest that was actually used is embedded in the output as a JSON block,
 // written through a streaming sink so a large manifest never has to be
 // assembled in memory first.
+//
+// -embed costs a second pass over the document. The block belongs in the head
+// and what goes in it is not known until the body has been read, and a sink
+// writing at </head> can only see what the rewriter has already parsed - see
+// run, where that is spelled out.
 package main
 
 import (
@@ -129,7 +134,38 @@ type adder struct {
 	used      map[string]string
 }
 
+// run rewrites src into dst, in two passes when the manifest is to be embedded.
+//
+// One pass would be wrong, and silently, which is the trap StreamFunc documents:
+// the closure that writes the block runs while </head> is being serialised - a
+// sink is filled at the moment its content is needed - and at that moment the
+// rewriter has not parsed the body. So a.used holds whatever was found in the
+// head and nothing else, and the run embeds a block listing a fraction of what it
+// just covered while reporting the full count. No error, because the closure got
+// exactly the answer it computed.
+//
+// The block has to be in the head and the evidence for it is in the body, so the
+// document is read once to find out what the manifest covers and rewritten with
+// the answer. The cost is holding the document, which is why it is paid only for
+// -embed: without it nothing depends on what comes later and the rewrite streams.
 func (a *adder) run(src io.Reader, dst io.Writer) error {
+	if !a.embed {
+		return a.pass(src, dst)
+	}
+	doc, err := io.ReadAll(src)
+	if err != nil {
+		return err
+	}
+	if err := a.pass(bytes.NewReader(doc), io.Discard); err != nil {
+		return err
+	}
+	// The tallies count one document, not one pass. a.used is what the reading
+	// pass was for, so it is the one thing carried over.
+	a.added, a.kept, a.uncovered, a.conflicts = 0, 0, nil, nil
+	return a.pass(bytes.NewReader(doc), dst)
+}
+
+func (a *adder) pass(src io.Reader, dst io.Writer) error {
 	w, err := lolhtml.NewWriter(dst, a.options()...)
 	if err != nil {
 		return err
@@ -192,7 +228,9 @@ func (a *adder) options() []lolhtml.Option {
 	opts = append(opts,
 		// The manifest actually used, embedded as data rather than as script.
 		// Written through a sink so a large manifest is never assembled in
-		// memory: the closure runs at the point the content is needed.
+		// memory: the closure runs at the point the content is needed - which
+		// is also why a.used has to be complete before this pass starts. See
+		// run.
 		lolhtml.OnElement("head", func(e *lolhtml.Element) error {
 			if !a.embed {
 				return nil
