@@ -219,7 +219,7 @@ func TestABudgetOfZeroFailsOnTheFirstWrite(t *testing.T) {
 	if !errors.Is(r.WriteErr, ErrGone) {
 		t.Errorf("write reported %v", r.WriteErr)
 	}
-	if out := r.String(); !strings.Contains(out, "accepted 0 of") {
+	if out := r.String(); !strings.Contains(out, "accepted 0 bytes of rewritten output") {
 		t.Errorf("the report says:\n%s", out)
 	}
 }

@@ -12,6 +12,13 @@
 // An author-written sandbox is otherwise left alone. Tightening it would break
 // embeds that were working, and this program cannot know which tokens the embed
 // needs.
+//
+// The other judgement is what "same origin" means, and it is narrower than "the
+// URL names no host". A relative src loads from this document and needs nothing; a
+// data:, blob: or javascript: src names no host either and is not first-party at
+// all - it is content the page carries, which is what the sandbox attribute exists
+// for. A src the URL parser refuses is hardened too, because a guard that fails
+// open on the inputs it cannot read is not a guard. See sameOrigin.
 package main
 
 import (
@@ -121,7 +128,7 @@ func (h *hardener) options() []lolhtml.Option {
 			// first-party whatever its src says.
 			_, hasSrcdoc := e.Attribute("srcdoc")
 
-			if !h.all && (!hasSrc || hasSrcdoc || host == "" || h.keep[host]) {
+			if !h.all && (!hasSrc || hasSrcdoc || sameOrigin(src) || h.keep[host]) {
 				h.note("same origin, srcdoc or no src")
 				return nil
 			}
@@ -161,6 +168,33 @@ func hostOf(src string) string {
 		return ""
 	}
 	return strings.ToLower(u.Hostname())
+}
+
+// sameOrigin reports whether a src loads from this document's own origin, which is
+// the one case with nothing to harden.
+//
+// It is deliberately not "hostOf returned nothing". hostOf answers "" for a URL
+// with no authority component and for a URL url.Parse rejects, and reading that as
+// same-origin exempts the four srcs that most need a sandbox:
+//
+//	src="data:text/html,<script>…</script>"   a document this page carries
+//	src="blob:https://x.example/…"            likewise
+//	src="javascript:alert(1)"                 script in the embedding document
+//	src="http://[::1"                         unparseable, so unvouched for
+//
+// A relative src - "/embed", "e.html", "?q=1", "#frag" - is the only one of them
+// that really is this origin, and it is the only one this returns true for. A
+// parse failure returns false: failing open is how a guard that reads well ends up
+// doing nothing.
+func sameOrigin(src string) bool {
+	u, err := url.Parse(strings.TrimSpace(stdhtml.UnescapeString(src)))
+	if err != nil {
+		return false
+	}
+	// No scheme and no authority is a relative reference, resolved against this
+	// document. A scheme-relative "//host/x" has an authority, so it is judged by
+	// its host like any absolute URL.
+	return u.Scheme == "" && u.Host == ""
 }
 
 func displayHost(h string) string {

@@ -37,6 +37,13 @@
 // <!--[if mso]> is how a template talks to Outlook and a comment is otherwise a place where a
 // tracking pixel hides. URLs are kept for http, https and mailto and dropped for everything
 // else, which is where javascript: goes.
+//
+// A meta is kept, and what it declares is checked as well as its name: <meta http-equiv="refresh"
+// content="0;url=..."> is a redirect out of the message, spelled entirely in attributes that are
+// on the allow-list, with the URL in a content value that the href and src check never sees. So
+// http-equiv has an allow-list of its own. It is worth stating as the general shape rather than
+// as one entry: an allow-list of elements and attributes is not an allow-list of values, and
+// wherever an allowed attribute holds a keyword, the keywords need a list too.
 package main
 
 import (
@@ -77,6 +84,13 @@ var AllowedAttributes = map[string]map[string]bool{
 // AllowedSchemes are the URL schemes a link may use. A scheme-relative or relative URL has no
 // scheme and is kept.
 var AllowedSchemes = map[string]bool{"http": true, "https": true, "mailto": true}
+
+// AllowedHTTPEquiv are the http-equiv values a meta may declare. The attribute states an HTTP
+// header, and a header is not a string: <meta http-equiv="refresh" content="0;url=..."> is a
+// redirect out of the message, and its URL is inside a content value where the href and src
+// check cannot see it. An allow-list of elements and attributes is not an allow-list of values,
+// and this is where that gap opens.
+var AllowedHTTPEquiv = map[string]bool{"content-type": true, "x-ua-compatible": true}
 
 // Removal is one thing taken out, counted by kind and name.
 type Removal struct {
@@ -204,6 +218,20 @@ func Strip(r io.Reader, w io.Writer, opts Options) (*Report, error) {
 					})
 				}
 				return nil
+			}
+
+			// meta is on the element list and http-equiv is on its attribute list, so
+			// nothing below this would look at what the header says. A refresh is the
+			// one that matters, and the check is on the decoded value for the reason
+			// scheme() decodes: the browser decodes before it acts.
+			if tag == "meta" {
+				if v, ok := e.Attribute("http-equiv"); ok && !AllowedHTTPEquiv[strings.ToLower(
+					strings.TrimSpace(stdhtml.UnescapeString(v)))] {
+					report.remove("element", "meta http-equiv",
+						"a header a mail client should not honour")
+					e.Remove()
+					return nil
+				}
 			}
 
 			report.Kept++

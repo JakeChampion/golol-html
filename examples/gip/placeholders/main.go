@@ -15,10 +15,10 @@
 //	                                   is lower-cased
 //	    url attribute   {{ evil }}     the value's scheme is javascript:
 //
-// # Five positions, five escapes
+// # A position per escape
 //
-// "Escaping properly" is five different jobs, and the library has a primitive for two of them,
-// refuses one, and cannot help with two:
+// "Escaping properly" is a different job in every position, and the library has a primitive for
+// two of them, refuses one, and cannot help with the other four:
 //
 //	position               what it needs                          what this does
 //	text content           HTML text escaping                     ContentType Text
@@ -27,6 +27,10 @@
 //	                       decoded there, so this is escaping
 //	comment                no "-->" anywhere in the value         Comment.SetText, which refuses
 //	script, style          escaping for JavaScript or CSS         refused
+//	on* attribute          escaping for JavaScript, which the     refused
+//	                       browser reaches after decoding
+//	srcdoc attribute       escaping for a whole HTML document,    refused
+//	                       likewise after decoding
 //	iframe, noembed,       nothing works: no references are        refused
 //	noframes, noscript,    decoded and there is no inner
 //	xmp, plaintext         language to escape for
@@ -40,6 +44,15 @@
 //
 // A title and a textarea are the opposite case: references *are* decoded there, so Text is a real
 // escape and the value arrives intact.
+//
+// The on* and srcdoc rows are the script row in an attribute's clothes, and they are the two an
+// "escape everything" sanitiser gets wrong, because [lolhtml.EscapeAttribute] makes the output
+// look right. `<button onclick="greet('{{ name }}')">` with a name of `');alert(1);//` emits
+// `onclick="greet('&#39;);alert(1);//')"`, and the browser decodes `&#39;` to a quote before the
+// JavaScript is parsed, so the injected statement runs. The attribute never ended, the escape did
+// its job, and the value executed anyway: escaping for HTML is not escaping for the language that
+// reads the attribute after HTML has finished with it. A value that has to reach a handler belongs
+// in a data attribute the handler reads.
 //
 // The comment row is a report rather than a guard: [lolhtml.Comment.SetText] refuses a closing
 // sequence on its own, and refusing it here first is only so the run says which value did it
@@ -55,6 +68,12 @@
 // `&#106;avascript:alert(1)` is `javascript:alert(1)` to a browser and is not `javascript:` to a
 // string comparison. This decodes before deciding and writes the raw form back, which is the rule
 // the whole library runs on - decide on the decoded form, write back the raw one.
+//
+// The check is on the composed attribute rather than on each value, because a scheme can be
+// spelled across a boundary: `href="{{ a }}{{ b }}"` with a=`java` and b=`script:alert(1)` is
+// javascript:alert(1) and neither half of it is. So the substitution happens first and the whole
+// result is what the scheme test sees, which also refuses a template that spells half the scheme
+// itself - `href="java{{ b }}"` - because a resolver cannot tell which half was the attacker's.
 //
 // # Where a placeholder is not a placeholder
 //
@@ -135,6 +154,8 @@ const (
 	InText Position = iota
 	InAttribute
 	InURLAttribute
+	InEventAttribute
+	InSrcdocAttribute
 	InEscapableRawText
 	InRawText
 	InComment
@@ -151,6 +172,10 @@ func (p Position) String() string {
 		return "attribute"
 	case InURLAttribute:
 		return "url attribute"
+	case InEventAttribute:
+		return "event attribute"
+	case InSrcdocAttribute:
+		return "srcdoc attribute"
 	case InEscapableRawText:
 		return "title or textarea"
 	case InRawText:
@@ -426,8 +451,64 @@ func resolveComment(res *Result, body string, values map[string]string) string {
 // resolveAttribute returns the new attribute value, or false to leave the attribute alone.
 func resolveAttribute(res *Result, name, source string, values map[string]string) (string, bool) {
 	position := InAttribute
-	if urlAttrs[name] {
+	switch {
+	case strings.HasPrefix(name, "on"):
+		// Every event-handler content attribute is named on*, and the whole name
+		// space is refused rather than a list of the known handlers: an on* name
+		// this program has not heard of is either a handler that postdates the list
+		// or an attribute nobody needed to resolve, and refusing both is the safe
+		// way round.
+		position = InEventAttribute
+	case name == "srcdoc":
+		position = InSrcdocAttribute
+	case urlAttrs[name]:
 		position = InURLAttribute
+	}
+
+	// Two attribute positions hold another language, and EscapeAttribute is not an escape
+	// for either of them: the browser decodes the character references in an attribute value
+	// before the inner language sees it, so `&#39;` reaches the JavaScript parser as a quote
+	// and `&lt;script&gt;` reaches the srcdoc document as a script element. What the escaping
+	// buys is that the value cannot end the attribute, which is not the same thing as being
+	// inert. This is the script row of the table again, in attribute form, so it is refused
+	// for the same reason.
+	if position == InEventAttribute || position == InSrcdocAttribute {
+		why := "an " + name + " attribute is JavaScript, and a browser decodes the " +
+			"references in it before the script runs, so no HTML escape reaches it"
+		if position == InSrcdocAttribute {
+			why = "a srcdoc attribute is an HTML document, which the browser decodes " +
+				"before parsing, so an HTML escape only survives the attribute"
+		}
+		for _, m := range placeholder.FindAllStringSubmatch(source, -1) {
+			res.Found = append(res.Found, Found{Name: m[1], Position: position, Why: why})
+		}
+		return source, false
+	}
+
+	// A URL is one string however many placeholders spell it, so the scheme is checked on the
+	// composed value rather than on each value in isolation. `href="{{ a }}{{ b }}"` with
+	// a="java" and b="script:alert(1)" passes every per-value prefix test and navigates to
+	// javascript:, and so does the half-static `href="java{{ b }}"`. Composing first also
+	// means a template that already spells a dangerous scheme is refused rather than
+	// completed, which is the answer this program owes a reader: a placeholder resolver
+	// cannot tell which half of a URL the attacker supplied. The values go in unescaped, so
+	// that a value of `&#106;avascript:` is still refused rather than being made harmless by
+	// the escape it is about to receive - see dangerous, which decodes what it is given.
+	if position == InURLAttribute {
+		composed := placeholder.ReplaceAllStringFunc(source, func(match string) string {
+			key := placeholder.FindStringSubmatch(match)[1]
+			if value, ok := values[key]; ok {
+				return value
+			}
+			return match
+		})
+		if scheme, bad := dangerous(composed); bad {
+			for _, m := range placeholder.FindAllStringSubmatch(source, -1) {
+				res.Found = append(res.Found, Found{Name: m[1], Position: position,
+					Why: "the value's scheme is " + scheme})
+			}
+			return source, false
+		}
 	}
 
 	changed := false
@@ -438,13 +519,6 @@ func resolveAttribute(res *Result, name, source string, values map[string]string
 			res.Found = append(res.Found, Found{Name: key, Position: position,
 				Why: "no value was supplied"})
 			return match
-		}
-		if position == InURLAttribute {
-			if scheme, bad := dangerous(value); bad {
-				res.Found = append(res.Found, Found{Name: key, Position: position,
-					Why: "the value's scheme is " + scheme})
-				return match
-			}
 		}
 		changed = true
 		escaped := lolhtml.EscapeAttribute(value)

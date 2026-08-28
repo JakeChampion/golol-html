@@ -83,6 +83,12 @@ func Map(doc []byte, size int) ([]Chunk, error) {
 		return nil, err
 	}
 	if err := feed(w, doc, size); err != nil {
+		// Closed on the way out. Every Writer has to be closed, including one
+		// being abandoned: the cleanup the library attaches is a leak guard
+		// rather than a second way of doing this, and it cannot run at all for a
+		// Writer a handler has captured. The feed error is the one being
+		// reported, so Close's is dropped.
+		w.Close()
 		return nil, err
 	}
 	return cs, w.Close()
@@ -122,6 +128,7 @@ func TextRegions(doc []byte, size int) ([]Region, error) {
 		return nil, err
 	}
 	if err := feed(w, doc, size); err != nil {
+		w.Close() // abandoned, and still closed - see Map
 		return nil, err
 	}
 	if err := w.Close(); err != nil {
@@ -228,6 +235,7 @@ func Rewritten(doc []byte, size int) (string, error) {
 		return "", err
 	}
 	if err := feed(w, doc, size); err != nil {
+		w.Close() // abandoned, and still closed - see Map
 		return "", err
 	}
 	return out.String(), w.Close()

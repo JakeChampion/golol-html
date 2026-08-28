@@ -49,8 +49,16 @@ var boilerplateRoles = map[string]bool{
 }
 
 // skipped hold content that is not prose at all.
+//
+// <head> is deliberately not on the list, because a depth counter cannot unwind it.
+// Its end tag is omissible, and an element whose end tag the source leaves out ends
+// at the tag that did close it - for a head that is </html>, if the document spells
+// one at all - so a skip that started at <head> would still be running over the
+// whole body. It is not needed here either: everything in a head that holds text -
+// title, script, style - is on the list in its own right, and text a document puts
+// directly in the head is text a browser moves into the body and shows.
 var skipped = map[string]bool{
-	"script": true, "style": true, "head": true, "title": true, "template": true,
+	"script": true, "style": true, "title": true, "template": true,
 	"noscript": true, "select": true, "option": true, "iframe": true,
 }
 
@@ -156,13 +164,15 @@ func (c *Counter) element(e *lolhtml.Element) error {
 	}
 	c.endWord()
 
-	return e.OnEndTag(func(t *lolhtml.EndTag) error {
-		// These are all elements with mandatory end tags, so a foreign tag here
-		// would mean the document ended inside the region; the guard says that
-		// rather than guessing.
-		if t.Name() != tag {
-			return nil
-		}
+	return e.OnEndTag(func(*lolhtml.EndTag) error {
+		// Lowered whatever the token is named, and deliberately so. The name
+		// guard is the right test for a handler writing at an end tag's
+		// position - it asks "is this position mine" - and the wrong one for a
+		// counter, which asks "has this element ended". The handler runs exactly
+		// once for this element, and where the source left the end tag out
+		// - </option> is omissible, and option is on the skip list - the token
+		// that closed it belongs to an enclosing element, so a name comparison
+		// would leave the counter raised and drop every word after it.
 		c.flushNode()
 		c.endWord()
 		if exclude {

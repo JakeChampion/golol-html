@@ -204,9 +204,15 @@ func TestARemovalThatReachesTooFarIsReported(t *testing.T) {
 		t.Errorf("the report does not mention it: %s", res)
 	}
 
-	// Strict mode turns it into an error.
-	if _, _, err := rewrite(t, doc, "any", []Experiment{exp}, Options{Strict: true}); err == nil {
+	// Strict mode turns it into an error - and refuses the document rather than
+	// delivering a truncated one, which is the half that a streaming rewrite gets
+	// wrong unless it holds the output back.
+	strict, _, err := rewrite(t, doc, "any", []Experiment{exp}, Options{Strict: true})
+	if err == nil {
 		t.Error("strict mode accepted the overreaching removal")
+	}
+	if strict != "" {
+		t.Errorf("strict mode wrote %q to the destination as well as failing", strict)
 	}
 
 	// A well-formed document has none of this: the same variants, closed.
