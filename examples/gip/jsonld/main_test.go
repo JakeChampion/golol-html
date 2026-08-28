@@ -263,7 +263,10 @@ func TestTypeOf(t *testing.T) {
 		{`{"@type":`, "?"},
 		{`{}`, "?"},
 		{``, "?"},
-		{`{"@type":"a&amp;b"}`, "a&b"},
+		// A script body is not decoded by a parser, so "&amp;" here is five
+		// characters of the JSON string and reporting "a&b" would name a value
+		// the document does not contain.
+		{`{"@type":"a&amp;b"}`, "a&amp;b"},
 	} {
 		if got := typeOf(tt.raw); got != tt.want {
 			t.Errorf("typeOf(%q) = %q, want %q", tt.raw, got, tt.want)

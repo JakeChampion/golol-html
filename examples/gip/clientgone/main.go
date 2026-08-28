@@ -2,7 +2,8 @@
 // through, which is what a browser closing a connection looks like from inside a handler.
 //
 //	$ clientgone -budget 100
-//	the destination accepted 99 of 760 bytes and then failed
+//	the destination accepted 99 bytes of rewritten output and then failed, with 760 bytes
+//	of input offered to the rewriter
 //	  reported by          Write
 //	  errors.Is(gone)      true       from Write
 //	  errors.Is(gone)      true       from Close, under ErrPoisoned=true
@@ -111,6 +112,11 @@ type Run struct {
 	Links, Comments, TextChunks int
 	DocumentEndRan              bool
 
+	// Accepted is output bytes the destination took; Offered is input bytes handed to
+	// the rewriter. They are two different quantities and neither bounds the other -
+	// this rewrite adds rel="nofollow" to every anchor, so the output is longer than the
+	// input - which is why the report names them separately rather than printing one as
+	// a fraction of the other.
 	Accepted, Offered  int
 	SinkCalls          int
 	WriteErr, CloseErr error
@@ -173,9 +179,11 @@ func (r *Run) ReportedBy() string {
 func (r *Run) String() string {
 	var b strings.Builder
 	if r.WriteErr == nil && r.CloseErr == nil {
-		fmt.Fprintf(&b, "the destination accepted all %d bytes\n", r.Accepted)
+		fmt.Fprintf(&b, "the destination accepted all %d bytes of rewritten output\n",
+			r.Accepted)
 	} else {
-		fmt.Fprintf(&b, "the destination accepted %d of %d bytes and then failed\n",
+		fmt.Fprintf(&b, "the destination accepted %d bytes of rewritten output and then "+
+			"failed, with %d bytes of input offered to the rewriter\n",
 			r.Accepted, r.Offered)
 	}
 	fmt.Fprintf(&b, "  %-20s %s\n", "reported by", r.ReportedBy())
@@ -217,6 +225,13 @@ func CloseWrites(doc string, appendAtEnd bool) (before, during int, closeErr err
 		return 0, 0, nil, nerr
 	}
 	if _, werr := w.Write([]byte(doc)); werr != nil {
+		// Closed on the way out as well. A Writer that is dropped without Close
+		// leaves the rewriter, its selectors and its handle table to the cleanup
+		// backstop, which the library documents as a leak guard rather than a
+		// second way of doing this - and it cannot run at all once a handler
+		// closes over the Writer. The error this Close would carry is not wanted
+		// here: the Write error is the one being reported.
+		w.Close()
 		return 0, 0, nil, werr
 	}
 	before = dst.Calls

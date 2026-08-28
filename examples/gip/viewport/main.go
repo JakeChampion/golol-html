@@ -69,26 +69,80 @@ func (f *fixer) validate() error {
 	return nil
 }
 
-// A directive is one comma-separated pair of a viewport content attribute.
+// A directive is one key-value pair of a viewport content attribute.
 type directive struct {
 	key   string
 	value string
 }
 
-// parseContent splits a viewport declaration. Whitespace is trimmed and keys
-// lower-cased, because browsers accept "Width = device-width" and so must
-// anything reading it.
+// parseContent splits a viewport declaration. Keys are lower-cased, because
+// browsers accept "Width = device-width" and so must anything reading it.
+//
+// Three things separate directives, not one: a comma, a semicolon, and ASCII
+// whitespace. Splitting on the comma alone is the natural reading of the syntax
+// and it is not what a browser does - "width=device-width; user-scalable=no" is
+// a spelling people write, and to a comma-only split it is a single directive
+// whose key is "width". The zoom block then goes unseen, the tag is left as it
+// is, and the report says the page's viewport does not block zooming: a wrong
+// answer that reads like a considered one, which is the case this program exists
+// to catch.
+//
+// Whitespace being a separator is also why this is a scan rather than a Split
+// and a Cut: the spaces in "Width = device-width" surround the "=" rather than
+// ending the directive, so they have to be skipped there and honoured elsewhere.
 func parseContent(content string) []directive {
 	var out []directive
-	for _, part := range strings.Split(content, ",") {
-		key, value, _ := strings.Cut(part, "=")
-		key = strings.ToLower(strings.TrimSpace(key))
+	for i := 0; i < len(content); {
+		for i < len(content) && isViewportSeparator(content[i]) {
+			i++
+		}
+		if i >= len(content) {
+			break
+		}
+		start := i
+		for i < len(content) && content[i] != '=' && !isViewportSeparator(content[i]) {
+			i++
+		}
+		key := strings.ToLower(strings.TrimSpace(content[start:i]))
+
+		// An "=" after any run of spaces belongs to this directive; anything
+		// else ends it with no value, which is how "user-scalable" alone reads.
+		value := ""
+		j := i
+		for j < len(content) && isASCIISpace(content[j]) {
+			j++
+		}
+		if j < len(content) && content[j] == '=' {
+			j++
+			for j < len(content) && isASCIISpace(content[j]) {
+				j++
+			}
+			start = j
+			for j < len(content) && !isViewportSeparator(content[j]) {
+				j++
+			}
+			value = strings.TrimSpace(content[start:j])
+			i = j
+		}
 		if key == "" {
 			continue
 		}
-		out = append(out, directive{key: key, value: strings.TrimSpace(value)})
+		out = append(out, directive{key: key, value: value})
 	}
 	return out
+}
+
+// isViewportSeparator reports whether a byte ends a directive.
+func isViewportSeparator(b byte) bool {
+	return b == ',' || b == ';' || isASCIISpace(b)
+}
+
+func isASCIISpace(b byte) bool {
+	switch b {
+	case ' ', '\t', '\n', '\f', '\r':
+		return true
+	}
+	return false
 }
 
 func formatContent(ds []directive) string {

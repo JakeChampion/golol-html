@@ -8,6 +8,13 @@
 // and -strict turns that into a failed rewrite instead, for a build step that would
 // rather not ship a page referring to an asset nobody hashed.
 //
+// -strict therefore stops streaming, and it has to. The error is raised from an
+// element handler in the middle of the document, and by then the rewriter has
+// already written everything before that tag to the destination - so a -strict
+// run that streamed would leave behind a page truncated at the offending asset,
+// which parses fine and is missing its second half. See Bust: strict mode holds
+// the document in memory and writes it out only if the whole rewrite succeeds.
+//
 // # One handler for every attribute, on purpose
 //
 // The URL-bearing attributes are spread across elements - src, href, srcset,
@@ -34,6 +41,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -315,7 +323,25 @@ func Bust(dst io.Writer, src io.Reader, opts Options) (Result, error) {
 		opts.Manifest = map[string]string{}
 	}
 	b := &buster{opts: opts}
-	w, err := lolhtml.NewWriter(dst, b.options()...)
+
+	// Strict mode buffers, and it is the only thing here that does. The failure
+	// it raises comes out of an element handler part-way through the document,
+	// which stops the rewrite - but every byte the rewriter had already produced
+	// is in dst by then, and nothing takes it back. Streaming straight to dst
+	// would make -strict ship a page cut off at the offending tag: no </body>,
+	// no </html>, and a browser renders that without complaint. That is worse
+	// than the stale asset -strict exists to prevent, because it is silent.
+	//
+	// So the streaming property is what -strict trades for the guarantee it
+	// advertises: dst is written only once the whole rewrite has succeeded, and
+	// the document is held in memory until then. Without -strict nothing is
+	// held and nothing fails, which is the mode for a page that has to go out.
+	out := dst
+	held := &bytes.Buffer{}
+	if opts.Strict {
+		out = held
+	}
+	w, err := lolhtml.NewWriter(out, b.options()...)
 	if err != nil {
 		return b.res, err
 	}
@@ -325,6 +351,11 @@ func Bust(dst io.Writer, src io.Reader, opts Options) (Result, error) {
 	}
 	if err := w.Close(); err != nil {
 		return b.res, err
+	}
+	if opts.Strict {
+		if _, err := io.Copy(dst, held); err != nil {
+			return b.res, err
+		}
 	}
 	return b.res, nil
 }

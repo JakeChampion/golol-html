@@ -209,9 +209,20 @@ func (r *report) options() []lolhtml.Option {
 			if r.quiet {
 				return nil
 			}
-			// HTML, because this is a comment we are constructing ourselves and
-			// the delimiters have to survive as markup.
-			return d.Append("\n<!-- absolutise: "+r.oneLine()+" -->\n", lolhtml.HTML)
+			// HTML, because this is a comment we are constructing ourselves
+			// and the delimiters have to survive as markup - which is exactly
+			// why what goes between them cannot. r.base is not the -base flag
+			// by the time this runs: a <base href> in the document replaces
+			// it, so a crafted query carries "-->" into this line, ends the
+			// comment early, and turns the rest of it into live markup. A
+			// payload that was inert inside a quoted attribute in the input
+			// becomes a <script> element in the output, which is the whole
+			// failure this program's own -annotate path avoids by using Text.
+			text, err := commentData(" absolutise: " + r.oneLine() + " ")
+			if err != nil {
+				return err
+			}
+			return d.Append("\n<!--"+text+"-->\n", lolhtml.HTML)
 		}),
 	)
 
@@ -309,4 +320,25 @@ func rewriteString(in, base string, quiet, annotate bool) (string, *report, erro
 	var out bytes.Buffer
 	rep, err := run(strings.NewReader(in), &out, base, quiet, annotate)
 	return out.String(), rep, err
+}
+
+// commentData makes text safe to sit between comment delimiters the caller
+// wrote itself.
+//
+// [lolhtml.CheckComment] is the library's guard for exactly this position, and
+// it reports rather than repairs - deliberately, because the repair is a choice
+// about meaning. Nothing inside a comment is a character reference, so there is
+// no escaping available: text a comment cannot hold has to be changed instead.
+// "- -" for "--" is the replacement its own message suggests, and it keeps a
+// report readable, which is the point of a report.
+//
+// The check runs after the replacement rather than instead of it, as an
+// assertion: if a later edit adds a field this does not neutralise, it comes
+// back as an error here instead of quietly reopening the hole.
+func commentData(text string) (string, error) {
+	safe := strings.ReplaceAll(text, "--", "- -")
+	if err := lolhtml.CheckComment(safe); err != nil {
+		return "", err
+	}
+	return safe, nil
 }

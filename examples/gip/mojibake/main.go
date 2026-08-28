@@ -2,8 +2,15 @@
 // which one it probably was.
 //
 //	$ mojibake < page.html
-//	windows-1252 read as utf-8   12 runs   "Itâ€™s a cafÃ©"   -> "It's a café"
-//	utf-8 read as windows-1252    1 run    "PrÃ¼fung"                   -> "Prüfung"
+//	mojibake: 13 suspicious runs, 0 text nodes that are not utf-8; probably utf-8, decoded as windows-1252
+//	  utf-8 read as windows-1252 "â€™" -> "’" (12)
+//	  utf-8 read as windows-1252 "Ã¼" -> "ü" (1)
+//
+// Both lines are the same phenomenon, and there is only one direction to report: the
+// "â€™" of "Itâ€™s" and the "Ã¼" of "PrÃ¼fung" are alike UTF-8 bytes that were read as
+// windows-1252, which is what [Kind.String] calls them. The other direction - bytes that are not UTF-8 at all - is
+// [InvalidBytes], and it is a wrong encoding declaration rather than mojibake; see below
+// for why this program can only count those rather than show them.
 //
 // Mojibake is not damaged text: it is text that survived, in the wrong clothes. Bytes
 // that meant "é" in UTF-8 were read as two windows-1252 characters and re-encoded as

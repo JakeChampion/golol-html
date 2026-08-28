@@ -121,6 +121,11 @@ func Scan(name string, r io.Reader) (*Document, error) {
 		counts  map[string]int
 	}
 	var open []frame
+	// roots counts the shapes at the top level of the input, which have no parent frame
+	// to be counted in. A fragment can begin at the top level - this program says so - and
+	// without this two sibling roots of the same shape both number 1, so they share a path:
+	// the second is dropped from the map here and Apply stamps the same name on both.
+	roots := map[string]int{}
 
 	w, err := lolhtml.NewWriter(io.Discard, lolhtml.OnElement("*", func(e *lolhtml.Element) error {
 		tag := e.TagName()
@@ -128,13 +133,14 @@ func Scan(name string, r io.Reader) (*Document, error) {
 		class, _ := e.Attribute("class")
 		shape := shapeOf(tag, id, class)
 
-		// The position among siblings of the same shape, counted in the parent.
-		nth := 1
+		// The position among siblings of the same shape, counted in the parent - or at
+		// the top level, where there is no parent.
+		counts := roots
 		if len(open) > 0 {
-			parent := open[len(open)-1]
-			parent.counts[shape]++
-			nth = parent.counts[shape]
+			counts = open[len(open)-1].counts
 		}
+		counts[shape]++
+		nth := counts[shape]
 		segment := shape
 		if nth > 1 {
 			segment = fmt.Sprintf("%s:nth(%d)", shape, nth)
@@ -308,6 +314,9 @@ func Apply(r io.Reader, w io.Writer, p *Pairing) (int, error) {
 		counts  map[string]int
 	}
 	var open []frame
+	// The same top-level counter the scan keeps: the two passes have to number siblings
+	// identically or the recomputed path is not the one that was recorded.
+	roots := map[string]int{}
 
 	writer, err := lolhtml.NewWriter(w, lolhtml.OnElement("*", func(e *lolhtml.Element) error {
 		tag := e.TagName()
@@ -315,12 +324,12 @@ func Apply(r io.Reader, w io.Writer, p *Pairing) (int, error) {
 		class, _ := e.Attribute("class")
 		shape := shapeOf(tag, id, class)
 
-		nth := 1
+		counts := roots
 		if len(open) > 0 {
-			parent := open[len(open)-1]
-			parent.counts[shape]++
-			nth = parent.counts[shape]
+			counts = open[len(open)-1].counts
 		}
+		counts[shape]++
+		nth := counts[shape]
 		segment := shape
 		if nth > 1 {
 			segment = fmt.Sprintf("%s:nth(%d)", shape, nth)

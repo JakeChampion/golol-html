@@ -119,6 +119,12 @@ func ParsedText(doc []byte) (string, error) {
 		return "", err
 	}
 	if _, err := w.Write(doc); err != nil {
+		// Closed even though the write failed. Every Writer has to be closed,
+		// including one being abandoned: the cleanup that frees the native
+		// rewriter when a Writer is dropped is a backstop, and it stops working
+		// the moment a handler closes over the Writer, because the handle table
+		// then keeps the Writer reachable and the cleanup can never run.
+		w.Close()
 		return "", err
 	}
 	if err := w.Close(); err != nil {

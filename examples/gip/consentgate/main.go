@@ -217,13 +217,12 @@ func (g *gate) run(r io.Reader, w io.Writer) error {
 // validate refuses a configuration that cannot work, rather than producing a
 // document that looks gated and is not.
 func (g *gate) validate() error {
-	if g.gatedType == "" {
-		return fmt.Errorf("-gated-type cannot be empty: an empty type is treated as " +
-			"JavaScript, so the script would still run")
+	if strings.Trim(g.gatedType, asciiWhitespace) == "" {
+		return fmt.Errorf("-gated-type %q is empty once ASCII whitespace is stripped, "+
+			"and an empty type is treated as JavaScript, so the script would still run",
+			g.gatedType)
 	}
-	if strings.EqualFold(g.gatedType, "text/javascript") ||
-		strings.EqualFold(g.gatedType, "module") ||
-		strings.EqualFold(g.gatedType, "application/javascript") {
+	if isExecutableType(g.gatedType) {
 		return fmt.Errorf("-gated-type %q is executable, so nothing would be gated",
 			g.gatedType)
 	}
@@ -232,6 +231,53 @@ func (g *gate) validate() error {
 			"it has to be letters, digits and hyphens", g.prefix)
 	}
 	return nil
+}
+
+// asciiWhitespace is what a browser strips from the ends of a type attribute
+// before deciding what it says. A type of " " is a type of "", which is
+// JavaScript.
+const asciiWhitespace = " \t\n\f\r"
+
+// javaScriptTypes is the HTML specification's list of JavaScript MIME type
+// essence matches: the strings that, in a script's type attribute, mean "run
+// this". Sixteen of them, and "module" is a seventeenth spelling that is not a
+// MIME type at all.
+//
+// The list is long because it is historical, and that is exactly why it has to be
+// written out rather than reduced to the two or three types anyone writes today.
+// A -gated-type of text/ecmascript or text/jscript looks inert, parks the script
+// under it, and is reported as gated - and the browser runs the tracker anyway.
+// The whole promise of this program is that a gated script does not run, so a
+// near-miss here is not a cosmetic bug.
+//
+// A type with a parameter - "text/javascript; charset=utf-8" - is not an essence
+// match and is not executed, so it needs no entry here.
+var javaScriptTypes = map[string]bool{
+	"application/ecmascript":   true,
+	"application/javascript":   true,
+	"application/x-ecmascript": true,
+	"application/x-javascript": true,
+	"text/ecmascript":          true,
+	"text/javascript":          true,
+	"text/javascript1.0":       true,
+	"text/javascript1.1":       true,
+	"text/javascript1.2":       true,
+	"text/javascript1.3":       true,
+	"text/javascript1.4":       true,
+	"text/javascript1.5":       true,
+	"text/jscript":             true,
+	"text/livescript":          true,
+	"text/x-ecmascript":        true,
+	"text/x-javascript":        true,
+}
+
+// isExecutableType reports whether a browser would run a script whose type
+// attribute holds this string: the empty type, "module", or one of the
+// JavaScript MIME type essence matches, in any case, after the ASCII whitespace
+// a parser strips from both ends.
+func isExecutableType(s string) bool {
+	t := strings.ToLower(strings.Trim(s, asciiWhitespace))
+	return t == "" || t == "module" || javaScriptTypes[t]
 }
 
 func validAttrPrefix(s string) bool {

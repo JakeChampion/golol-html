@@ -196,9 +196,13 @@ func (f *filler) text(t *lolhtml.TextChunk) error {
 		return nil
 	}
 	if s := t.Text(); s != "" {
-		if !f.collector.add(piece{text: s}) {
-			return nil
-		}
+		// The return value says whether the piece was kept, and not whether to
+		// remove the token: an abandoned definition still has to come out of the
+		// output. Its <template> tags were taken away at the start tag, so
+		// anything left behind is no longer inert template content - it is live
+		// content in the page, which for a definition holding a script means a
+		// script the browser runs.
+		f.collector.add(piece{text: s})
 	}
 	t.Remove()
 	return nil
@@ -208,9 +212,8 @@ func (f *filler) comment(c *lolhtml.Comment) error {
 	if f.collector == nil {
 		return nil
 	}
-	if !f.collector.add(piece{markup: "<!--" + c.Text() + "-->"}) {
-		return nil
-	}
+	// Kept or not, the comment comes out of the output: see f.text.
+	f.collector.add(piece{markup: "<!--" + c.Text() + "-->"})
 	c.Remove()
 	return nil
 }
@@ -310,9 +313,13 @@ func (f *filler) startDefinition(e *lolhtml.Element, name string) error {
 				f.res.Late++
 			}
 		}
-		if t.Name() != c.name && t.Name() != "template" {
+		if t.Name() != "template" {
 			// The token that closed the template belongs to an enclosing element,
-			// and taking the template's tags away took it. Put it back.
+			// and taking the template's tags away took it. Put it back. The test
+			// is the tag name against this element's own, which is always
+			// "template" here - comparing against the fill name instead would skip
+			// the repair for <template data-fill="div"> inside a <div>, and swallow
+			// that div's end tag.
 			return t.Before("</"+t.Name()+">", lolhtml.HTML)
 		}
 		return nil
@@ -330,11 +337,17 @@ func (f *filler) collect(e *lolhtml.Element) error {
 	if lolhtml.IsRawText(name) {
 		// A script or a style inside a definition holds content that is not
 		// markup, and rebuilding it as markup would turn its text into elements.
-		// The definition is dropped rather than mangled.
+		// The definition is dropped rather than mangled - and the element goes
+		// with it, because the <template> tags are already gone and a script left
+		// standing here is one the browser would run. See f.text.
 		f.collector.tooBig = true
+		e.Remove()
 		return nil
 	}
 	if !f.collector.add(piece{markup: startTag(e)}) {
+		// The definition is being abandoned, so this element and what is inside it
+		// leave the output rather than staying behind as live content: see f.text.
+		e.Remove()
 		return nil
 	}
 	if e.IsSelfClosing() || !e.CanHaveContent() {
@@ -396,8 +409,9 @@ type collector struct {
 }
 
 // add buffers a piece and reports whether it was taken. False means the
-// definition is being abandoned, so the caller should leave the token where it
-// is: half a definition in the output is worse than the whole one.
+// definition is being abandoned, and the caller removes the token either way:
+// half a definition in the output is worse than none of it, and worse than it
+// looks, since the <template> tags that made it inert are gone by then.
 func (c *collector) add(p piece) bool {
 	if c.tooBig {
 		return false

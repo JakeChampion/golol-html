@@ -78,6 +78,13 @@ func Run(r io.Reader, w io.Writer, chunk int) (Counts, error) {
 		n, readErr := r.Read(buf)
 		if n > 0 {
 			if _, err := rw.Write(buf[:n]); err != nil {
+				// Closed even though it is being abandoned: the Writer holds a
+				// native rewriter and its handles until Close, and the runtime
+				// cleanup that would otherwise free them is a leak backstop rather
+				// than the supported path - one that stops working entirely the
+				// moment a handler captures the Writer. The Write error is the one
+				// reported; Close's is about a rewrite that already failed.
+				rw.Close()
 				return counts, err
 			}
 		}
@@ -85,12 +92,16 @@ func Run(r io.Reader, w io.Writer, chunk int) (Counts, error) {
 			break
 		}
 		if readErr != nil {
+			// The same, and clearer here: the Writer is perfectly healthy and is
+			// being dropped because the source failed.
+			rw.Close()
 			return counts, readErr
 		}
 	}
 
-	// Close before the report: an error here means the output was discarded, and a report
-	// appended to nothing is worse than no report.
+	// Close before the report: an error here means the document is the truncated prefix
+	// described at the top of this file - everything up to the failing unit is already in the
+	// sink - and a report appended to half a document is worse than no report.
 	if err := rw.Close(); err != nil {
 		return counts, err
 	}

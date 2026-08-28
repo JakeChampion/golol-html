@@ -19,12 +19,14 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	stdhtml "html"
 	"io"
 	"net/url"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	lolhtml "github.com/JakeChampion/golol-html"
 )
@@ -94,10 +96,19 @@ func (b *builder) options() []lolhtml.Option {
 				b.kept++
 				return nil
 			}
-			src, ok := e.Attribute("src")
-			if !ok || strings.TrimSpace(src) == "" {
+			raw, ok := e.Attribute("src")
+			if !ok || strings.TrimSpace(raw) == "" {
 				return nil
 			}
+			// Decoded before anything is built from it. An attribute value is
+			// reported as raw source with its character references still encoded,
+			// so the src of <img src="/img.php?id=1&amp;size=2"> is the eleven
+			// characters "...&amp;size", not "...&size". Percent-encoding that
+			// straight into the CDN template asks the CDN for a URL nobody would
+			// ever have fetched: u=%2Fimg.php%3Fid%3D1%26amp%3Bsize%3D2. Writing
+			// an & as &amp; is the correct way to spell a query URL in HTML, so
+			// this is the ordinary case rather than an exotic one.
+			src := decodeAttribute(raw)
 			if reason := unsuitable(src); reason != "" {
 				b.skipped = append(b.skipped, src+" ("+reason+")")
 				return nil
@@ -143,6 +154,118 @@ func (b *builder) srcsetFor(src string) string {
 func (b *builder) rendered(src string, w int) string {
 	out := strings.ReplaceAll(b.cdn, "{url}", url.QueryEscape(src))
 	return strings.ReplaceAll(out, "{w}", strconv.Itoa(w))
+}
+
+// decodeAttribute decodes the character references in an attribute value, by the
+// rule that holds inside an attribute rather than the one html.UnescapeString
+// applies everywhere.
+//
+// They differ by one clause, and it is the clause a URL runs into: a named
+// reference written without its semicolon is not a reference at all when the
+// character after it is "=" or ASCII alphanumeric. So "/img.php?id=1&copy=2" is a
+// URL with a parameter called copy, and html.UnescapeString reads it as one with a
+// copyright sign in it - which would be percent-encoded into the CDN request as a
+// copyright sign, a different image from the one the page shows.
+//
+// Element.Attribute states the rule, examples/gip/references implements it in full
+// including the text context and what to leave encoded, and examples/gip/modulesplit
+// carries the same attribute half this does.
+func decodeAttribute(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] != '&' {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		n := attributeReference(s[i:])
+		if n == 0 {
+			// Not a reference here: a bare ampersand, an unknown name, or a
+			// name without its semicolon before "=" or an alphanumeric.
+			b.WriteByte('&')
+			i++
+			continue
+		}
+		b.WriteString(stdhtml.UnescapeString(s[i : i+n]))
+		i += n
+	}
+	return b.String()
+}
+
+// attributeReference returns the length of the character reference at the start
+// of s, or 0 when what is there is not one in an attribute value.
+func attributeReference(s string) int {
+	if len(s) < 2 || s[0] != '&' {
+		return 0
+	}
+	if s[1] == '#' {
+		// A numeric reference is a reference with or without its semicolon in
+		// both contexts; the clause below is about named ones only.
+		end, start := 2, 2
+		if end < len(s) && (s[end] == 'x' || s[end] == 'X') {
+			end++
+			start = end
+			for end < len(s) && isHex(s[end]) {
+				end++
+			}
+		} else {
+			for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+				end++
+			}
+		}
+		if end == start {
+			return 0 // "&#" or "&#x" with no digits
+		}
+		if end < len(s) && s[end] == ';' {
+			end++
+		}
+		return end
+	}
+	run := 1
+	for run < len(s) && isAlnum(s[run]) {
+		run++
+	}
+	// Names are matched longest-first and the match can be a prefix of the run:
+	// "&copy2" is the copyright sign followed by a "2", so the name ends where
+	// the longest known one ends and the rule below looks at the character after
+	// that rather than after the run.
+	end := 0
+	for k := run; k > 1; k-- {
+		if known(s[1:k]) {
+			end = k
+			break
+		}
+	}
+	if end == 0 {
+		return 0 // a bare ampersand, or no name the table has
+	}
+	if end < len(s) && s[end] == ';' {
+		return end + 1
+	}
+	if end < len(s) && (s[end] == '=' || isAlnum(s[end])) {
+		return 0 // the attribute rule
+	}
+	return end
+}
+
+// known reports whether the table has exactly this name. The standard library's
+// decoder is the table - asking it beats carrying a copy of 2231 names - but it
+// matches the longest prefix and leaves the rest, so "&copy2;" comes back as the
+// copyright sign followed by "2;". An exact name is one whose decoded form is the
+// character alone, and no reference in the table stands for more than two code
+// points, which is the test.
+func known(name string) bool {
+	in := "&" + name + ";"
+	decoded := stdhtml.UnescapeString(in)
+	return decoded != in && utf8.RuneCountInString(decoded) <= 2
+}
+
+func isHex(b byte) bool {
+	return b >= '0' && b <= '9' || b >= 'a' && b <= 'f' || b >= 'A' && b <= 'F'
+}
+
+func isAlnum(b byte) bool {
+	return b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
 }
 
 // unsuitable names why an image cannot be resized by a CDN, or "" if it can.

@@ -26,6 +26,13 @@
 // documentation on EscapeAttribute prescribes for a value read from the
 // document.
 //
+// Decoded by decodeAttribute below, not by html.UnescapeString, and that is the
+// second half of the same trap. In an attribute value a named reference without
+// its semicolon is not a reference when the next character is "=" or ASCII
+// alphanumeric, and the standard library decodes it anyway - so "/a.js?x=1&copy=2"
+// comes back with a copyright sign in it and the pair fetches a URL the document
+// never named. Element.Attribute states the rule.
+//
 // The same rule applies going the other way, and this program had it wrong first.
 // SetAttribute takes attribute source, so a decoded value has to be escaped
 // before it is written back: a src of "?a=1&amp;lt=2" decodes to "?a=1&lt=2", and
@@ -43,6 +50,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	lolhtml "github.com/JakeChampion/golol-html"
 )
@@ -82,7 +90,7 @@ func (s *splitter) options() []lolhtml.Option {
 			if _, ok := e.Attribute("nomodule"); ok {
 				return nil
 			}
-			typ := strings.ToLower(strings.TrimSpace(stdhtml.UnescapeString(attr(e, "type"))))
+			typ := strings.ToLower(strings.TrimSpace(decodeAttribute(attr(e, "type"))))
 			if typ == "module" {
 				s.note("a module was left alone; it is already the modern half")
 				return nil
@@ -94,7 +102,7 @@ func (s *splitter) options() []lolhtml.Option {
 				return nil
 			}
 
-			src := stdhtml.UnescapeString(strings.TrimSpace(attr(e, "src")))
+			src := decodeAttribute(strings.TrimSpace(attr(e, "src")))
 			if src == "" {
 				s.note("a script with an empty src was left alone")
 				return nil
@@ -158,7 +166,7 @@ func (s *splitter) fallbackMarkup(e *lolhtml.Element) string {
 			continue
 		}
 		sb.WriteString(" " + a.NamePreserveCase + `="` +
-			lolhtml.EscapeAttribute(stdhtml.UnescapeString(a.Value)) + `"`)
+			lolhtml.EscapeAttribute(decodeAttribute(a.Value)) + `"`)
 	}
 	sb.WriteString(" nomodule")
 	if s.addDefer {
@@ -168,6 +176,120 @@ func (s *splitter) fallbackMarkup(e *lolhtml.Element) string {
 	}
 	sb.WriteString("></script>")
 	return sb.String()
+}
+
+// decodeAttribute decodes the character references in an attribute value, by the
+// rule that holds inside an attribute rather than the one html.UnescapeString
+// applies everywhere.
+//
+// They differ by one clause, and it is the clause a URL runs into: a named
+// reference written without its semicolon is not a reference at all when the
+// character after it is "=" or ASCII alphanumeric. So "/a.js?x=1&copy=2" is a URL
+// with a parameter called copy, and html.UnescapeString reads it as one with a
+// copyright sign in it - which this program would then escape and write back as
+// "/a.js?x=1&amp;copy;=2", a different file for the browser to fetch. That is the
+// same silent change the table at the top of the file is about, one line further
+// down: decoding with the wrong decoder is as wrong as not decoding at all.
+//
+// Element.Attribute states the rule and examples/gip/references implements it in
+// full, including the text context and the question of what to leave encoded.
+// What is here is the attribute half, which is all this program needs.
+func decodeAttribute(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] != '&' {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		n := attributeReference(s[i:])
+		if n == 0 {
+			// Not a reference here: a bare ampersand, an unknown name, or a
+			// name without its semicolon before "=" or an alphanumeric.
+			b.WriteByte('&')
+			i++
+			continue
+		}
+		b.WriteString(stdhtml.UnescapeString(s[i : i+n]))
+		i += n
+	}
+	return b.String()
+}
+
+// attributeReference returns the length of the character reference at the start
+// of s, or 0 when what is there is not one in an attribute value.
+func attributeReference(s string) int {
+	if len(s) < 2 || s[0] != '&' {
+		return 0
+	}
+	if s[1] == '#' {
+		// A numeric reference is a reference with or without its semicolon in
+		// both contexts; the clause below is about named ones only.
+		end, start := 2, 2
+		if end < len(s) && (s[end] == 'x' || s[end] == 'X') {
+			end++
+			start = end
+			for end < len(s) && isHex(s[end]) {
+				end++
+			}
+		} else {
+			for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+				end++
+			}
+		}
+		if end == start {
+			return 0 // "&#" or "&#x" with no digits
+		}
+		if end < len(s) && s[end] == ';' {
+			end++
+		}
+		return end
+	}
+	run := 1
+	for run < len(s) && isAlnum(s[run]) {
+		run++
+	}
+	// Names are matched longest-first and the match can be a prefix of the run:
+	// "&copy2" is the copyright sign followed by a "2", so the name ends where
+	// the longest known one ends and the rule below looks at the character after
+	// that rather than after the run.
+	end := 0
+	for k := run; k > 1; k-- {
+		if known(s[1:k]) {
+			end = k
+			break
+		}
+	}
+	if end == 0 {
+		return 0 // a bare ampersand, or no name the table has
+	}
+	if end < len(s) && s[end] == ';' {
+		return end + 1
+	}
+	if end < len(s) && (s[end] == '=' || isAlnum(s[end])) {
+		return 0 // the attribute rule
+	}
+	return end
+}
+
+// known reports whether the table has exactly this name. The standard library's
+// decoder is the table - asking it beats carrying a copy of 2231 names - but it
+// matches the longest prefix and leaves the rest, so "&copy2;" comes back as the
+// copyright sign followed by "2;". An exact name is one whose decoded form is the
+// character alone, and no reference in the table stands for more than two code
+// points, which is the test.
+func known(name string) bool {
+	in := "&" + name + ";"
+	decoded := stdhtml.UnescapeString(in)
+	return decoded != in && utf8.RuneCountInString(decoded) <= 2
+}
+
+func isHex(b byte) bool {
+	return b >= '0' && b <= '9' || b >= 'a' && b <= 'f' || b >= 'A' && b <= 'F'
+}
+
+func isAlnum(b byte) bool {
+	return b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
 }
 
 func attr(e *lolhtml.Element, name string) string {

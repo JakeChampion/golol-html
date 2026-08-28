@@ -9,9 +9,15 @@
 // start location until the end tag arrives - and an element whose end tag never
 // comes has no measurable extent at all, which is reported rather than guessed.
 //
-// A void element has no end tag, so OnEndTag fails on one rather than doing
-// nothing. Scripts are never void, so this program does not need the guard; a
-// broader selector would.
+// OnEndTag returns an error for an element that cannot have content, rather
+// than doing nothing, and that error fails the rewrite after a prefix of the
+// document has already been written. A script is never void, but that is not
+// enough: in SVG and MathML a trailing slash really does close an element, so
+// <svg><script/> is a script that cannot have content and has no end tag to
+// wait for. Hence the [lolhtml.Element.CanHaveContent] guard below, which is
+// needed by any selector that can reach foreign content - which "script" does.
+// A self-closing script has no extent to hold open either: its start tag is the
+// whole element, so the saving is measured on the spot.
 package main
 
 import (
@@ -114,8 +120,22 @@ func (r *remover) options() []lolhtml.Option {
 				typ:    typ,
 				src:    src,
 			}
-			r.open = p
 			e.Remove()
+
+			// <svg><script/> is self-closing for real, so there is no end tag
+			// and OnEndTag would return an error and stop the rewrite here.
+			// Everything this element covers is its start tag, so the removal
+			// is complete already.
+			if !e.CanHaveContent() {
+				r.removed = append(r.removed, removal{
+					inline: p.inline,
+					typ:    p.typ,
+					src:    p.src,
+					bytes:  e.SourceLocation().Len(),
+				})
+				return nil
+			}
+			r.open = p
 
 			// The saving is start-of-start-tag to end-of-end-tag, and the second
 			// half only exists here.

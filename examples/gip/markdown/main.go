@@ -234,6 +234,14 @@ func (c *Converter) push(tag string) {
 	if !skipped[tag] && supported[tag] {
 		d = inline[tag]
 	}
+	if tag == "code" && c.preDepth > 0 {
+		// <pre><code> is the standard HTML spelling of a code block, and the fence
+		// is already open. A backtick inside a fenced block is not a delimiter -
+		// Markdown renders it as a backtick in the code - so the block came out
+		// holding two characters the source did not have. The delimiter is decided
+		// here and remembered, so dropping it here drops the closing one too.
+		d = ""
+	}
 	c.emphasis = append(c.emphasis, d)
 	if d != "" {
 		c.writeMarkup(d)

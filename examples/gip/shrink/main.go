@@ -146,6 +146,13 @@ func structuralCuts(doc []byte) []cut {
 		return nil
 	}
 	if _, err := w.Write(doc); err != nil {
+		// Close every Writer, including one being abandoned. Returning from here
+		// without closing leaves the rewriter, its selectors and one handle per
+		// end-tag handler registered by the "*" handler above alive until the drop
+		// cleanup runs, and this is the likeliest path in this program: shrink calls
+		// this once per reduction round, on documents chosen precisely because they
+		// make the rewriter misbehave.
+		w.Close()
 		return nil
 	}
 	if err := w.Close(); err != nil {

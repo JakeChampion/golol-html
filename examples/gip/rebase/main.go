@@ -219,7 +219,7 @@ func (r *rebaser) baseElement(e *lolhtml.Element) error {
 // which the base does affect in a browser, but rewriting it changes what a
 // same-document link means - and anything it cannot parse.
 func (r *rebaser) resolve(raw string) string {
-	if !isRelative(raw) {
+	if r.base == nil || !isRelative(raw) {
 		return ""
 	}
 	u, err := url.Parse(unescapeAmp(raw))
@@ -256,16 +256,21 @@ func (r *rebaser) srcset(raw string) string {
 	return strings.Join(out, ", ")
 }
 
-// styleAttribute rewrites url(...) in an inline style.
+// styleAttribute rewrites url(...) in an inline style, or counts what a base arriving
+// later would have changed - the same provisional count urls() keeps, and for the same
+// reason. Leaving CSS out of it was worse than not resolving it: the base element is
+// removed all the same, so a url(x.png) above it silently starts resolving against a
+// different base, and the report said no URL had gone past.
 func (r *rebaser) styleAttribute(e *lolhtml.Element) error {
-	if r.base == nil {
-		return nil
-	}
 	raw, ok := e.Attribute("style")
 	if !ok || !strings.Contains(raw, "url(") {
 		return nil
 	}
-	next := r.css(raw)
+	next, relative := r.css(raw)
+	if r.base == nil {
+		r.pendingU += relative
+		return nil
+	}
 	if next == raw {
 		return nil
 	}
@@ -284,10 +289,13 @@ func (r *rebaser) styleText(c *lolhtml.TextChunk) error {
 	}
 	sheet := r.css1.String()
 	r.css1.Reset()
+	next, relative := r.css(sheet)
 	if r.base == nil {
+		// Counted rather than resolved, as in styleAttribute: the sheet goes back
+		// unchanged, and the caller is told these URLs went past the base.
+		r.pendingU += relative
 		return c.Replace(sheet, lolhtml.HTML)
 	}
-	next := r.css(sheet)
 	if next != sheet {
 		r.res.Styles++
 	}
@@ -297,21 +305,24 @@ func (r *rebaser) styleText(c *lolhtml.TextChunk) error {
 	return c.Replace(next, lolhtml.HTML)
 }
 
-// css resolves every url(...) it can read, leaving the rest alone.
-func (r *rebaser) css(s string) string {
+// css resolves every url(...) it can read, leaving the rest alone, and reports how many
+// relative references it saw. The count is what the base-arriving-late case needs: with no
+// base there is nothing to resolve, and the references still have to be counted.
+func (r *rebaser) css(s string) (string, int) {
 	var b strings.Builder
+	relative := 0
 	for {
 		i := strings.Index(s, "url(")
 		if i < 0 {
 			b.WriteString(s)
-			return b.String()
+			return b.String(), relative
 		}
 		b.WriteString(s[:i+len("url(")])
 		s = s[i+len("url("):]
 		j := strings.IndexByte(s, ')')
 		if j < 0 {
 			b.WriteString(s)
-			return b.String()
+			return b.String(), relative
 		}
 		inner := s[:j]
 		quote := ""
@@ -319,6 +330,9 @@ func (r *rebaser) css(s string) string {
 		if len(trimmed) >= 2 && (trimmed[0] == '"' || trimmed[0] == '\'') && trimmed[len(trimmed)-1] == trimmed[0] {
 			quote = string(trimmed[0])
 			trimmed = trimmed[1 : len(trimmed)-1]
+		}
+		if isRelative(trimmed) {
+			relative++
 		}
 		if next := r.resolve(trimmed); next != "" {
 			b.WriteString(quote + next + quote)

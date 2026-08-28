@@ -236,6 +236,19 @@ func TestIntegrationPointsSwitchBack(t *testing.T) {
 	}
 }
 
+// A breakout does not corrupt the stack. An HTML tag name inside an <svg> takes
+// the parser out of foreign content, so the tags after it - still inside the source
+// <svg> - report the HTML namespace and get pushed. Nothing closes those by name, so
+// an unwind that popped the top entry would leave the svg one on the stack and label
+// the whole rest of the document svg:.
+func TestAForeignContentBreakoutDoesNotStrandTheStack(t *testing.T) {
+	got := labels(count(t, `<svg><circle/><p>a</p><rect/></svg><div>x</div>`))
+	want := []string{"div=1", "svg:circle=1", "svg:p=1", "svg:rect=1", "svg:svg=1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("rows = %q, want %q", got, want)
+	}
+}
+
 // An unclosed foreign root keeps everything after it foreign, which is what a
 // parser does too.
 func TestAnUnclosedForeignRootStaysForeign(t *testing.T) {

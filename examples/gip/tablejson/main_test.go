@@ -78,25 +78,27 @@ func TestDuplicateNames(t *testing.T) {
 		name    string
 		doc     string
 		keys    []string
-		renamed map[string]string
+		renamed []Rename
 	}{
 		{
 			name:    "colspan in the header",
 			doc:     `<table><tr><th>a<th colspan=2>b<tr><td>1<td>2<td>3</table>`,
 			keys:    []string{"a", "b", "b 2"},
-			renamed: map[string]string{"b": "b 2"},
+			renamed: []Rename{{From: "b", To: "b 2"}},
 		},
 		{
 			name:    "two cells with the same text",
 			doc:     `<table><tr><th>a<th>a<tr><td>1<td>2</table>`,
 			keys:    []string{"a", "a 2"},
-			renamed: map[string]string{"a": "a 2"},
+			renamed: []Rename{{From: "a", To: "a 2"}},
 		},
 		{
+			// Two renames from the one original name, which is why the report
+			// is a slice: a map keyed by "a" would hold only "a 3".
 			name:    "three the same",
 			doc:     `<table><tr><th>a<th>a<th>a<tr><td>1<td>2<td>3</table>`,
 			keys:    []string{"a", "a 2", "a 3"},
-			renamed: map[string]string{"a": "a 3"},
+			renamed: []Rename{{From: "a", To: "a 2"}, {From: "a", To: "a 3"}},
 		},
 		{
 			name: "an empty header cell is named by position",

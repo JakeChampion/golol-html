@@ -46,6 +46,13 @@
 // The quote that could end the attribute is handled either way; the ampersand is
 // the one that changes the value.
 //
+// Escaping is the whole of the rule for getting the value in, and none of the
+// rule for what it then means. The page picks the attribute, so a marker can name
+// href, or onclick, and a header of "javascript:alert(document.domain)" is a
+// perfectly well-escaped value that runs. Nothing about the position can fix
+// that, so those attributes are refused and counted instead: see
+// unsafeAttribute.
+//
 // A title is escapable raw text: a parser does not read markup in it and does
 // decode references, so Text is right there too. What is not the same is where
 // the marker can go. Inside a title there are no elements - measured: a <span
@@ -103,6 +110,9 @@ type Result struct {
 	// Refused markers, which are content markers inside an element whose content
 	// is not markup and does not decode references - a script or a style.
 	Refused int
+	// Unsafe markers, which named an attribute whose value is not text: an
+	// event handler, a URL, or a style. See unsafeAttribute.
+	Unsafe int
 	// Repaired values that were not valid UTF-8, and Stripped ones that held
 	// control characters. Truncated ones were longer than MaxRunes.
 	Repaired, Stripped, Truncated int
@@ -110,8 +120,8 @@ type Result struct {
 
 func (r Result) String() string {
 	return fmt.Sprintf("greet: %d content, %d attributes, %d scripts, %d fallbacks, "+
-		"%d refused; %d values repaired, %d stripped, %d truncated",
-		r.Content, r.Attributes, r.Scripts, r.Fallbacks, r.Refused,
+		"%d refused, %d unsafe; %d values repaired, %d stripped, %d truncated",
+		r.Content, r.Attributes, r.Scripts, r.Fallbacks, r.Refused, r.Unsafe,
 		r.Repaired, r.Stripped, r.Truncated)
 }
 
@@ -223,10 +233,21 @@ func (g *greeter) refuse(e *lolhtml.Element) bool {
 // The value has to be encoded first: SetAttribute takes raw attribute source, so
 // a literal "&amp;" would arrive as "&". EscapeAttribute is the encoder, and it
 // is not optional even though nothing visible breaks without it.
+//
+// It is also not sufficient, and that is the half worth copying. The page names
+// the attribute, the header names the value, and which attribute it is decides
+// what the value does - so an attribute this program will not fill is refused
+// before any escaping question comes up.
 func (g *greeter) attribute(e *lolhtml.Element) error {
 	for _, a := range e.AttributeList() {
 		attr, ok := strings.CutPrefix(a.Name, "data-greet-")
 		if !ok || attr == "" || reserved[attr] {
+			continue
+		}
+		if unsafeAttribute(strings.ToLower(attr)) {
+			// Left as it is, marker and all: this is a page to fix rather than
+			// a value to clean up.
+			g.res.Unsafe++
 			continue
 		}
 		value := g.value(a.Value)
@@ -260,6 +281,36 @@ func (g *greeter) script(e *lolhtml.Element) error {
 	}
 	g.res.Scripts++
 	return nil
+}
+
+// unsafeAttribute reports whether filling this attribute from a header would be a
+// decision about behaviour rather than about text.
+//
+// EscapeAttribute answers "can this value end the attribute". It does not answer
+// "what does this attribute do with it", and for three groups of names the second
+// question is the only one that matters:
+//
+//   - on* holds script. The value is a program, and quoting it correctly is what
+//     makes it run rather than what stops it.
+//   - href, src and the rest are fetched or navigated to, so
+//     "javascript:alert(document.domain)" in one of them is script as well - and
+//     it is escaping-clean, so nothing above notices.
+//   - style is CSS, which fetches, and in older engines runs.
+//
+// Escaping is not sanitising, and there is no escape that makes an attacker's
+// choice of URL or program safe. So these are counted and skipped. The list is
+// the common names rather than every name a browser has: a program that fills
+// attributes a page chooses is better off with a list of the ones it will fill.
+func unsafeAttribute(attr string) bool {
+	if strings.HasPrefix(attr, "on") {
+		return true
+	}
+	switch attr {
+	case "style", "href", "xlink:href", "src", "srcset", "srcdoc", "action",
+		"formaction", "data", "poster", "background", "ping", "cite", "manifest":
+		return true
+	}
+	return false
 }
 
 // reserved are the data-greet- suffixes that mean something other than "set this

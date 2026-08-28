@@ -12,8 +12,9 @@
 //	Content-Security-Policy: script-src 'nonce-r4nd0m'; style-src 'nonce-r4nd0m'
 //
 // Exit status is 1 if the document contains something a nonce cannot cover - an
-// inline event handler, or a javascript: URL - because those have to be fixed
-// in the source rather than at the edge.
+// inline event handler, a javascript: URL, or a style attribute, which style-src
+// governs and which has nowhere to carry a nonce - because those have to be
+// fixed in the source rather than at the edge.
 package main
 
 import (
@@ -22,6 +23,7 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
+	stdhtml "html"
 	"io"
 	"os"
 	"sort"
@@ -153,6 +155,17 @@ func (s *stamper) options() []lolhtml.Option {
 			if _, external := e.Attribute("src"); external {
 				return nil
 			}
+			// This selector matches by tag name, so it also matches a
+			// <script/> in foreign content, which really is self-closing: it
+			// has no body to hash and no end tag to wait for. OnEndTag returns
+			// an error for an element that cannot have content, and that error
+			// fails the whole rewrite - here, after the prefix of the page has
+			// already been written to the output. CanHaveContent is the guard
+			// the library asks for before OnEndTag on any selector that can
+			// match an element like this.
+			if !e.CanHaveContent() {
+				return nil
+			}
 			s.acc.Reset()
 			s.inInline = true
 			return e.OnEndTag(func(*lolhtml.EndTag) error {
@@ -192,12 +205,28 @@ func (s *stamper) options() []lolhtml.Option {
 					found++
 				}
 			}
+			// A style attribute is unnonceable for the same reason an event
+			// handler is: style-src governs it, and there is nowhere to put a
+			// nonce on an attribute. Only 'unsafe-hashes' or 'unsafe-inline'
+			// admits one, and the policy printed below has neither - so a
+			// document full of them would render unstyled under the policy this
+			// program certified.
+			if v, ok := e.Attribute("style"); ok {
+				s.unnonceable = append(s.unnonceable,
+					fmt.Sprintf("<%s style=%q>", e.TagName(), truncate(v)))
+				found++
+			}
 			if found == 0 || !s.mark {
 				return nil
 			}
-			// Text, not HTML: the marker echoes an attribute value taken from
-			// the document, so it is untrusted. Inserted as element content,
-			// which is the context Text escaping is defined for.
+			// Text, not HTML: nothing here is markup, and Text is what keeps
+			// that true if the message ever grows to quote the value it found.
+			//
+			// After writes outside the element, not into its content, and the
+			// difference matters on the elements this handler can match. An
+			// insertion into a <script> or a <style> is checked against
+			// ErrRawTextBreakout; one written next to it is ordinary markup and
+			// is deliberately not checked. What is checked is the position.
 			return e.After(fmt.Sprintf(" [csp: %d construct(s) no nonce can cover]", found),
 				lolhtml.Text)
 		}),
@@ -242,11 +271,19 @@ func (s *stamper) report() string {
 }
 
 func isJavaScriptURL(v string) bool {
+	// The value arrives as source text with its character references still
+	// encoded, and a browser decodes them before it ever looks at the scheme:
+	// href="&#106;avascript:alert(1)" navigates to javascript:alert(1). So the
+	// decode comes first, or the guard is bypassed by spelling one letter as a
+	// reference. Anything deciding something about an attribute value has to do
+	// this; only a value being copied straight back stays raw.
+	//
 	// A URL scheme is case insensitive and may carry whitespace or control
 	// characters before the colon, which browsers strip. "java\tscript:" is a
-	// real bypass, so the comparison is made after removing them.
+	// real bypass, and so is "java&#9;script:" once decoded, so the comparison
+	// is made after removing them.
 	var b strings.Builder
-	for _, r := range v {
+	for _, r := range stdhtml.UnescapeString(v) {
 		if r <= ' ' {
 			continue
 		}

@@ -378,9 +378,14 @@ func cssImports(s string) []string {
 		if i < 0 {
 			return out
 		}
-		rest := s[i+len("@import"):]
+		// Both strings are advanced together. i is an index into lower, so slicing s
+		// with it is only right while the two are the same length: advancing lower
+		// alone left every match after the first landing at the wrong offset in s,
+		// which for a program that reports the origins a page contacts meant
+		// silently reporting the first @import of a stylesheet and no others.
+		s = s[i+len("@import"):]
 		lower = lower[i+len("@import"):]
-		rest = strings.TrimLeft(rest, " \t\r\n")
+		rest := strings.TrimLeft(s, " \t\r\n")
 		if len(rest) == 0 || (rest[0] != '"' && rest[0] != '\'') {
 			continue
 		}

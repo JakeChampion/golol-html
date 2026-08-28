@@ -222,8 +222,16 @@ func (j *joiner) element(e *lolhtml.Element) error {
 		return nil
 	}
 
-	if e.IsSelfClosing() || !e.CanHaveContent() {
+	if !e.CanHaveContent() {
 		// Nothing inside and no end tag, so the whole element is in the buffer.
+		//
+		// CanHaveContent and not IsSelfClosing, which reports how the tag was
+		// written rather than whether the element is empty. In HTML a trailing
+		// slash is ignored, so <a href="/x"/> goes on to have content and an end
+		// tag like any other, and Remove takes the element and its whole
+		// subtree - here the rest of the heading, ending with the heading's own
+		// end tag. The slash is only decisive in foreign content, where
+		// CanHaveContent is false and this branch is the one that runs.
 		e.Remove()
 		return nil
 	}

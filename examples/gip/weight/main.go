@@ -15,8 +15,8 @@
 //
 // Every candidate in a srcset is counted as referenced, because which one a
 // browser picks depends on the device. The report separates them so a caller can
-// decide: Images.Known is the whole set, and Images.LargestCandidates is what
-// the page weighs if every picture element takes its heaviest option.
+// decide: Images.Known is the whole set, and LargestCandidates is what the images
+// weigh if every srcset takes its heaviest option.
 package main
 
 import (
@@ -55,9 +55,13 @@ type Report struct {
 	Scripts Kind
 	Styles  Kind
 	Images  Kind
-	// LargestCandidates is the total of Images plus, for each srcset, only its
-	// heaviest candidate rather than all of them. It is the weight of the page
-	// on the device that picks the worst option.
+	// LargestCandidates is what the images weigh on the device that picks the
+	// worst option: every image that is not offered as a choice, plus, for each
+	// srcset, only its heaviest known candidate rather than all of them. A URL
+	// that appears in any srcset is counted through that srcset alone, including
+	// when it is also some element's src - a browser fetches one of them, not
+	// both. Unknown sizes are not guessed at here either, so this is a floor in
+	// the same way Known is.
 	LargestCandidates int64
 }
 
@@ -117,9 +121,12 @@ func Measure(r io.Reader, m Manifest) (Report, error) {
 		})
 	}
 
-	// largest tracks, per srcset, the biggest candidate the manifest knows, so
+	// largestSum tracks, per srcset, the biggest candidate the manifest knows, so
 	// the report can say what the page weighs when every choice goes badly.
+	// candidates is every URL any srcset offered, which is what separates an image
+	// the page fetches outright from one it might.
 	var largestSum int64
+	candidates := map[string]bool{}
 
 	opts := []lolhtml.Option{
 		lolhtml.OnElement("script", func(e *lolhtml.Element) error {
@@ -151,6 +158,7 @@ func Measure(r io.Reader, m Manifest) (Report, error) {
 				var biggest int64
 				for _, u := range ParseSrcset(set) {
 					add(&rep.Images, u)
+					candidates[strings.TrimSpace(u)] = true
 					if size, ok := m[u]; ok && size > biggest {
 						biggest = size
 					}
@@ -175,7 +183,16 @@ func Measure(r io.Reader, m Manifest) (Report, error) {
 	if err := rw.Close(); err != nil {
 		return Report{}, err
 	}
+	// The srcset maxima are only half of it: an <img src> with no srcset is
+	// fetched whichever device asks, so it weighs on every one of them. Reporting
+	// the maxima alone said a page of plain images weighed nothing at all, which
+	// is neither what the field says nor a number a caller can act on.
 	rep.LargestCandidates = largestSum
+	for _, u := range rep.Images.URLs {
+		if !candidates[u] {
+			rep.LargestCandidates += m[u] // 0 for a URL the manifest has no size for
+		}
+	}
 	return rep, nil
 }
 

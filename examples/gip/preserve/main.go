@@ -7,7 +7,6 @@
 //	add a class to every element                     preserved
 //	rename b to strong                               preserved
 //	comment before every element                     preserved
-//	comment after every element, guarded             preserved
 //	span after every element, guarded                preserved
 //	replace each list item's content                 CHANGED     token 4: end li became end ul
 //

@@ -54,13 +54,11 @@ func writeChunked(t *testing.T, doc string, size int, opts ...func(*filler)) str
 		t.Fatal(err)
 	}
 
-	markup := f.markup()
+	markup, _ := f.markup()
 	var out strings.Builder
-	sawHead := false
 	placed := markup == ""
 	w, err := lolhtml.NewWriter(&out,
 		lolhtml.OnElement("head", func(e *lolhtml.Element) error {
-			sawHead = true
 			if !e.CanHaveContent() {
 				return nil
 			}
@@ -73,7 +71,7 @@ func writeChunked(t *testing.T, doc string, size int, opts ...func(*filler)) str
 			})
 		}),
 		lolhtml.OnElement("body", func(e *lolhtml.Element) error {
-			if sawHead || placed {
+			if placed {
 				return nil
 			}
 			placed = true

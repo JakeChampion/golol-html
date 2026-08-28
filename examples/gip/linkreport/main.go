@@ -70,8 +70,32 @@ type reporter struct {
 	base string
 
 	links []Link
-	open  bool
-	text  strings.Builder
+	// open says whether link text is being collected, and cur is the link it
+	// belongs to. Two anchors can be open at once in the source - HTML forbids
+	// nesting them, and a token rewriter reports what was written rather than
+	// what a parser would make of it - so the link is named here rather than
+	// taken as "the last one appended" when the text is finished.
+	open bool
+	cur  int
+	text strings.Builder
+}
+
+// closeLink finishes the link whose text is being collected, if there is one.
+//
+// It is called from three places, because there are three ways for an anchor's
+// content to end: its end tag, the start tag of another anchor - a parser closes
+// the open one rather than nesting - and the end of the document, for an anchor
+// the document never closed. Without the last two, an unclosed or doubled anchor
+// keeps an empty Text and is reported under "empty-text", which is a finding
+// about the program rather than about the page.
+func (r *reporter) closeLink() {
+	if !r.open {
+		return
+	}
+	r.open = false
+	r.links[r.cur].Text = strings.Join(strings.Fields(
+		stdhtml.UnescapeString(r.text.String())), " ")
+	r.text.Reset()
 }
 
 func (r *reporter) run(src io.Reader) error {
@@ -90,6 +114,11 @@ func (r *reporter) run(src io.Reader) error {
 func (r *reporter) options() []lolhtml.Option {
 	return []lolhtml.Option{
 		lolhtml.OnElement("a", func(e *lolhtml.Element) error {
+			// An anchor inside an anchor is a parse error that a parser fixes by
+			// closing the open one, so this start tag ends the previous link's
+			// text rather than continuing it.
+			r.closeLink()
+
 			href, _ := e.Attribute("href")
 			rel, _ := e.Attribute("rel")
 			target, _ := e.Attribute("target")
@@ -106,16 +135,30 @@ func (r *reporter) options() []lolhtml.Option {
 			l.Kind = classify(l.Href, r.base)
 			r.links = append(r.links, l)
 
-			r.open = true
+			r.open, r.cur = true, len(r.links)-1
 			r.text.Reset()
+
+			if !e.CanHaveContent() {
+				// A self-closing anchor in foreign content - <svg><a href="#x"/> -
+				// has no end tag, and OnEndTag returns an error for one that would
+				// fail the rewrite and lose the whole report. There is nothing to
+				// wait for: the link is recorded and it has no text.
+				r.closeLink()
+				return nil
+			}
 			return e.OnEndTag(func(*lolhtml.EndTag) error {
-				r.open = false
-				last := &r.links[len(r.links)-1]
-				last.Text = strings.Join(strings.Fields(
-					stdhtml.UnescapeString(r.text.String())), " ")
-				last.End = loc.End
+				// No name guard: this is accumulation rather than a position to
+				// write at, so an end tag belonging to an enclosing element is
+				// still where this link's text stopped.
+				r.closeLink()
 				return nil
 			})
+		}),
+
+		// An anchor the document never closed still has its text.
+		lolhtml.OnDocumentEnd(func(*lolhtml.DocumentEnd) error {
+			r.closeLink()
+			return nil
 		}),
 
 		lolhtml.OnText("a", func(t *lolhtml.TextChunk) error {

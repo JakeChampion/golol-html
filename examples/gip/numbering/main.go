@@ -12,8 +12,18 @@
 // The number is inserted with Prepend, and the heading's own text is read by a
 // text handler in the same rewrite. That works because inserted content is
 // emitted verbatim and never dispatched to handlers: the accumulator sees
-// "Intro", not "1. Intro", so re-running this program is a no-op rather than a
-// compounding one.
+// "Intro", not "1. Intro".
+//
+// What that does not buy is a second run for free. Prepend happens at the start
+// tag, before a character of the heading has been seen, and "does this heading
+// already carry a number" cannot be answered until the end tag - by which time
+// the label has been written and cannot be withdrawn. So running this over its
+// own output compounds: "1. Intro" becomes "1. 1. Intro". -skip-numbered does not
+// prevent that either; it decides whether such a heading is counted as numbered
+// or reported as skipped, and the report names how many now carry two labels. A
+// pipeline that has to be re-runnable wants the second pass examples/gip/toc and
+// examples/gip/slugs pay for, where the decision is made before anything is
+// written.
 package main
 
 import (
@@ -33,7 +43,9 @@ func main() {
 	maxLevel := flag.Int("max", 6, "deepest heading level to number")
 	style := flag.String("style", "decimal", "decimal or roman for the top level")
 	sep := flag.String("sep", ". ", "separator between the number and the heading text")
-	skip := flag.Bool("skip-numbered", true, "leave headings that already start with a number alone")
+	skip := flag.Bool("skip-numbered", true,
+		"report a heading that already starts with a number as skipped rather than numbered; "+
+			"the label is inserted either way, because it goes in before the text is known")
 	flag.Parse()
 
 	if *minLevel < 1 || *maxLevel > 6 || *minLevel > *maxLevel {

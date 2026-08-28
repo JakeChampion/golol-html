@@ -78,11 +78,14 @@ func Count(r io.Reader) (Report, error) {
 
 	// ns is the namespace an element's children are parsed in, one entry per
 	// enclosing element that changed it. The top is what the element being
-	// reported is itself in.
-	ns := []string{lolhtml.NamespaceHTML}
+	// reported is itself in. Each entry remembers the tag that pushed it, because
+	// an end tag closes the nearest open element of that name and everything
+	// opened after it - see the unwind below.
+	type frame struct{ uri, tag string }
+	ns := []frame{{uri: lolhtml.NamespaceHTML}}
 
 	handler := lolhtml.OnElement("*", func(e *lolhtml.Element) error {
-		top := ns[len(ns)-1]
+		top := ns[len(ns)-1].uri
 		own := top
 		// <svg> and <math> are the two tags that enter foreign content, so they
 		// are themselves foreign - taking the parent's answer would put them in
@@ -99,17 +102,29 @@ func Count(r io.Reader) (Report, error) {
 		// at an integration point - so the stack holds a handful of entries on
 		// any real document rather than one per element.
 		if child := e.NamespaceURI(); child != "" && child != top && e.CanHaveContent() {
-			ns = append(ns, child)
 			tag := e.TagName()
+			ns = append(ns, frame{uri: child, tag: tag})
 			if err := e.OnEndTag(func(t *lolhtml.EndTag) error {
 				// An element whose end tag the source left out is handed the
-				// enclosing one; popping on that would unwind the wrong entry.
-				// These elements do not have omissible end tags, so the guard
-				// is a statement of that rather than a workaround.
-				if t.Name() != tag || len(ns) == 1 {
+				// enclosing one; unwinding on that would drop the wrong entry.
+				if t.Name() != tag {
 					return nil
 				}
-				ns = ns[:len(ns)-1]
+				// This element's entry is not necessarily the top one. An
+				// HTML tag name inside an <svg> takes the parser out of
+				// foreign content - 44 names do it - and the tags that follow
+				// it, still inside the source <svg>, report the HTML namespace
+				// and get pushed here. Nothing closes those by name, so
+				// </svg> would pop the last of them and leave the svg entry
+				// on top, labelling the whole rest of the document svg:.
+				// An end tag closes the nearest open element of that name and
+				// everything opened after it, so that is what this unwinds to.
+				for i := len(ns) - 1; i > 0; i-- {
+					if ns[i].tag == tag {
+						ns = ns[:i]
+						break
+					}
+				}
 				return nil
 			}); err != nil {
 				return err

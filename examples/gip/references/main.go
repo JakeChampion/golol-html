@@ -129,7 +129,18 @@ func (n *normaliser) textChunk(c *lolhtml.TextChunk) error {
 
 func (n *normaliser) element(e *lolhtml.Element) error {
 	changed := false
+	// AttributeList yields every copy of a repeated attribute; SetAttribute replaces the
+	// first. So a later copy's decoded value would be written onto the first one, which is
+	// the copy a browser keeps: <a href="/x" href="/y&copy;z"> came out as
+	// <a href="/y&copy;z" ...> decoded onto the first, and the link changed where it points.
+	// Only the first copy of a name is decoded, because it is the only one that means
+	// anything. See "An attribute can appear twice" in the package documentation.
+	seen := map[string]bool{}
 	for _, a := range e.AttributeList() {
+		if seen[a.Name] {
+			continue
+		}
+		seen[a.Name] = true
 		if !strings.Contains(a.Value, "&") {
 			continue
 		}
@@ -287,8 +298,25 @@ func (n *normaliser) keep(raw, decoded string, ctx context) bool {
 		return true
 	}
 	if len(decoded) != size {
-		return false // more than one character, and none of those are markup
+		// More than one code point, which is not the same as "no markup in it". The
+		// table has &nvlt; = "<" U+20D2 and &nvgt; = ">" U+20D2, so the test has to run
+		// over every character rather than over the first one. It matters because the
+		// result is written back as HTML - putting the references back is the one thing
+		// this program must not do - so a "<" arriving this way was a tag in the output,
+		// and "&nvlt;/title&gt;" ended a title element that the source had not ended.
+		for _, r := range decoded {
+			if n.isMarkup(r, ctx) {
+				return true
+			}
+		}
+		return false
 	}
+	return n.isMarkup(r, ctx)
+}
+
+// isMarkup reports whether a decoded character has to stay encoded because it would be
+// markup where it is going.
+func (n *normaliser) isMarkup(r rune, ctx context) bool {
 	switch r {
 	case '&', '<':
 		return true // markup in both contexts

@@ -157,7 +157,8 @@ func TestExistingNonceIsReplaced(t *testing.T) {
 }
 
 // TestUnnonceableConstructsAreFound, including the bypasses that rely on a
-// scheme comparison being done on the raw string.
+// scheme comparison being done on the raw string: an attribute value is source
+// text, and the browser decodes it before the scheme means anything.
 func TestUnnonceableConstructsAreFound(t *testing.T) {
 	tests := []struct {
 		in   string
@@ -165,7 +166,9 @@ func TestUnnonceableConstructsAreFound(t *testing.T) {
 	}{
 		{`<a href="javascript:x()">t</a>`, 1},
 		{`<a href="JavaScript:x()">t</a>`, 1},
-		{`<a href="java&#9;script:x()">t</a>`, 0}, // a character reference, not decoded
+		{`<a href="java&#9;script:x()">t</a>`, 1}, // decoded first, so the reference is a tab
+		{`<a href="&#106;avascript:alert(1)">t</a>`, 1},
+		{`<p style="color:red">t</p>`, 1}, // style-src governs it and it cannot hold a nonce
 		{"<a href=\"java\tscript:x()\">t</a>", 1},
 		{"<a href=\" javascript:x()\">t</a>", 1},
 		{`<a href="/safe">t</a>`, 0},

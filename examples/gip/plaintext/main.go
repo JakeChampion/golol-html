@@ -23,9 +23,12 @@
 // the handler, or the output depends on how the input was written.
 //
 // What is skipped is tracked by depth rather than by selector, because there is
-// no selector for "text that is not inside a script". A script, a style, the
-// head and a template hold content that is not the document's prose, and each is
-// counted in and out.
+// no selector for "text that is not inside a script". A script, a style and a
+// template hold content that is not the document's prose, and each is counted in
+// and out - on whatever end tag closes it, not on a matching name, because the
+// counter is asking "has this element ended" rather than "is this position mine".
+// An element that the source never closes explicitly, such as a <head>, cannot be
+// counted this way at all; see the skip list.
 package main
 
 import (
@@ -59,8 +62,16 @@ var paragraphs = map[string]bool{
 }
 
 // skipped elements hold content that is not the document's text.
+//
+// <head> is not on the list, and cannot be: its end tag is omissible, so an
+// element counted in at <head> is counted out at whatever did close it, which is
+// </html> where the document spells one and nothing at all where it does not. A
+// skip that starts at the head then runs over the whole body. It is not needed
+// either - title, script and style are on the list in their own right, and text a
+// document puts directly in the head is text a browser moves into the body and
+// shows.
 var skipped = map[string]bool{
-	"script": true, "style": true, "head": true, "template": true,
+	"script": true, "style": true, "template": true,
 	"noscript": true, "title": true, "iframe": true, "noembed": true,
 	"noframes": true, "select": true, "option": true, "datalist": true,
 }
@@ -144,14 +155,15 @@ func (c *Converter) element(e *lolhtml.Element) error {
 	if !skipped[tag] && tag != "pre" {
 		return nil
 	}
-	return e.OnEndTag(func(t *lolhtml.EndTag) error {
-		// An omitted end tag hands this handler the enclosing element's, and
-		// decrementing on that would unwind the wrong element. These elements
-		// do not have omissible end tags, so the guard states that rather than
-		// working around it.
-		if t.Name() != tag {
-			return nil
-		}
+	return e.OnEndTag(func(*lolhtml.EndTag) error {
+		// Lowered whatever the token is named. An omitted end tag hands this
+		// handler the enclosing element's - </option> is omissible and option
+		// is on the skip list, so <option>a<option>b</select> runs both
+		// handlers at </select> - and comparing the names there, which is the
+		// right test for a handler writing at the position, would leave the
+		// counter raised and drop the rest of the document's text. The handler
+		// runs exactly once per element, so an unconditional decrement stays
+		// balanced.
 		c.flushNode()
 		if skipped[tag] {
 			c.skipDepth--

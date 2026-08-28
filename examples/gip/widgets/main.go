@@ -205,9 +205,34 @@ func Upgrade(doc string, rules []Rule) (Result, error) {
 	var opts []lolhtml.Option
 	for _, rule := range rules {
 		rule := rule
+		// A part is matched by a selector of its own and cannot ask what was decided
+		// about the widget it is in, so the decision is carried across in open: the
+		// stack of this rule's matches the rewriter is inside, and whether each was
+		// upgraded. Without it a skipped widget still gets slot attributes written into
+		// its children, which is the corrupted half-upgrade the two passes exist to
+		// avoid - and the report would say the widget was left alone while the document
+		// says otherwise.
+		//
+		// A part selector is a child selector, so the nearest enclosing match is the
+		// part's own parent, and the stack's top is that decision.
+		var open []bool
 		opts = append(opts, lolhtml.OnElement(rule.Match, func(e *lolhtml.Element) error {
 			c := count(rule.Name)
-			if !own[e.SourceLocation().Start] {
+			upgraded := own[e.SourceLocation().Start]
+			if e.CanHaveContent() {
+				open = append(open, upgraded)
+				// Popped whatever the token is named: this handler runs once for
+				// this element, and for one whose end tag the source left out the
+				// token belongs to something enclosing - which is late, but is
+				// still where the rewriter leaves the element.
+				if err := e.OnEndTag(func(*lolhtml.EndTag) error {
+					open = open[:len(open)-1]
+					return nil
+				}); err != nil {
+					return err
+				}
+			}
+			if !upgraded {
 				c.Skipped++
 				return nil
 			}
@@ -218,6 +243,11 @@ func Upgrade(doc string, rules []Rule) (Result, error) {
 			slot := slot
 			opts = append(opts, lolhtml.OnElement(rule.Match+" > "+sel,
 				func(e *lolhtml.Element) error {
+					if len(open) == 0 || !open[len(open)-1] {
+						// The widget this belongs to was not upgraded, so its
+						// parts stay as the legacy markup had them.
+						return nil
+					}
 					return e.SetAttribute("slot", slot)
 				}))
 		}

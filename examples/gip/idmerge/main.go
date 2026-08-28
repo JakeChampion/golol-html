@@ -340,7 +340,16 @@ func (m *Merger) Merge(inputs []Input, w io.Writer) error {
 		}
 	}
 	for i, in := range inputs {
-		if _, err := fmt.Fprintf(w, "<section data-source=%q>", in.Name); err != nil {
+		// EscapeAttribute rather than %q, because Go's quoting is not HTML's: %q
+		// writes a double quote as backslash-quote, and a backslash escapes nothing
+		// in an attribute value - the quote ends the attribute and what follows is
+		// markup, so a file named `a" onload="alert(1).html` arrives as an event
+		// handler on the section. (%q also spells every non-ASCII rune as \u...,
+		// which mangles an ordinary filename.) This is the one place in the program
+		// that assembles markup as a string instead of asking the library to write
+		// it, which makes it the one place that has to do the escaping itself.
+		if _, err := fmt.Fprintf(w, `<section data-source="%s">`,
+			lolhtml.EscapeAttribute(in.Name)); err != nil {
 			return err
 		}
 		if err := m.Rewrite(m.Documents[i], strings.NewReader(in.Doc), w); err != nil {

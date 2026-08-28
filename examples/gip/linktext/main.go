@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	lolhtml "github.com/JakeChampion/golol-html"
 )
@@ -146,6 +147,17 @@ func (c *checker) pass(src io.Reader, dst io.Writer, rewrite bool) error {
 func (c *checker) options(rewrite bool) []lolhtml.Option {
 	opts := []lolhtml.Option{
 		lolhtml.OnElement("a[href]", func(e *lolhtml.Element) error {
+			// The selector matches by tag name, so it also matches an <a>
+			// inside <svg>, where <a href="#x"/> really is self-closing: no
+			// text between tags to judge, and no end tag to wait for. OnEndTag
+			// returns an error for an element that cannot have content, and
+			// that error fails the whole rewrite - in -flag mode the output is
+			// os.Stdout, so a truncated page has already been written by the
+			// time it comes back. The guard sits above the counter so both
+			// passes of -fix number the same links.
+			if !e.CanHaveContent() {
+				return nil
+			}
 			c.nth++
 			href, _ := e.Attribute("href")
 			p := &pending{ord: c.nth, href: stdhtml.UnescapeString(strings.TrimSpace(href))}
@@ -337,7 +349,13 @@ func fromHref(href string) string {
 		return ""
 	}
 
-	words[0] = strings.ToUpper(words[0][:1]) + words[0][1:]
+	// The first rune, not the first byte. Slicing one byte off a multi-byte
+	// character leaves an invalid string: ToUpper replaces the broken byte with
+	// U+FFFD and the continuation bytes trail after it, so "/über-uns" came back
+	// as a replacement character followed by "\xbcber uns". -fix writes this
+	// string into the document, so it is not only the report that is wrong.
+	r, size := utf8.DecodeRuneInString(words[0])
+	words[0] = string(unicode.ToUpper(r)) + words[0][size:]
 	return strings.Join(words, " ")
 }
 

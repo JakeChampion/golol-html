@@ -21,9 +21,16 @@
 // The attributes that name an id are a list rather than a rule, and this is the
 // list: for, form, list, headers, aria-activedescendant, aria-controls,
 // aria-describedby, aria-details, aria-errormessage, aria-flowto, aria-labelledby
-// and aria-owns, plus an href or an xlink:href whose value is a fragment. Five of
-// them hold several ids separated by spaces rather than one, which is a detail a
-// program has to get right to report on them at all.
+// and aria-owns, plus an href or an xlink:href whose value is a fragment. Six of
+// them - headers, aria-controls, aria-describedby, aria-flowto, aria-labelledby
+// and aria-owns - hold several ids separated by spaces rather than one, which is a
+// detail a program has to get right to report on them at all.
+//
+// Every one of those values is read decoded, because an id is what it decodes to:
+// id="caf&eacute;" and id="café" are one id spelled two ways, and a fragment link
+// to either names both. The library reports attributes as raw source, so comparing
+// what it hands back would miss the duplicate and report the link as broken in the
+// same document.
 //
 // Two more findings fall out of having the index:
 //
@@ -44,6 +51,7 @@ package main
 
 import (
 	"fmt"
+	stdhtml "html"
 	"io"
 	"os"
 	"sort"
@@ -150,7 +158,7 @@ func (c *checker) element(e *lolhtml.Element) error {
 	at := e.SourceLocation().Start
 	tag := e.TagName()
 
-	if id, ok := e.Attribute("id"); ok {
+	if id, ok := decoded(e, "id"); ok {
 		c.res.Ids++
 		if _, seen := c.ids[id]; !seen {
 			c.order = append(c.order, id)
@@ -159,16 +167,18 @@ func (c *checker) element(e *lolhtml.Element) error {
 	}
 
 	for _, attr := range Single {
-		if v, ok := e.Attribute(attr); ok && strings.TrimSpace(v) != "" {
+		if v, ok := decoded(e, attr); ok && strings.TrimSpace(v) != "" {
 			c.refs = append(c.refs, reference{at: at, tag: tag, attr: attr, id: strings.TrimSpace(v)})
 			c.res.References++
 		}
 	}
 	for _, attr := range Multiple {
-		v, ok := e.Attribute(attr)
+		v, ok := decoded(e, attr)
 		if !ok {
 			continue
 		}
+		// Decoded first and split after, which is the order a browser uses: a
+		// value spelling its separator as "&#32;" is two ids, not one.
 		for _, id := range strings.Fields(v) {
 			c.refs = append(c.refs, reference{at: at, tag: tag, attr: attr, id: id})
 			c.res.References++
@@ -176,12 +186,27 @@ func (c *checker) element(e *lolhtml.Element) error {
 	}
 	// A fragment in an href names an id, and is the reference a reader uses.
 	for _, attr := range []string{"href", "xlink:href"} {
-		if v, ok := e.Attribute(attr); ok && strings.HasPrefix(v, "#") && len(v) > 1 {
+		if v, ok := decoded(e, attr); ok && strings.HasPrefix(v, "#") && len(v) > 1 {
 			c.refs = append(c.refs, reference{at: at, tag: tag, attr: "fragment link", id: v[1:]})
 			c.res.References++
 		}
 	}
 	return nil
+}
+
+// decoded reads an attribute and decodes its character references, which is the
+// only comparable form. [lolhtml.Element.Attribute] reports raw source, so
+// id="caf&eacute;" and id="café" arrive as two different strings and name
+// the same id, and href="#café" names it too. Comparing raw source misses
+// the duplicate and invents a broken reference at the same time. Nothing here is
+// written back, so there is no need to keep the raw form; a program that rewrote
+// the value would decide on the decoded form and write the raw one.
+func decoded(e *lolhtml.Element, name string) (string, bool) {
+	v, ok := e.Attribute(name)
+	if !ok {
+		return "", false
+	}
+	return stdhtml.UnescapeString(v), true
 }
 
 func (c *checker) report(doc []byte) Result {

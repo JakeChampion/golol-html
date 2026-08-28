@@ -147,8 +147,18 @@ func Rewrite(src io.Reader, dst io.Writer, limit int64, opts ...lolhtml.Option) 
 
 	_, copyErr := io.Copy(w, decompressed)
 	closeErr := w.Close()
-	// The trailer is read by the decompressor as the stream ends, so this is where a
-	// checksum failure appears - and it appears after the bytes have been written.
+	// The trailer is read and verified inside Read, as the deflate data ends, so a
+	// checksum failure has already come back as copyErr by the time the copy returns -
+	// after the bytes have been written, which is the point the file comment is about.
+	// Measured: a corrupted CRC gives copyErr "gzip: invalid checksum", and a stream cut
+	// at 90 per cent gives "unexpected EOF"; in both cases zr.Close() returns nil.
+	//
+	// gzip.Reader.Close forwards the flate decompressor's error and nothing else, so it
+	// is non-nil only when the deflate data itself was cut short - and then copyErr says
+	// so too, and says it first. It is called because a reader that was opened should be
+	// closed and an error from a Close should not be dropped, not because it is where the
+	// integrity answer comes from. The branch for it below is a backstop that a measured
+	// run does not reach.
 	trailerErr := zr.Close()
 
 	res.Compressed = compressed.n

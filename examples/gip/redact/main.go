@@ -6,14 +6,23 @@
 //
 // A value has to be read and written as source. Attribute reports what the
 // document holds, references intact, and SetAttribute takes the same - so a value
-// can be read, changed and written back without escaping anything, and must not
-// be decoded on the way through or the "&" in a query string comes back as
-// "&amp;amp;" the second time round.
+// can be copied through untouched, and escaping one on the way through is what
+// turns the "&" of a query string into "&amp;amp;" the second time round.
+//
+// But source is not what a value means. A browser decodes the references before
+// the value does anything, so a pattern run over the source text is run over the
+// wrong string: href="mailto:bob&#64;example.com" is a working link to an
+// address whose "@" appears nowhere in the bytes. Matching therefore decodes
+// first, exactly as the text half does, and escapes the result on the way back.
+// Only a value that matched is written back that way, so nothing merely being
+// copied through is round-tripped.
 //
 // A duplicated attribute cannot be sanitised by writing over it. SetAttribute
 // writes the first copy and leaves the rest, so "removing" an address by
 // replacing the value leaves the address in the bytes. This program removes and
 // re-sets, which costs the attribute its position and is the only way to be sure.
+// The value it re-sets is the first copy's, because that is the copy a browser
+// uses; a later copy only decides whether the attribute has to be rebuilt.
 //
 // And mutating while iterating is fine, which is worth knowing because the
 // obvious loop over Attributes doing SetAttribute inside it is safe: the walk is
@@ -154,21 +163,38 @@ func redactAttributes(e *lolhtml.Element, res *Result) error {
 	}
 
 	done := make(map[string]bool, len(list))
-	for _, a := range list {
+	for i, a := range list {
 		name := strings.ToLower(a.Name)
 		if done[name] {
 			continue
 		}
-		// Attribute values are source, and are written back as source, so
-		// nothing is decoded here - decoding and re-encoding would turn "&" into
-		// "&amp;amp;" on a second pass.
-		value, emails, phones := scrub(a.Value)
+		// Marked here rather than after the match, so that a name whose first
+		// copy is clean is finished with. Leaving it unmarked let a later copy
+		// take the decision, and the value rebuilt from it then replaced every
+		// copy - which is how href="/safe" href="mailto:..." came out pointing
+		// at the removed mailto.
+		done[name] = true
+
+		// The first copy is the one a browser uses: the HTML parsing
+		// specification calls a repeat a parse error and drops it. So it is the
+		// first copy's value that goes back, whichever copy the address was in.
+		value, emails, phones := scrubAttr(a.Value)
+		// A later copy is inert to a browser, but its bytes are still an address
+		// sitting in the page, so it counts towards the removal even though its
+		// value is discarded.
+		for _, dup := range list[i+1:] {
+			if strings.ToLower(dup.Name) != name {
+				continue
+			}
+			_, e, p := scrubAttr(dup.Value)
+			emails += e
+			phones += p
+		}
 		if emails+phones == 0 {
 			continue
 		}
 		res.AttrEmails += emails
 		res.AttrPhones += phones
-		done[name] = true
 
 		if count[name] > 1 {
 			// SetAttribute writes the first copy and leaves the rest, so
@@ -184,6 +210,29 @@ func redactAttributes(e *lolhtml.Element, res *Result) error {
 		}
 	}
 	return nil
+}
+
+// scrubAttr scrubs one attribute value, which is source text, and gives back
+// source text.
+//
+// The decode is the whole point. Attribute reports the value with its character
+// references left encoded, and a browser decodes them before the value means
+// anything: mailto:bob&#64;example.com holds no "@" at all, so the pattern does
+// not see the address and it stays in the page, fully working. Anything that
+// decides something about an attribute value - a scheme check as much as a
+// pattern match - has to decode first.
+//
+// The result is escaped again on the way back, because SetAttribute takes source
+// and escapes only the double quote: a "&" left bare would change what the rest
+// of the value means. A value with no match is returned exactly as it arrived
+// rather than round-tripped, so an untouched attribute never pays for the
+// difference between this decoder and a browser's.
+func scrubAttr(source string) (string, int, int) {
+	out, emails, phones := scrub(stdhtml.UnescapeString(source))
+	if emails+phones == 0 {
+		return source, 0, 0
+	}
+	return lolhtml.EscapeAttribute(out), emails, phones
 }
 
 // scrub replaces every match in s and says how many of each it replaced.

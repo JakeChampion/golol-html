@@ -133,9 +133,16 @@ type checker struct {
 	// heading, and a document can write one anyway - "<h1>a<h2>b</h2>" - and then
 	// two headings are open at once as far as the token stream is concerned.
 	open []*heading
-	// hidden is how many elements this position is inside that are out of the
-	// accessibility tree.
-	hidden int
+	// hidden is the elements this position is inside that are out of the
+	// accessibility tree, innermost last. A stack rather than a counter, and the
+	// reason is the one OnEndTag documents: an element whose end tag is
+	// omissible is closed by a start tag, and its end-tag callback then runs
+	// late - at the enclosing end tag - or, when nothing encloses it, never at
+	// all. A counter raised at the start tag and lowered in that callback gets
+	// stuck raised, and every heading in the rest of the document is then
+	// silently treated as hidden. So the closing a start tag implies is applied
+	// here too, in startTag below.
+	hidden []*hiddenElement
 	// found is every heading, finished. Not in document order: an implied end tag
 	// finishes the inner heading first, so this is sorted by offset before use.
 	found []heading
@@ -143,6 +150,13 @@ type checker struct {
 
 func (c *checker) options() []lolhtml.Option {
 	return []lolhtml.Option{
+		// Before either of those, the implied end tags: a start tag can close
+		// elements before it opens one, and an open hidden region has to come
+		// off the stack at that point rather than at whatever end tag arrives
+		// later. This is the one handler on "*", and it is cheap in the way
+		// that matters - it registers no end-tag handler, so nothing it does
+		// accumulates across the document.
+		lolhtml.OnElement("*", c.startTag),
 		// The hidden regions first, because two element handlers on the same
 		// element run in the order they were registered - and an element that is
 		// itself hidden has to be known to be hidden before it is counted as a
@@ -159,6 +173,35 @@ func (c *checker) options() []lolhtml.Option {
 	}
 }
 
+// A hiddenElement is one open element that is out of the accessibility tree. It
+// holds its tag name because that is what the implied-end-tag rules are written
+// in terms of, and it is addressed by pointer so that an entry already taken off
+// the stack by an implied close is not taken off twice.
+type hiddenElement struct {
+	tag string
+	// void is set for an element that holds nothing, whose region is over as
+	// soon as the handlers for its own start tag have run.
+	void bool
+}
+
+// startTag applies the closing that a start tag implies, before anything else
+// looks at the stack.
+func (c *checker) startTag(e *lolhtml.Element) error {
+	// A void hidden element - <img hidden> - hides itself and nothing else, so
+	// its entry comes off here rather than at the end of hiddenRegion: the
+	// heading handler for that same element runs in between and has to see it.
+	// There is no end tag to take it off, which is how counting one as a region
+	// left the count raised for the rest of the document.
+	for len(c.hidden) > 0 && c.hidden[len(c.hidden)-1].void {
+		c.hidden = c.hidden[:len(c.hidden)-1]
+	}
+	tag := e.TagName()
+	for len(c.hidden) > 0 && impliedlyClosedBy(c.hidden[len(c.hidden)-1].tag, tag) {
+		c.hidden = c.hidden[:len(c.hidden)-1]
+	}
+	return nil
+}
+
 func (c *checker) hiddenRegion(e *lolhtml.Element) error {
 	// aria-hidden="false" is not hidden, and the attribute selector cannot say so.
 	if v, ok := e.Attribute("aria-hidden"); ok && !strings.EqualFold(strings.TrimSpace(v), "true") {
@@ -166,14 +209,80 @@ func (c *checker) hiddenRegion(e *lolhtml.Element) error {
 			return nil
 		}
 	}
-	c.hidden++
 	if !e.CanHaveContent() || e.IsSelfClosing() {
+		// It still hides itself, so it goes on the stack for the rest of this
+		// element's handlers; startTag takes it off again. It gets no end-tag
+		// handler, because OnEndTag fails on an element that cannot have
+		// content.
+		c.hidden = append(c.hidden, &hiddenElement{tag: e.TagName(), void: true})
 		return nil
 	}
+	h := &hiddenElement{tag: e.TagName()}
+	c.hidden = append(c.hidden, h)
 	return e.OnEndTag(func(*lolhtml.EndTag) error {
-		c.hidden--
+		// This element's entry, if a start tag has not already taken it off.
+		// No name guard: an end tag that is not this element's still closed it,
+		// and the entry has to go either way.
+		for i, open := range c.hidden {
+			if open == h {
+				c.hidden = append(c.hidden[:i], c.hidden[i+1:]...)
+				return nil
+			}
+		}
 		return nil
 	})
+}
+
+// impliedlyClosedBy reports whether an open element named open is closed by a
+// start tag named next, with no end tag in the source. These are the
+// specification's rules restricted to the ones that fire on a start tag;
+// examples/gip/depth writes out the same table for the same reason.
+func impliedlyClosedBy(open, next string) bool {
+	switch open {
+	case "li":
+		return next == "li"
+	case "dd", "dt":
+		return next == "dd" || next == "dt"
+	case "td", "th":
+		return next == "td" || next == "th" || next == "tr" ||
+			isTableSection(next)
+	case "tr":
+		return next == "tr" || isTableSection(next)
+	case "thead", "tbody", "tfoot":
+		return isTableSection(next)
+	case "option":
+		return next == "option" || next == "optgroup"
+	case "optgroup":
+		return next == "optgroup"
+	case "rt", "rp":
+		return next == "rt" || next == "rp"
+	case "p":
+		return closesAParagraph[next]
+	case "caption", "colgroup":
+		return next == "tr" || isTableSection(next) || next == "caption" ||
+			next == "colgroup"
+	}
+	return false
+}
+
+func isTableSection(tag string) bool {
+	return tag == "thead" || tag == "tbody" || tag == "tfoot"
+}
+
+// closesAParagraph is the set of start tags that end an open <p>. A paragraph
+// cannot contain flow content that is itself a block, so the parser closes it
+// rather than nesting - which is why a <p hidden> never encloses a heading, and
+// why leaving it on the stack hid the whole rest of the document.
+var closesAParagraph = map[string]bool{
+	"address": true, "article": true, "aside": true, "blockquote": true,
+	"center": true, "details": true, "dialog": true, "dir": true, "div": true,
+	"dl": true, "dt": true, "dd": true, "fieldset": true, "figcaption": true,
+	"figure": true, "footer": true, "form": true, "h1": true, "h2": true,
+	"h3": true, "h4": true, "h5": true, "h6": true, "header": true,
+	"hgroup": true, "hr": true, "li": true, "listing": true, "main": true,
+	"menu": true, "nav": true, "ol": true, "p": true, "plaintext": true,
+	"pre": true, "search": true, "section": true, "summary": true,
+	"table": true, "ul": true, "xmp": true,
 }
 
 func (c *checker) heading(e *lolhtml.Element) error {
@@ -181,7 +290,7 @@ func (c *checker) heading(e *lolhtml.Element) error {
 	if !ok {
 		return nil
 	}
-	if c.hidden > 0 {
+	if len(c.hidden) > 0 {
 		c.res.Hidden++
 		return nil
 	}

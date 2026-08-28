@@ -132,13 +132,22 @@ func (c *collapser) element(e *lolhtml.Element) error {
 	if !Verbatim[name] && !lolhtml.IsRawText(name) {
 		return nil
 	}
-	c.res.Regions++
-	c.depth++
 	if !e.CanHaveContent() {
-		// A plaintext runs to the end of the input: nothing closes it, so nothing
-		// after it is prose this program may touch.
+		// A self-closing foreign element - <svg><title/>, <svg><style/> - holds
+		// nothing, so there is no region to stay out of. The depth must not be
+		// raised for it either: OnEndTag returns an error for an element that
+		// cannot have content, so nothing would ever lower it again and every
+		// text chunk in the rest of the document would be treated as
+		// significant. That is the whole of the failure - the output is
+		// unchanged from there on and the report says nothing about it - so the
+		// test goes before the counters rather than after them.
 		return nil
 	}
+	c.res.Regions++
+	c.depth++
+	// A <plaintext> is the one element this leaves permanently raised, and that
+	// is correct: it ends only with the input, so OnEndTag returns nil and this
+	// handler never runs. Nothing after it is prose.
 	return e.OnEndTag(func(t *lolhtml.EndTag) error {
 		if t.Name() != name {
 			// The element was closed by something that is not its own end tag. If

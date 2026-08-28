@@ -20,8 +20,15 @@
 // the handler for `<div id=a>` at offset 0 fires while the caller is holding input from offset 9,
 // and the section it is asked to copy begins before anything it kept. What is safe to drop is
 // everything up to the end of the last unit any handler reported: tokens do not overlap, so no
-// future unit can begin before that point. So retention between sections is bounded by the
-// largest single token rather than by nothing.
+// future unit can begin before that point. So retention between sections is bounded by the gap
+// between reported units rather than by nothing.
+//
+// End tags are deliberately not among the units reported for that purpose. The only way to see
+// one is Element.OnEndTag, and registering it from a handler on "*" costs about 240 bytes per
+// element held until the rewrite ends - memory that grows with the document, which is the one
+// thing this program says it does not do. Leaving them out costs a little retention instead: a
+// run of closing tags reports nothing, so the bytes under it are held until the next unit, which
+// is a few bytes per open element and bounded by nesting depth rather than by document length.
 //
 // The end tag has to be checked by name before its End is used. An omitted end tag hands the
 // handler an enclosing element's tag, and the arithmetic then measures to the end of that one -
@@ -100,15 +107,12 @@ func Duplicate(r io.Reader, w io.Writer, selector, suffix string, chunk int) (St
 			note(d.SourceLocation())
 			return nil
 		}),
+		// Start tags, and no end-tag registration here: see the package comment on why an
+		// OnEndTag on "*" is the one thing that would make this program's memory grow with
+		// the document.
 		lolhtml.OnElement("*", func(e *lolhtml.Element) error {
 			note(e.SourceLocation())
-			if !e.CanHaveContent() {
-				return nil
-			}
-			return e.OnEndTag(func(t *lolhtml.EndTag) error {
-				note(t.SourceLocation())
-				return nil
-			})
+			return nil
 		}),
 		lolhtml.OnElement(selector, func(e *lolhtml.Element) error {
 			if openName != "" {
@@ -136,6 +140,9 @@ func Duplicate(r io.Reader, w io.Writer, selector, suffix string, chunk int) (St
 					return nil
 				}
 				end := t.SourceLocation().End
+				// This one end tag is worth noting: the handler is registered anyway, and
+				// it lets the section's bytes go now rather than at the next unit.
+				note(t.SourceLocation())
 				openName, openStart = "", -1
 				st.Unfinished--
 
@@ -159,6 +166,12 @@ func Duplicate(r io.Reader, w io.Writer, selector, suffix string, chunk int) (St
 	if err != nil {
 		return st, err
 	}
+	// Closed on every path out of here, including the ones that give up part way. The
+	// drop-without-Close cleanup is a backstop and not a second way of doing this: until a
+	// garbage collection happens to run it, the native rewriter, its selectors and every
+	// handle registered against them stay alive. Close on an already-closed Writer returns
+	// nil, so the explicit Close below still reports the final flush error.
+	defer rw.Close()
 
 	if chunk <= 0 {
 		chunk = 32 * 1024

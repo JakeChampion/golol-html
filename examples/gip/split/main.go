@@ -22,8 +22,15 @@
 // source, and ends with their end tags in reverse.
 //
 // The rewriter is what makes that possible: an element handler knows the tag and its attributes,
-// and its end-tag handler is where the ancestor leaves the stack. Nothing else is needed - no
-// tree, and no second pass.
+// and its end-tag handler is where the ancestor leaves the stack. No tree, and no second pass -
+// but the end-tag handler is not enough on its own. HTML lets a document omit </p>, </li> and
+// </td>, and an element closed that way is reported at the token that closed it, which belongs to
+// an ancestor and arrives long after the element ended, or never arrives at all. A stack driven
+// by end tags alone therefore keeps ancestors that have already finished, and every later part
+// reopens them: <article><p>intro<h2>One reopens <article><p>, then <article><p><p>, and each part
+// closes tags it never opened. So the stack also pops on a start tag, following the
+// specification's implied end tags - impliedlyClosedBy below is that table, and it is the same one
+// examples/gip/depth needs for the same reason.
 //
 // The reopened tags are the source's own, attributes included, because a part whose <article> has
 // lost its class is a part that styles differently. What is not reproduced is anything the
@@ -169,6 +176,58 @@ func tagName(startTag string) string {
 	return startTag[1 : 1+end]
 }
 
+// impliedlyClosedBy reports whether an open element named open is closed by a start tag named
+// next, with no end tag in the source.
+//
+// These are the specification's rules, restricted to the ones that fire on a start tag - the same
+// table as examples/gip/depth, which needs it for the same reason. It is the part of a parser this
+// program has to be: an element's OnEndTag handler is not enough on its own, because it runs
+// against the token that closed the element, which for an implicitly closed one belongs to an
+// ancestor and arrives long after the element ended - or never.
+func impliedlyClosedBy(open, next string) bool {
+	switch open {
+	case "li":
+		return next == "li"
+	case "dd", "dt":
+		return next == "dd" || next == "dt"
+	case "td", "th":
+		return next == "td" || next == "th" || next == "tr" || isTableSection(next)
+	case "tr":
+		return next == "tr" || isTableSection(next)
+	case "thead", "tbody", "tfoot":
+		return isTableSection(next)
+	case "option":
+		return next == "option" || next == "optgroup"
+	case "optgroup":
+		return next == "optgroup"
+	case "rt", "rp":
+		return next == "rt" || next == "rp"
+	case "p":
+		return closesAParagraph[next]
+	case "caption", "colgroup":
+		return next == "tr" || isTableSection(next) || next == "caption" || next == "colgroup"
+	}
+	return false
+}
+
+func isTableSection(tag string) bool {
+	return tag == "thead" || tag == "tbody" || tag == "tfoot"
+}
+
+// closesAParagraph is the set of start tags that end an open <p>. A paragraph cannot contain flow
+// content that is itself a block, so the parser closes it rather than nesting.
+var closesAParagraph = map[string]bool{
+	"address": true, "article": true, "aside": true, "blockquote": true,
+	"center": true, "details": true, "dialog": true, "dir": true, "div": true,
+	"dl": true, "dt": true, "dd": true, "fieldset": true, "figcaption": true,
+	"figure": true, "footer": true, "form": true, "h1": true, "h2": true,
+	"h3": true, "h4": true, "h5": true, "h6": true, "header": true,
+	"hgroup": true, "hr": true, "li": true, "listing": true, "main": true,
+	"menu": true, "nav": true, "ol": true, "p": true, "plaintext": true,
+	"pre": true, "search": true, "section": true, "summary": true,
+	"table": true, "ul": true, "xmp": true,
+}
+
 // Split cuts a document at headings of the given level.
 func Split(r io.Reader, level int, maxBytes int) (*Splitter, error) {
 	s := NewSplitter(maxBytes)
@@ -182,6 +241,16 @@ func Split(r io.Reader, level int, maxBytes int) (*Splitter, error) {
 	handlers := []lolhtml.Option{
 		lolhtml.OnElement("*", func(e *lolhtml.Element) error {
 			tag := e.TagName()
+
+			// A start tag can close elements before it opens one, and nothing in
+			// the token stream says so: <p>one<h2> leaves the paragraph on the
+			// stack for as long as the token stream is the only evidence. This is
+			// where the stack stops being a list of tags and becomes a list of
+			// elements, and it has to happen before the cut below, or the part
+			// reopens ancestors that had already ended.
+			for len(s.open) > 0 && impliedlyClosedBy(tagName(s.open[len(s.open)-1]), tag) {
+				s.open = s.open[:len(s.open)-1]
+			}
 
 			if tag == heading {
 				// The cut happens before the heading is written, so the heading

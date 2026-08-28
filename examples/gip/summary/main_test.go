@@ -13,7 +13,6 @@ func extract(t *testing.T, doc string) Result {
 	if err != nil {
 		t.Fatalf("Extract(%q): %v", doc, err)
 	}
-	res.Total = int64(len(doc))
 	return res
 }
 

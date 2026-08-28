@@ -130,12 +130,35 @@ func (x *hashing) Write(p []byte) (int, error) {
 // nothing.
 func newHash() hash.Hash { return fnv.New64a() }
 
-// Rewrite copies src to dst through the rewriter, and returns the tag. The tag is complete before
-// the first byte of the body is written, which is what makes it usable as a header.
+// Rewrite copies src to dst through the rewriter, and returns the tag.
+//
+// The returned tag arrives after the body, which is too late for a caller that has to send it as
+// a header: net/http commits the header map on the first body write, so
+//
+//	t, _ := etag.Rewrite(src, w, "v1", false)
+//	w.Header().Set("ETag", t.Value()) // sets nothing: the body is already going out
+//
+// is the mistake this shape invites. Use [RewriteTagFirst] there. This form is for a caller that
+// wants the tag beside the bytes rather than in front of them.
 //
 // verify asks for the output to be hashed too, which costs a hash over the output and answers a
 // question the design otherwise assumes: whether the rewrite is a function of its input.
 func Rewrite(src io.Reader, dst io.Writer, version string, verify bool) (Tag, error) {
+	return RewriteTagFirst(src, dst, version, verify, nil)
+}
+
+// RewriteTagFirst is Rewrite with a hook that runs as soon as the tag is known and before the
+// first byte of the body is written. That order is the whole design: the tag names the output
+// without producing it, so it can go out in front of it.
+//
+//	etag.RewriteTagFirst(src, w, "v1", false, func(t etag.Tag) error {
+//		w.Header().Set("ETag", t.Value())
+//		return nil
+//	})
+//
+// An error from tagged stops the rewrite before anything is written and is returned as it is,
+// which is what a caller wanting to answer 304 instead of rewriting at all needs.
+func RewriteTagFirst(src io.Reader, dst io.Writer, version string, verify bool, tagged func(Tag) error) (Tag, error) {
 	if version == "" {
 		return Tag{}, fmt.Errorf("etag: no rewriter version, and an etag without one does " +
 			"not change when the rewriter does")
@@ -155,6 +178,14 @@ func Rewrite(src io.Reader, dst io.Writer, version string, verify bool) (Tag, er
 		Version:    version,
 		Input:      hex.EncodeToString(inputHash.Sum(nil)),
 		InputBytes: int64(len(input)),
+	}
+
+	// The tag is complete here, with nothing yet written to dst. Everything below only
+	// produces the bytes it already names.
+	if tagged != nil {
+		if err := tagged(t); err != nil {
+			return t, err
+		}
 	}
 
 	// The output is hashed either way: it costs a hash over the bytes and it is the only way
@@ -231,15 +262,23 @@ func main() {
 	if *body {
 		dst = os.Stdout
 	}
-	t, err := Rewrite(src, dst, *version, *verify)
+	// The header line is printed as soon as the tag is known, which with -body means before
+	// the document rather than after it - the order a response has, and the order the whole
+	// design is for. The -verify lines cannot come first and are printed at the end: they
+	// describe the output, which does not exist yet at that point.
+	t, err := RewriteTagFirst(src, dst, *version, *verify, func(t Tag) error {
+		if *verify {
+			return nil
+		}
+		_, err := fmt.Println(t.Header())
+		return err
+	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	if *verify {
 		fmt.Print(t)
-	} else {
-		fmt.Println(t.Header())
 	}
 	if *verify && !t.Verified() {
 		os.Exit(1)

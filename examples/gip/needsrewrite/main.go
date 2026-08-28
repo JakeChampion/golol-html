@@ -221,6 +221,13 @@ func (g Gate) Run(doc []byte, w io.Writer) (ran bool, changed int, err error) {
 		return false, 0, err
 	}
 	if _, err := rw.Write(doc); err != nil {
+		// Closed on the failure path too. Every Writer has to be closed: the
+		// library's cleanup is a leak guard rather than the supported path, and a
+		// server that calls this once per response would hold the rewriter, its
+		// selectors and its cgo handles for as long as the garbage collector let
+		// it. The Write error is the one worth reporting, so Close's is dropped
+		// here rather than replacing it.
+		rw.Close()
 		return true, changed, err
 	}
 	return true, changed, rw.Close()

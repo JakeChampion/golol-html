@@ -80,6 +80,15 @@ type fixer struct {
 }
 
 func (f *fixer) template(e *lolhtml.Element) error {
+	if !e.CanHaveContent() {
+		// Selectors ignore namespaces, so this also matches <svg><template/> -
+		// self-closing foreign content, which has no content to be inside and no
+		// end tag to wait for. OnEndTag on such an element returns an error rather
+		// than doing nothing, and that error fails the rewrite after a prefix has
+		// already reached the client. Nothing is counted either: the decrement
+		// lives in the handler that would not have been registered.
+		return nil
+	}
 	f.tmpl++
 	// An end tag is a token rather than a fact about the element, but a template is
 	// closed by its own end tag or by the end of the document, and the count only

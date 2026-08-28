@@ -14,11 +14,22 @@
 // interesting part of the program. Two escaping problems apply at once:
 //
 // The content lands inside a <script>, which is raw text, so a "</script>" in it
-// would close the element. The library refuses that outright now, which means the
-// program cannot get it wrong quietly - but it still has to produce something
-// acceptable, and the answer is JSON's own escaping: "/" written as "\/" inside a
-// string. That is why encoding/json is not used here: it does not escape the
-// slash, so its output would be refused, correctly.
+// would close the element. The answer is JSON's own escaping: "/" written as
+// "\/" inside a string. That is why encoding/json is not used here - it does not
+// escape the slash.
+//
+// Only one of this program's two paths has the library behind it, and which one
+// turns on where the insertion is written rather than on what it contains.
+// -placeholder fills a page-supplied <script> with SetInnerContent, which is an
+// insertion into the element's own content and so is checked: bad JSON would be
+// refused with ErrRawTextBreakout rather than rendered. The default path builds
+// the whole element as a string and writes it with EndTag.After, outside the
+// nav, where a "</script>" is ordinary markup and the library deliberately does
+// not look - what is checked is the position, not the type. So on that path the
+// escaping below is the only thing standing between a crumb name and a broken
+// document, and a program less sure of its own escaping would run
+// lolhtml.CheckRawText over the JSON itself, which is what that function is
+// exported for.
 //
 // The values are also document-derived, so each needs escaping for JSON itself -
 // quotes, backslashes and control characters - before the slash rule is applied.
@@ -179,6 +190,22 @@ func (b *builder) options() []lolhtml.Option {
 		// one-item breadcrumb containing the whole trail as one name.
 		lolhtml.OnElement(descendants(b.selector, "a", "span"), func(e *lolhtml.Element) error {
 			if inNav == 0 || !e.CanHaveContent() {
+				return nil
+			}
+			// A crumb is usually spelled with one element inside another -
+			// <a href="/"><span>Home</span></a> is the schema.org shape - so
+			// this selector matches twice for a single crumb. The state below
+			// is shared by every match, so starting a new crumb here would
+			// reset the text the enclosing element had begun and overwrite its
+			// href with the inner element's absent one: the name is emitted
+			// once by the span's end tag and again, unlinked, by the a's.
+			// A match inside a crumb joins it instead. Its text is already
+			// being collected, and its href fills in for an enclosing element
+			// that had none, which is the <span><a href=...> spelling.
+			if collecting {
+				if href == "" {
+					href = stdhtml.UnescapeString(strings.TrimSpace(attr(e, "href")))
+				}
 				return nil
 			}
 			href = stdhtml.UnescapeString(strings.TrimSpace(attr(e, "href")))

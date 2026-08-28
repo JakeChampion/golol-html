@@ -37,6 +37,12 @@
 // Anything else ends the head, and <body> is only the most explicit case of it. A document that is
 // nothing but head elements has no body to copy, which is reported rather than assumed.
 //
+// The elements *inside* a template are the exception, and they have to be counted out. A template's
+// contents are an inert fragment rather than content of the document, so a <div> in one is not a
+// div in the head - but a handler on "*" is shown it like any other element, and taking it for the
+// end of the head stopped the rewrite at the template's first child. What follows in the head is
+// then never rewritten, and the report says the head ended at an element the head still contains.
+//
 // # What it costs to not parse something
 //
 // The bytes have to be available from the offset, so this reads the document into memory. A stream
@@ -109,9 +115,25 @@ func Rewrite(doc string, dst io.Writer, opts ...lolhtml.Option) (Result, error) 
 	stop := -1
 	var stoppedAt string
 
+	// inTemplate counts the open templates, because their contents are not the document's.
+	inTemplate := 0
+
 	all := append([]lolhtml.Option{}, opts...)
 	all = append(all, lolhtml.OnElement("*", func(e *lolhtml.Element) error {
 		name := e.TagName()
+		if name == "template" && e.CanHaveContent() {
+			inTemplate++
+			// </template> is not omissible, so this is the template's own end tag.
+			return e.OnEndTag(func(*lolhtml.EndTag) error {
+				inTemplate--
+				return nil
+			})
+		}
+		if inTemplate > 0 {
+			// Template contents: ordinary flow content that is not in the head and
+			// cannot end it. See the package comment.
+			return nil
+		}
 		if headElements[name] {
 			return nil
 		}

@@ -47,9 +47,18 @@
 // element's own means the removal reached further than the element. That is
 // counted as [Result.Overreach], and -strict turns it into an error, because a
 // page that has silently lost half its content is worse than a failed request.
+//
+// Turning it into an error is not enough on its own. The rewrite is streaming, so
+// by the time the end tag reveals the overreach the destination already holds
+// everything up to it, and returning an error there sends a truncated page with a
+// failure reported after it - which is the outcome -strict exists to avoid. So
+// -strict buffers the document and releases it only when the rewrite finishes
+// cleanly. Refusing a document means holding it; a rewrite that cannot hold it
+// cannot refuse it either.
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -158,7 +167,20 @@ func Rewrite(dst io.Writer, src io.Reader, key string, experiments []Experiment,
 		}
 	}
 
-	w, err := lolhtml.NewWriter(dst, a.options()...)
+	// A streaming rewrite cannot take back what it has already written, and -strict
+	// is a promise to refuse the document rather than deliver a damaged one. The
+	// overreach is only visible at an end tag, by which time the prefix would be at
+	// the destination and the error would arrive after it. So strict mode holds the
+	// output and hands it over only once the rewrite has finished without one. That
+	// costs the document in memory, which is what refusing a document costs; the
+	// default path still streams.
+	out := dst
+	var held bytes.Buffer
+	if opts.Strict {
+		out = &held
+	}
+
+	w, err := lolhtml.NewWriter(out, a.options()...)
 	if err != nil {
 		return a.res, err
 	}
@@ -168,6 +190,11 @@ func Rewrite(dst io.Writer, src io.Reader, key string, experiments []Experiment,
 	}
 	if err := w.Close(); err != nil {
 		return a.res, err
+	}
+	if opts.Strict {
+		if _, err := held.WriteTo(dst); err != nil {
+			return a.res, err
+		}
 	}
 	return a.res, nil
 }

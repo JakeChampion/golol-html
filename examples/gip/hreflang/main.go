@@ -174,7 +174,6 @@ func (in *injector) options() []lolhtml.Option {
 	// at </head>, or at the start of <body> when the head was implied, and both
 	// are after every position an alternate could occupy in the head.
 	headRegion := true
-	sawHead := false
 	done := map[string]bool{}
 
 	return []lolhtml.Option{
@@ -201,11 +200,23 @@ func (in *injector) options() []lolhtml.Option {
 		}),
 
 		lolhtml.OnElement("head", func(e *lolhtml.Element) error {
-			sawHead = true
 			if !e.CanHaveContent() {
 				return nil
 			}
 			return e.OnEndTag(func(end *lolhtml.EndTag) error {
+				if end.Name() != "head" {
+					// The name guard, and it is not optional here.
+					// </head> may be left out - minifiers and template
+					// engines routinely do - and then the head is closed
+					// by <body> and this callback runs against the tag
+					// that did close it, which belongs to an enclosing
+					// element. Inserting at a position taken from </body>
+					// or </html> puts the alternates outside the head,
+					// where they are not honoured, and the run still
+					// reports them as inserted. The <body> handler below
+					// covers that shape, and it runs first.
+					return nil
+				}
 				defer func() { headRegion = false }()
 				return in.insertMissing(done, func(markup string) error {
 					return end.Before(markup, lolhtml.HTML)
@@ -215,7 +226,12 @@ func (in *injector) options() []lolhtml.Option {
 
 		lolhtml.OnElement("body", func(e *lolhtml.Element) error {
 			defer func() { headRegion = false }()
-			if sawHead {
+			if !headRegion {
+				// The head ended at its own </head> and the links went in
+				// there. Otherwise this is where the head ends - whether the
+				// document had no head element or only left its end tag out -
+				// and inserting before <body> lands in the head a parser
+				// builds.
 				return nil
 			}
 			return in.insertMissing(done, func(markup string) error {
@@ -225,7 +241,8 @@ func (in *injector) options() []lolhtml.Option {
 
 		lolhtml.OnDocumentEnd(func(*lolhtml.DocumentEnd) error {
 			if in.inserted == 0 && in.rewrote == 0 {
-				in.note("no head and no body to insert the alternates into")
+				in.note("nowhere to insert the alternates: the source had " +
+					"neither </head> nor <body>")
 			}
 			return nil
 		}),

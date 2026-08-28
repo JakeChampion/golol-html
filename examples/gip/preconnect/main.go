@@ -221,16 +221,26 @@ func (h *hinter) writePass(doc []byte, w io.Writer) error {
 	}
 	markup := h.markup()
 
-	sawHead := false
 	placed := markup == ""
 
 	out, err := lolhtml.NewWriter(w,
 		lolhtml.OnElement("head", func(e *lolhtml.Element) error {
-			sawHead = true
 			if !e.CanHaveContent() {
 				return nil
 			}
 			return e.OnEndTag(func(end *lolhtml.EndTag) error {
+				if end.Name() != "head" {
+					// </head> is optional and nothing synthesises one.
+					// Left out, the head is closed by <body>, and this
+					// callback runs against whatever tag did close it -
+					// </body> or </html>. Writing there puts the hints
+					// after the whole document has been parsed, which is
+					// after every resource they were meant to warm up:
+					// the exact opposite of "the origins are in the body
+					// and the hints belong in the head". The <body>
+					// handler below covers that shape, and it runs first.
+					return nil
+				}
 				if placed {
 					return nil
 				}
@@ -239,7 +249,11 @@ func (h *hinter) writePass(doc []byte, w io.Writer) error {
 			})
 		}),
 		lolhtml.OnElement("body", func(e *lolhtml.Element) error {
-			if sawHead || placed {
+			// Whether the hints have gone in, not whether a head was seen: a
+			// document with a head but no </head> arrives here with the head
+			// still open, and <body> is where that head ends. Inserting
+			// before it lands in the head a parser builds.
+			if placed {
 				return nil
 			}
 			placed = true
@@ -247,6 +261,10 @@ func (h *hinter) writePass(doc []byte, w io.Writer) error {
 		}),
 		lolhtml.OnDocumentEnd(func(*lolhtml.DocumentEnd) error {
 			if !placed {
+				// markup() counted the links as it built them, and none of
+				// them went anywhere - so the count is undone rather than
+				// reported as work done.
+				h.added = 0
 				h.note("no head and no body to put the hints in")
 			}
 			return nil

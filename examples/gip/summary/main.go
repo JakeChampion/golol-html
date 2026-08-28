@@ -61,14 +61,17 @@ type Result struct {
 	// From says where it came from: "meta description" or "first paragraph".
 	From string
 	// Read is how many input bytes were consumed before the extractor stopped.
+	//
+	// There is no companion field for the size of the document, because this
+	// program never learns it: it stops at the first write after the summary is
+	// complete and the rest of the input is never read. Comparing Read against a
+	// total is a job for whoever holds the document.
 	Read int64
-	// Total is the size of the document, so the two can be compared.
-	Total int64
 }
 
 // String renders the result.
 func (r Result) String() string {
-	return fmt.Sprintf("%s (%s, read %d of %d bytes)", r.Text, r.From, r.Read, r.Total)
+	return fmt.Sprintf("%s (%s, read %d bytes)", r.Text, r.From, r.Read)
 }
 
 type extractor struct {
@@ -161,10 +164,15 @@ func (e *extractor) options() []lolhtml.Option {
 					return nil
 				}
 				e.skipDepth++
-				return el.OnEndTag(func(t *lolhtml.EndTag) error {
-					if t.Name() != tag {
-						return nil
-					}
+				return el.OnEndTag(func(*lolhtml.EndTag) error {
+					// Lowered whatever the token is named. The name guard is
+					// the right test for a handler writing at an end tag's
+					// position and the wrong one for a counter: <option> is on
+					// the skip list and its end tag is omissible, so
+					// <option>One<option>Two</select> runs both handlers at
+					// </select>, and comparing names there would leave the
+					// counter raised and skip the rest of the document. The
+					// handler runs once per element, so this stays balanced.
 					e.skipDepth--
 					return nil
 				})

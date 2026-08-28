@@ -246,6 +246,19 @@ func (s *scanner) field(e *lolhtml.Element) error {
 		f.name, _ = e.Attribute("id")
 	}
 
+	// Counted before either of the early returns below. The tally is evidence about
+	// the form, not about this field: a password field that already carries an
+	// autocomplete is still a second password field, and skipping it left a
+	// registration form looking like a sign-in form, so the un-annotated sibling of an
+	// autocomplete="new-password" field was told it was the current password. Deciding
+	// per form is the whole reason this pass exists, and a form's evidence has to
+	// include the fields this program will not touch.
+	if f.kind == "password" && f.form >= 0 {
+		if form := s.forms[f.form]; form != nil {
+			form.passwords++
+		}
+	}
+
 	if _, has := e.Attribute("autocomplete"); has {
 		s.res.Already++
 		return nil
@@ -253,11 +266,6 @@ func (s *scanner) field(e *lolhtml.Element) error {
 	if SkipTypes[f.kind] {
 		s.res.Skipped++
 		return nil
-	}
-	if f.kind == "password" && f.form >= 0 {
-		if form := s.forms[f.form]; form != nil {
-			form.passwords++
-		}
 	}
 	s.fields = append(s.fields, f)
 	return nil

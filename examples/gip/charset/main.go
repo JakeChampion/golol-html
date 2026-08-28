@@ -79,9 +79,19 @@ func (f *fixer) validate() error {
 	}
 	// The label has to be one the rewriter accepts, or the document would be
 	// read as something else and the declaration would be a second lie.
-	if _, err := lolhtml.NewWriter(io.Discard, lolhtml.WithEncoding(f.encoding)); err != nil {
+	//
+	// The Writer built to ask the question is closed, even though nothing is
+	// written to it: NewWriter has already allocated the native rewriter by the
+	// time it returns, and the library asks that every Writer be closed, including
+	// one being abandoned. The runtime cleanup that would otherwise free it is a
+	// leak guard rather than the supported path, and it stops working entirely for
+	// a Writer any handler has captured. A server validating a label per request
+	// would hold one unfreed rewriter per request without this line.
+	w, err := lolhtml.NewWriter(io.Discard, lolhtml.WithEncoding(f.encoding))
+	if err != nil {
 		return fmt.Errorf("-encoding %q: %w", f.encoding, err)
 	}
+	w.Close()
 	return nil
 }
 

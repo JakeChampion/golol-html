@@ -255,12 +255,23 @@ func decodeAmpersands(s string) (string, bool) {
 		}
 		matched := false
 		for _, ref := range Ampersands {
-			if strings.HasPrefix(s[i:], ref) {
-				b.WriteByte('&')
-				i += len(ref)
-				matched = true
-				break
+			if !strings.HasPrefix(s[i:], ref) {
+				continue
 			}
+			// A named reference without its semicolon is not a reference at all
+			// when the character after it is "=" or ASCII alphanumeric: in an
+			// attribute value "?volts=1&ampere=5" has a parameter called ampere,
+			// not an ampersand followed by "ere". Taking it as one turns a
+			// perfectly ordinary URL into one the page never named, and the CDN
+			// fetches that. The rule is the one the library sets out under
+			// [lolhtml.Element.Attribute] and examples/gip/references implements.
+			if !strings.HasSuffix(ref, ";") && continuesName(s[i+len(ref):]) {
+				continue
+			}
+			b.WriteByte('&')
+			i += len(ref)
+			matched = true
+			break
 		}
 		if matched {
 			continue
@@ -275,6 +286,16 @@ func decodeAmpersands(s string) (string, bool) {
 		i++
 	}
 	return b.String(), true
+}
+
+// continuesName reports whether s starts with a character that stops a
+// semicolon-less named reference from being one: "=" or an ASCII alphanumeric.
+func continuesName(s string) bool {
+	if s == "" {
+		return false
+	}
+	c := s[0]
+	return c == '=' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 func isName(s string) bool {

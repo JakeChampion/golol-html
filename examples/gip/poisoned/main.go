@@ -5,7 +5,7 @@
 //	failure                first Write            later Write    Close                  delivered
 //	handler error          the handler's error    ErrPoisoned     ErrPoisoned + cause    prefix
 //	destination error      the sink's error       ErrPoisoned     ErrPoisoned + cause    nothing
-//	memory limit           ErrMemoryLimitExceeded ErrPoisoned     ErrPoisoned + cause    prefix
+//	memory limit           ErrMemoryLimitExceeded ErrPoisoned     ErrPoisoned + cause    nothing
 //	ambiguous tag          ErrAmbiguousTag        ErrPoisoned     ErrPoisoned + cause    prefix
 //	handler panic          re-raised on this goroutine            ErrPoisoned            prefix
 //	after Close            ErrClosed              ErrClosed       nil                    everything
@@ -17,9 +17,17 @@
 // it is the deterministic release of the native handles.
 //
 // What the destination already holds is the part that decides what a client sees, and it
-// is not nothing. Everything up to the failing token has been written, and it ends at a
-// token boundary, so it reads as a short page rather than as an error. A rewrite that
-// has to refuse a document must hold its own output rather than relying on the failure.
+// is usually not nothing. Everything the rewriter had flushed before the failure has been
+// written, and it ends at a token boundary, so it reads as a short page rather than as an
+// error. A rewrite that has to refuse a document must hold its own output rather than
+// relying on the failure.
+//
+// "Usually", because the prefix can be empty, and the memory-limit row is the case that
+// shows it. The buffer requirement is decided early, so a limit too small for the document
+// fails on the first write - before any output has been flushed to the destination - and
+// the default bail-out discards what it was holding. Whether a client gets a short page or
+// an empty one is a fact about when the failure happens, not about the kind of failure, so
+// the row above is what this configuration produces rather than a rule about memory limits.
 //
 // This program is a demonstration rather than a discovery: everything it prints is
 // documented behaviour, and it exists so that the whole state machine can be seen in one

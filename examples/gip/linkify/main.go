@@ -80,10 +80,14 @@ func Linkify(dst io.Writer, src io.Reader) (Result, error) {
 				return nil
 			}
 			depth++
-			return e.OnEndTag(func(t *lolhtml.EndTag) error {
-				if t.Name() != tag {
-					return nil
-				}
+			return e.OnEndTag(func(*lolhtml.EndTag) error {
+				// Lowered whatever the token is named. The handler runs exactly
+				// once for this element, and where the source left its end tag out
+				// - </p>, </li> and </option> are all omissible, and <option> and
+				// <code> are both on this list - the token belongs to an enclosing
+				// element. Comparing names, which is the right test for a handler
+				// writing at the position, would leave the counter above zero for
+				// the rest of the document and silently stop linking anything.
 				depth--
 				return nil
 			})

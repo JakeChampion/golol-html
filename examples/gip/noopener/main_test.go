@@ -165,8 +165,11 @@ func TestFormsAreReportedNotRewritten(t *testing.T) {
 	if got != in {
 		t.Errorf("a form was rewritten:\n got: %s", got)
 	}
-	if h.hardened != 1 {
-		t.Errorf("hardened=%d, want 1 (counted, not changed)", h.hardened)
+	if h.hardened != 0 {
+		t.Errorf("hardened=%d, want 0: nothing about the form was changed", h.hardened)
+	}
+	if h.unfixable != 1 {
+		t.Errorf("unfixable=%d, want 1 (counted, not changed)", h.unfixable)
 	}
 }
 
@@ -182,9 +185,10 @@ func TestNoReferrerCanBeTurnedOff(t *testing.T) {
 	}
 }
 
-// TestGracefulBailOutIsReportedNotSwallowed. With the graceful setting the
-// response is intact, so run returns no error - but the tail was not hardened,
-// which is a security-relevant outcome and has to reach the caller somehow.
+// TestGracefulBailOutIsReportedNotSwallowed. The graceful setting decides what the
+// client gets - a whole document rather than a truncated one - and says nothing
+// about whether the hardening happened. This rewrite neutralises something, so a
+// bail-out is a failure either way: it surfaces as an error and is warned about.
 func TestGracefulBailOutIsReportedNotSwallowed(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 20; i++ {
@@ -201,8 +205,9 @@ func TestGracefulBailOutIsReportedNotSwallowed(t *testing.T) {
 	h := &hardener{noReferrer: true, limit: 512, graceful: true}
 	err := h.run(strings.NewReader(doc), &out)
 
-	if err != nil {
-		t.Fatalf("graceful bail-out should not surface as an error: %v", err)
+	if err == nil {
+		t.Fatal("a graceful bail-out left the document only partly hardened, " +
+			"so it has to surface as an error")
 	}
 	if !h.bailedOut {
 		t.Fatal("the bail-out was not recorded")

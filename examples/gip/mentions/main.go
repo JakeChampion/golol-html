@@ -74,10 +74,17 @@ func Linkify(dst io.Writer, src io.Reader) (Result, error) {
 				return nil
 			}
 			depth++
-			return e.OnEndTag(func(t *lolhtml.EndTag) error {
-				if t.Name() != tag {
-					return nil
-				}
+			return e.OnEndTag(func(*lolhtml.EndTag) error {
+				// Lowered whatever the token is named. The name guard is the
+				// library's idiom for writing *at* an end tag's position - it
+				// answers "is this position mine" - and this counter is asking
+				// a different question, "has this element ended". Where the
+				// source leaves an end tag out, and <option> almost always
+				// does, the callback arrives with an ancestor's name: the
+				// guard would return early, depth would never come back down,
+				// and nothing after the first <option> in the document would
+				// be linked. The callback runs once per element, so lowering
+				// it unconditionally stays balanced.
 				depth--
 				return nil
 			})
