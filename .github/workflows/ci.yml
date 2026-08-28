@@ -3,6 +3,11 @@ name: ci
 on:
   push:
     branches: [main]
+    # A tag is what a consumer actually gets: `go get` resolves to the highest
+    # semver tag, not to main, so a tag nothing tested is a release nothing
+    # tested. A tag ref matches neither `branches` nor `pull_request`, so before
+    # this the one commit that mattered most was the only one CI never saw.
+    tags: ['v*']
   pull_request:
 
 permissions:
