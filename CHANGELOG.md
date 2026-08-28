@@ -108,6 +108,26 @@
   rewriter cannot process markup that is not ASCII-compatible, and a text handler
   turns the mark itself into U+FFFD.
 
+- `examples/gip/needsrewrite`: decide whether a document needs rewriting before
+  rewriting it, which is the question a proxy asks constantly and mostly answers
+  "no". Worth about a third of the pass - and three of my four implementations
+  were not worth having.
+
+  On a 93 KB page with nothing to match: a case-sensitive `bytes.Contains` is
+  26µs but wrong, since tag names are case-insensitive; `ToLower` then `Contains`
+  per probe is 157µs and allocates the document; a hand-written fold loop is
+  318µs, *worse* than lower-casing, because `ToLower` and `Contains` are
+  vectorised and a byte loop is not; adding `bytes.IndexByte` gets 150µs, less
+  help than expected because in HTML the `<` is as dense as the tags are - 6,000
+  in that page; and one pass with a table on the byte after the bracket is 52µs,
+  against a 175µs rewrite.
+
+  Searching once per probe is a full pass per probe on a miss, while the rewrite
+  is paid once. The correctness rule is that the probe must match a superset of
+  the handlers or a document is skipped silently, which is why the probe standing
+  for `img,image` is `<im`: `<image>` is a spelling of `<img>` (B155), so `<img`
+  would miss it. A test pins that, and fails if the probe is ever tightened.
+
 - Added `CheckComment` and `ErrCommentBreakout`, for text a caller is about to
   put inside a comment it assembled itself. `Comment.SetText` refuses text that
   would end the comment early and says there is no escaping that would work; a
