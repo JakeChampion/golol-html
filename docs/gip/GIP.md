@@ -136,11 +136,10 @@ Until Phase 4 you are NOT authorized to read golol-html's implementation: no
   moment the Go docs go quiet, and "the Go docs are quiet where the header is
   not" is one of the better findings available to you.
 
-You are a USER of this library, and a user has the docs and the header.
-`CLAUDE.md` and this file are in your context and you cannot unsee them: do not
-use them to route around the restriction. Anything you know from them about
-where the bodies are buried is Phase 4 knowledge. Treat it as unavailable until
-then.
+You are a USER of this library, and a user has the docs and the header. This
+file is in your context and you cannot unsee it: do not use it to route around
+the restriction. Anything you know from it about where the bodies are buried is
+Phase 4 knowledge. Treat it as unavailable until then.
 
 The purpose is not ceremony. It is that the author of a binding cannot feel a
 bad doc comment, because they know what it was meant to say. You need one turn

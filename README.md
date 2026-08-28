@@ -193,8 +193,12 @@ e.StreamAppend(func(s *lolhtml.Sink) error {
 
 **Units do not outlive their handler.** lol-html only guarantees an `*Element`,
 `*Comment`, `*TextChunk`, `*Doctype`, `*EndTag` or `*DocumentEnd` for the
-duration of the call. The wrapper is detached on return, so a retained value
-returns `ErrDetached` rather than reading freed memory. Copy out what you need:
+duration of the call. The wrapper is detached on return, so a retained value can
+no longer reach the freed memory - but what it answers instead is not one rule.
+A mutator returns `ErrDetached`; a getter has nowhere to put an error, so it
+reports a zero value and says nothing, and `Attribute` answering `("", false)`
+is indistinguishable from the attribute being absent. `Detached()` answers the
+question directly. Copy out what you need:
 
 ```go
 lolhtml.OnElement("img", func(e *lolhtml.Element) error {
@@ -254,10 +258,11 @@ An unusable label fails from `NewWriter`, with an `*EncodingError` naming it.
 ## Strict mode
 
 Strict mode is on by default and should stay on. A handful of non-conforming
-shapes - a `<title>`, `<style>`, `<iframe>`, `<xmp>`, `<plaintext>`, `<noembed>`,
-`<noframes>` or `<noscript>` opening inside a `<select>`, or any of those but
-`<noframes>` inside a `<frameset>` - leave a streaming parser unable to tell
-whether what follows is markup or text. Nothing else triggers it.
+shapes leave a streaming parser unable to tell whether what follows is markup or
+text: a `<title>`, `<style>`, `<iframe>`, `<xmp>`, `<plaintext>`, `<noembed>`,
+`<noframes>` or `<noscript>` opening inside a `<select>`, or - the two lists are
+not the same list - any of those but `<noframes>`, which is legal there, plus
+`<script>` and `<textarea>`, inside a `<frameset>`. Nothing else triggers it.
 
 Neither setting is simply the safe one:
 
@@ -340,6 +345,16 @@ rewrite possible when a value has to reach a later handler.
 
 `examples/gip/unbounded` measures which patterns keep a rewrite flat as the
 document grows, and `userdatacost_test.go` gates the handle counts.
+
+**Rewriting untrusted HTML takes both halves.** There is no default limit -
+`MaxMemory` is zero unless you set it, and zero means unlimited - so a document
+chosen by whoever supplied it decides how much lol-html allocates. Setting it is
+necessary and not sufficient: it bounds the parsing buffer on the C side and is
+blind to the handle table above, so a page of a million matching elements with an
+`OnEndTag` registered on each stays inside a 64 KiB `MaxMemory` while the Go side
+grows without one. Set the limit, bound the size of the input, and keep
+`OnEndTag` and `SetUserData` off selectors that match unboundedly - all three, or
+the budget does not hold.
 
 ## Performance
 

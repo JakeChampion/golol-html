@@ -51,8 +51,8 @@ param picture plaintext pre progress q rb rp rt rtc ruby s samp script search se
 select slot small source span strike strong style sub summary sup table tbody td
 template textarea tfoot th thead time title tr track tt u ul var video wbr xmp`)
 
-// Inside a <frameset> the same list applies except <noframes>, which is legal
-// there and so is not ambiguous.
+// Inside a <frameset> a different list applies: <noframes> is legal there, and
+// <script> and <textarea> - both fine in a <select> - are ambiguous.
 func ambiguousIn(container string) []string {
 	if container == "frameset" {
 		return ambiguousInFrameset

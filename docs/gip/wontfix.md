@@ -24,9 +24,10 @@ Use `golang.org/x/net/html` for that. This module is bindings.
 ## W3. A unit is invalid outside its handler
 
 `*Element`, `*Comment`, `*TextChunk`, `*Doctype`, `*EndTag` and `*DocumentEnd`
-are detached when the handler returns, and every method then returns
-`ErrDetached`. lol-html guarantees the pointer for the duration of the call and
-no longer. Copying out what you need is the documented path.
+are detached when the handler returns: a mutator then returns `ErrDetached`, and
+a getter, having nowhere to put an error, answers with a zero value and says
+nothing. lol-html guarantees the pointer for the duration of the call and no
+longer. Copying out what you need is the documented path.
 
 Reopened by: nothing. A wrapper that outlives its handler is a use-after-free.
 

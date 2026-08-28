@@ -39,6 +39,16 @@
 // A rewrite that fails has already sent a prefix, headers included, so there is no 500 to send
 // - see the package documentation on stopping early. The middleware logs it and closes the
 // response.
+//
+// What it does not do is carry on. The obvious recovery - stop rewriting, pass the handler's
+// remaining bytes straight through - produces a worse response than sending nothing more: the
+// rewriter had already consumed part of the failing chunk and was holding an unfinished token,
+// so the raw suffix does not resume where the rewritten prefix stopped. The client gets a
+// rewritten prefix, a hole, and then raw markup spliced on at whatever point the failure fell -
+// which can be mid-tag or mid-attribute. Everything sent before the failure is a whole number
+// of tokens ([lolhtml.Writer.Write] says so), so stopping leaves a short page a parser accepts.
+// A middleware that cannot accept a truncated page has to buffer and forward only on success,
+// which is what the buffering half of this file does.
 package main
 
 import (
@@ -114,16 +124,25 @@ func (rw *rewritingWriter) Write(p []byte) (int, error) {
 	if !rw.wrote {
 		rw.WriteHeader(http.StatusOK)
 	}
-	if rw.rewriter == nil || rw.failed != nil {
+	if rw.rewriter == nil {
+		// Not an HTML response, or the rewriter could not be built. Nothing has been
+		// rewritten, so the handler's bytes go out exactly as it wrote them.
 		return rw.ResponseWriter.Write(p)
+	}
+	if rw.failed != nil {
+		// Dropped, rather than passed through. See the note on failure above: resuming
+		// with raw bytes splices them onto a prefix that stopped somewhere else. The
+		// handler is still told the write was accepted, because failing it here would
+		// only add a handler error to a response that is already short.
+		return len(p), nil
 	}
 	n, err := rw.rewriter.Write(p)
 	if err != nil {
 		// The handler is told how many bytes were accepted, which is what an io.Writer
 		// contract requires, and the failure is remembered so the rest of the response
-		// is not rewritten into a poisoned rewriter.
+		// is neither rewritten into a poisoned rewriter nor spliced in raw.
 		rw.failed = err
-		rw.logf("rewrite failed after %d bytes of the page had gone: %v", n, err)
+		rw.logf("rewrite failed after %d bytes of the page had gone, dropping the rest: %v", n, err)
 	}
 	return len(p), nil
 }
