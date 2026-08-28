@@ -165,8 +165,15 @@ func (s *stripper) options() []lolhtml.Option {
 			if s.quiet || (len(s.strippedParams) == 0 && len(s.removedPixels) == 0) {
 				return nil
 			}
-			// HTML: the comment delimiters have to survive as markup.
-			return d.Append("\n<!-- untrack: "+s.oneLine()+" -->\n", lolhtml.HTML)
+			// HTML: the comment delimiters have to survive as markup, so what
+			// goes between them must not. The stripped parameter names come
+			// from the document's own URLs, so one of them containing "-->"
+			// would end this comment early and leave the rest as live markup.
+			text, err := commentData(" untrack: " + s.oneLine() + " ")
+			if err != nil {
+				return err
+			}
+			return d.Append("\n<!--"+text+"-->\n", lolhtml.HTML)
 		}),
 	)
 
@@ -290,4 +297,25 @@ func stripString(in string, opts ...func(*stripper)) (string, *stripper, error) 
 	var out bytes.Buffer
 	err := s.run(strings.NewReader(in), &out)
 	return out.String(), s, err
+}
+
+// commentData makes text safe to sit between comment delimiters the caller
+// wrote itself.
+//
+// [lolhtml.CheckComment] is the library's guard for exactly this position, and
+// it reports rather than repairs - deliberately, because the repair is a choice
+// about meaning. Nothing inside a comment is a character reference, so there is
+// no escaping available: text a comment cannot hold has to be changed instead.
+// "- -" for "--" is the replacement its own message suggests, and it keeps a
+// report readable, which is the point of a report.
+//
+// The check runs after the replacement rather than instead of it, as an
+// assertion: if a later edit adds a field this does not neutralise, it comes
+// back as an error here instead of quietly reopening the hole.
+func commentData(text string) (string, error) {
+	safe := strings.ReplaceAll(text, "--", "- -")
+	if err := lolhtml.CheckComment(safe); err != nil {
+		return "", err
+	}
+	return safe, nil
 }
