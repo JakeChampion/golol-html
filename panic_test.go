@@ -236,3 +236,103 @@ func TestStreamingHandlerErrorStillReleases(t *testing.T) {
 
 	requireNoHandleLeak(t, before)
 }
+
+// panicOnWrite is a destination whose Write panics. It stands for the class the
+// panickers map above cannot hold: the destination is user code like a handler,
+// but it is not an Option, so it needs its own cases.
+type panicOnWrite struct{}
+
+func (panicOnWrite) Write([]byte) (int, error) { panic(panicValue) }
+
+// TestPanicFromTheDestinationReachesTheCaller: the output sink is the one
+// //export'ed callback that runs user code without being a handler. It called
+// the destination writer with no recover around it, so a panicking destination
+// unwound straight through lol-html's frames - which are built with
+// panic = "abort" and carry no cleanup - instead of being parked like every
+// other panic. It is re-raised from Write, on the caller's goroutine.
+func TestPanicFromTheDestinationReachesTheCaller(t *testing.T) {
+	v := recovered(func() {
+		w, err := lolhtml.NewWriter(panicOnWrite{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer w.Close()
+		w.Write([]byte(panicDoc))
+	})
+
+	s, ok := v.(string)
+	if !ok || s != panicValue {
+		t.Errorf("re-raised %#v, want %q", v, panicValue)
+	}
+}
+
+// TestPanicFromTheDestinationLeaksNoHandles is the same property the handler
+// panics have, for the same reason: frames skipped by an unwind never run the
+// drop callbacks that release streaming handles.
+func TestPanicFromTheDestinationLeaksNoHandles(t *testing.T) {
+	const rounds = 30
+	before := settledHandles()
+
+	for i := 0; i < rounds; i++ {
+		if v := recovered(func() {
+			lolhtml.RewriteString(panicDoc, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+				return e.StreamAppend(func(s *lolhtml.Sink) error {
+					return s.WriteString("x", lolhtml.Text)
+				})
+			}))
+		}); v != nil {
+			t.Fatalf("round %d panicked: %v", i, v)
+		}
+	}
+
+	for i := 0; i < rounds; i++ {
+		if v := recovered(func() {
+			w, err := lolhtml.NewWriter(panicOnWrite{}, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+				return e.StreamAppend(func(s *lolhtml.Sink) error {
+					return s.WriteString("x", lolhtml.Text)
+				})
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w.Close()
+			w.Write([]byte(panicDoc))
+		}); v == nil {
+			t.Fatalf("round %d did not panic", i)
+		}
+	}
+
+	requireNoHandleLeak(t, before)
+}
+
+// TestPanicFromTheDestinationIsIdempotentToClose: the caller's deferred Close
+// runs after the recovered panic, and must neither panic again nor leak.
+func TestPanicFromTheDestinationIsIdempotentToClose(t *testing.T) {
+	before := settledHandles()
+
+	var w *lolhtml.Writer
+	var second any
+	v := recovered(func() {
+		var err error
+		w, err = lolhtml.NewWriter(panicOnWrite{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			second = recovered(func() {
+				w.Close()
+				w.Close()
+			})
+		}()
+		w.Write([]byte(panicDoc))
+	})
+
+	if v == nil {
+		t.Fatal("the panic did not reach the caller")
+	}
+	if second != nil {
+		t.Errorf("Close after a recovered panic panicked again: %#v", second)
+	}
+	requireNoHandleLeak(t, before)
+	runtime.KeepAlive(w)
+}

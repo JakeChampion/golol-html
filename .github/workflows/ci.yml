@@ -10,7 +10,7 @@ permissions:
 
 # One run per ref at a time, and supersede rather than queue - but only for pull
 # requests. A branch that is pushed twice in a minute does not need both runs, and
-# this matrix is sixteen jobs, so the second one is not free: superseded runs sit
+# this workflow is twenty-two jobs, so the second one is not free: superseded runs sit
 # in the queue ahead of the ones that matter and delay them. Pushes to main are
 # exempt, because each of those is a distinct commit that has to be gated on its
 # own and cancelling one would leave a commit nothing tested.
@@ -18,13 +18,17 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Every action below is pinned to a commit SHA, with the release it belongs to
+# in a trailing comment. A tag is mutable: `@v5` is a promise from whoever can
+# move it, and the SHA is the code that actually runs. The comment is what makes
+# a bump readable, so move the two together and never one without the other.
 jobs:
   # Host-independent checks, run once rather than repeated per platform.
   lint:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.25'
           cache: false
@@ -101,9 +105,9 @@ jobs:
             target: windows_amd64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         if: ${{ !matrix.musl }}
         with:
           go-version: '1.25'
@@ -188,14 +192,19 @@ jobs:
   platforms:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.25'
           cache: false
       - run: scripts/check-platforms.sh
       - run: scripts/check-workflows.sh
       - run: scripts/check-modules.sh
+      - run: scripts/check-pins.sh
+      # Symbol drift is checked for all seven archives from here, because
+      # llvm-nm reads every one of them. The struct-layout probe is not: it has
+      # to run the code, so it covers this runner's archive only and says so.
+      - run: scripts/check-abi.sh
 
   # AddressSanitizer is where a cgo binding's real bugs live: use-after-free
   # across the boundary, double frees, overruns. The tests check what the
@@ -216,8 +225,8 @@ jobs:
         os: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.25'
           cache: false
@@ -256,6 +265,17 @@ jobs:
       - name: Tests and seed corpora under AddressSanitizer
         run: go test -asan -count=1 .
 
+      # The step above is a fixed corpus: the tests, and the seeds their f.Add
+      # calls supply. The generated documents are in properties/, a separate
+      # module that ./... does not cross, so nothing had ever run a generated
+      # workload under the sanitizer - the one kind of input most likely to
+      # reach a path the fixed corpus does not. Fewer checks than the properties
+      # job runs: ASan is expensive, and this is looking for corruption, not for
+      # a counter-example that job would already have found.
+      - name: Generated documents under AddressSanitizer
+        working-directory: properties
+        run: go test -asan -count=1 -rapid.checks=200 ./...
+
   # The README promises a minimum Go version, and a promise nothing checks
   # rots. This builds and tests against the oldest supported toolchain, so
   # reaching for a newer language or library feature fails here rather than in
@@ -263,8 +283,8 @@ jobs:
   minimum-go:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           # Must match the `go` directive in go.mod.
           go-version: '1.24'
@@ -276,16 +296,43 @@ jobs:
   # Property tests: generated documents rather than a fixed corpus, with
   # shrinking so a counter-example arrives small enough to read. Its own module,
   # like differential/, so rapid never reaches a consumer's module graph.
+  #
+  # One row per archive a runner can link directly. Every platform links a
+  # different prebuilt liblolhtml.a and this module used to run against exactly
+  # one of the seven, so a defect reachable only from a generated document on a
+  # non-amd64 archive had no job that could see it. Two rows of the platform
+  # matrix are deliberately not here: darwin/amd64 under Rosetta, because
+  # emulating this workload for an archive whose arm64 sibling is covered buys
+  # little for the minutes, and the two musl rows, because they run inside a
+  # docker container that would have to fetch and build this module's
+  # dependencies to test a difference that is libc linkage. The root suite still
+  # covers all seven.
   properties:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux_amd64
+          - os: ubuntu-24.04-arm
+            target: linux_arm64
+          - os: macos-14
+            target: darwin_arm64
+          - os: windows-latest
+            target: windows_amd64
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.25'
           cache-dependency-path: properties/go.sum
-      - name: Property tests
+      - name: Property tests (${{ matrix.target }})
         working-directory: properties
+        # bash everywhere: the default shell on the Windows runner is pwsh,
+        # which reports only the exit status of a run block's last line, so the
+        # first invocation below could fail without failing the step.
+        shell: bash
         # More than the default 100 checks: these are cheap, and the
         # interesting counter-examples so far turned up in the hundreds.
         #
@@ -299,16 +346,34 @@ jobs:
   # The differential tests live in their own module so the root stays
   # dependency-free, which also means `go test ./...` at the root never sees
   # them. They have to be run explicitly.
+  #
+  # Matrixed over the same four archives as properties, and left off the same
+  # three rows, for the same reason: the comparison against x/net/html is only
+  # as good as the archive it compares, and it used to see one of the seven.
   differential:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux_amd64
+          - os: ubuntu-24.04-arm
+            target: linux_arm64
+          - os: macos-14
+            target: darwin_arm64
+          - os: windows-latest
+            target: windows_amd64
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.25'
           cache-dependency-path: differential/go.sum
-      - name: Compare against golang.org/x/net/html
+      - name: Compare against golang.org/x/net/html (${{ matrix.target }})
         working-directory: differential
+        # bash everywhere, as in properties above.
+        shell: bash
         run: |
           go test -count=1 ./...
           go test -race -count=1 ./...
@@ -316,8 +381,8 @@ jobs:
   fuzz:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.25'
           cache: false
@@ -326,14 +391,23 @@ jobs:
         # one package, and ./... also matches examples/rewrite-url.
         run: go test -run '^$' -fuzz FuzzRewrite -fuzztime 90s .
 
+      # Two invocations rather than one, for the same reason: -fuzz takes one
+      # target. FuzzOperations is the one that drives the cgo boundary and its
+      # only coverage-guided time was the nightly schedule - which no pull
+      # request waits for, and which GitHub disables after sixty days of
+      # repository inactivity. Ninety seconds is a smoke test, as above, but it
+      # is engine time on every pull request rather than none.
+      - name: Fuzz the operation sequence briefly
+        run: go test -run '^$' -fuzz FuzzOperations -fuzztime 90s .
+
   # A consumer must be able to depend on this module and build without Rust.
   consume:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           path: golol-html
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.25'
           cache: false

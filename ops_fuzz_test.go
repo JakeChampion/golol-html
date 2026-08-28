@@ -17,6 +17,7 @@ package lolhtml_test
 
 import (
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -90,7 +91,7 @@ func (r *run) element(e *lolhtml.Element) error {
 		if r.p.done() {
 			return nil
 		}
-		switch r.p.next() % 21 {
+		switch r.p.next() % 25 {
 		case 0:
 			_ = e.SetAttribute(r.p.str(), r.p.str())
 		case 1:
@@ -163,6 +164,46 @@ func (r *run) element(e *lolhtml.Element) error {
 			// iteration is what catches that, but only if something reaches
 			// this path - nothing did.
 			_ = e.StreamAppend(func(*lolhtml.Sink) error { panic(panicProgram) })
+		case 21:
+			// Every streaming insertion is its own registration in the shim, so
+			// a lifetime bug in one is invisible from the others - which is why
+			// all six of Element's are here rather than the two that were.
+			//
+			// This one goes through AsWriter, the io.Writer form of the sink,
+			// where the chunk boundaries are whatever the copy chose rather
+			// than what the caller wrote. That is the shape io.Copy from a file
+			// or a response body produces, and the only one that reaches
+			// WriteChunk without the program saying so.
+			chunk := r.p.str()
+			ct := r.p.contentType()
+			_ = e.StreamAfter(func(s *lolhtml.Sink) error {
+				_, err := io.Copy(s.AsWriter(ct), strings.NewReader(chunk))
+				return err
+			})
+		case 22:
+			// Err is what a StreamFunc asks before doing more work, and here it
+			// is asked in whatever state the program has left the rewrite in -
+			// including one that is already failing under it.
+			text := r.p.str()
+			ct := r.p.contentType()
+			_ = e.StreamPrepend(func(s *lolhtml.Sink) error {
+				if err := s.Err(); err != nil {
+					return err
+				}
+				return s.WriteString(text, ct)
+			})
+		case 23:
+			text := r.p.str()
+			ct := r.p.contentType()
+			_ = e.StreamSetInnerContent(func(s *lolhtml.Sink) error {
+				return s.WriteString(text, ct)
+			})
+		case 24:
+			text := r.p.str()
+			ct := r.p.contentType()
+			_ = e.StreamReplace(func(s *lolhtml.Sink) error {
+				return s.WriteString(text, ct)
+			})
 		}
 	}
 	return nil
@@ -173,7 +214,7 @@ func (r *run) endTag(t *lolhtml.EndTag) error {
 		if r.p.done() {
 			return nil
 		}
-		switch r.p.next() % 8 {
+		switch r.p.next() % 10 {
 		case 0:
 			_ = t.Before(r.p.str(), r.p.contentType())
 		case 1:
@@ -198,6 +239,21 @@ func (r *run) endTag(t *lolhtml.EndTag) error {
 		case 7:
 			r.failed = true
 			return errProgram
+		case 8:
+			text := r.p.str()
+			ct := r.p.contentType()
+			_ = t.StreamBefore(func(s *lolhtml.Sink) error { return s.WriteString(text, ct) })
+		case 9:
+			// The end tag's other two, and the sink through its io.Writer again
+			// - an end-tag handler is registered from inside an element handler,
+			// so it runs at a different point in the rewriter's lifetime than
+			// anything above.
+			chunk := r.p.str()
+			ct := r.p.contentType()
+			_ = t.StreamReplace(func(s *lolhtml.Sink) error {
+				_, err := io.Copy(s.AsWriter(ct), strings.NewReader(chunk))
+				return err
+			})
 		}
 	}
 	return nil
@@ -244,7 +300,7 @@ func (r *run) text(c *lolhtml.TextChunk) error {
 		if r.p.done() {
 			return nil
 		}
-		switch r.p.next() % 8 {
+		switch r.p.next() % 10 {
 		case 0:
 			_ = c.Before(r.p.str(), r.p.contentType())
 		case 1:
@@ -271,6 +327,18 @@ func (r *run) text(c *lolhtml.TextChunk) error {
 		case 7:
 			r.failed = true
 			return errProgram
+		case 8:
+			text := r.p.str()
+			ct := r.p.contentType()
+			_ = c.StreamBefore(func(s *lolhtml.Sink) error { return s.WriteString(text, ct) })
+		case 9:
+			// WriteChunk rather than WriteString, so the sink is handed bytes
+			// that may begin or end mid-character: the fuzzer's strings are
+			// arbitrary, and an unfinished sequence at the end of a StreamFunc
+			// is ErrIncompleteRune rather than a shorter insertion.
+			chunk := r.p.str()
+			ct := r.p.contentType()
+			_ = c.StreamAfter(func(s *lolhtml.Sink) error { return s.WriteChunk([]byte(chunk), ct) })
 		}
 	}
 	return nil
@@ -361,6 +429,15 @@ func FuzzOperations(f *testing.F) {
 		{13, 4, 'a', 'b', 'c', 'd', 0},
 		{16, 16, 16},
 		{9, 10, 8, 2, 'p', 'q'},
+		{21, 4, 'a', 'b', 'c', 'd', 1},
+		{22, 3, 'x', 'y', 'z', 0},
+		{24, 2, 'k', 'l', 1},
+		// One cursor runs every handler, so whatever an element handler does
+		// not consume falls to whichever handler runs next. Six operations that
+		// take no operands - a registration and five deliberate escapes - use up
+		// this element's turn and leave the streaming opcode after them for the
+		// text or end-tag handler that follows.
+		{11, 17, 17, 17, 17, 17, 8, 2, 'e', 'f', 0},
 	}
 	for _, d := range docs {
 		for _, p := range programs {
@@ -457,5 +534,63 @@ func TestOperationsSeedsRun(t *testing.T) {
 	}
 	if r.p.i == 0 {
 		t.Fatal("the program was not consumed")
+	}
+}
+
+// TestEveryStreamingOpcodeStreams drives each streaming opcode on its own and
+// checks that what it asked for reached the output.
+//
+// The opcode tables are the only thing deciding which entry points the fuzzer
+// can reach, and nothing else fails when one is missing: a modulus left behind
+// after a case was added makes an entry point unreachable, and a fuzz target
+// that silently covers less than it claims still passes. Eight of the twelve
+// streaming entry points were absent from these tables for exactly as long as
+// nothing asked. The content type byte is 0 - Text - so the marker arrives
+// unescaped and comparable.
+func TestEveryStreamingOpcodeStreams(t *testing.T) {
+	const marker = "hi"
+
+	// opcode, then a two-byte string operand and the content type: exactly the
+	// operands each of these cases reads, so the program ends with the call.
+	program := func(op byte) []byte { return []byte{op, 2, marker[0], marker[1], 0} }
+
+	onElement := func(r *run) lolhtml.Option { return lolhtml.OnElement("div", r.element) }
+	onEndTag := func(r *run) lolhtml.Option {
+		return lolhtml.OnElement("div", func(e *lolhtml.Element) error { return e.OnEndTag(r.endTag) })
+	}
+	onText := func(r *run) lolhtml.Option { return lolhtml.OnText("div", r.text) }
+
+	tests := []struct {
+		name     string
+		op       byte
+		register func(*run) lolhtml.Option
+	}{
+		{"Element.StreamAppend", 13, onElement},
+		{"Element.StreamBefore", 14, onElement},
+		{"Element.StreamAfter", 21, onElement},
+		{"Element.StreamPrepend", 22, onElement},
+		{"Element.StreamSetInnerContent", 23, onElement},
+		{"Element.StreamReplace", 24, onElement},
+		{"EndTag.StreamAfter", 4, onEndTag},
+		{"EndTag.StreamBefore", 8, onEndTag},
+		{"EndTag.StreamReplace", 9, onEndTag},
+		{"TextChunk.StreamReplace", 4, onText},
+		{"TextChunk.StreamBefore", 8, onText},
+		{"TextChunk.StreamAfter", 9, onText},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &run{p: &prog{b: program(tc.op)}}
+			out, err := lolhtml.RewriteString(`<div>t</div>`, tc.register(r))
+			if err != nil {
+				t.Fatalf("rewrite: %v", err)
+			}
+			if !strings.Contains(out, marker) {
+				t.Errorf("opcode %d streamed nothing: %q", tc.op, out)
+			}
+			if r.p.i == 0 {
+				t.Errorf("opcode %d was never dispatched", tc.op)
+			}
+		})
 	}
 }

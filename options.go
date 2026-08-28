@@ -7,11 +7,25 @@ import "C"
 
 import (
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 )
 
 var errNilDst = errors.New("lolhtml: destination writer is nil")
+
+// errNilHandler reports a registration given no function to run.
+//
+// The same reasoning as [ErrNilOption], one level down: OnElement("p", nil) is a
+// non-nil Option carrying nothing, so refusing the nil Option and accepting this
+// left exactly the quiet skip that refusal exists to prevent - the rewrite ran,
+// matched, did nothing, and reported success. Element.OnEndTag(nil) was worse
+// again, registering a nil function that became a nil-pointer dereference when
+// the end tag arrived, blamed on the library rather than on the call.
+//
+// Unexported, like errNilStreamFunc, which has always refused the same mistake:
+// it is a bug in the calling code rather than a condition to branch on.
+var errNilHandler = errors.New("lolhtml: handler function is nil")
 
 // ErrNilOption is returned by [NewWriter] when the options it was given include a
 // nil one.
@@ -204,19 +218,33 @@ type config struct {
 // invocation order the same as the registration order, which merging by
 // selector would quietly change.
 type selectorReg struct {
+	// kind is the option that made this registration, so that a nil handler can
+	// be reported against the call the caller wrote.
+	kind     string
 	selector string
 	element  func(*Element) error
 	comment  func(*Comment) error
 	text     func(*TextChunk) error
 }
 
+// empty reports a registration whose handler is nil. Each option sets exactly
+// one field, so all of them being nil means the one it set was nil.
+func (r selectorReg) empty() bool {
+	return r.element == nil && r.comment == nil && r.text == nil
+}
+
 // docReg is one call to add_document_content_handlers, with exactly one handler
 // field set.
 type docReg struct {
+	kind    string
 	doctype func(*Doctype) error
 	comment func(*Comment) error
 	text    func(*TextChunk) error
 	docEnd  func(*DocumentEnd) error
+}
+
+func (r docReg) empty() bool {
+	return r.doctype == nil && r.comment == nil && r.text == nil && r.docEnd == nil
 }
 
 func defaultConfig() config {
@@ -246,6 +274,19 @@ func (c *config) validate() error {
 	}
 	if c.mem.MaxMemory > 0 && c.mem.PreallocatedParsingBuffer > c.mem.MaxMemory {
 		return errors.New("lolhtml: PreallocatedParsingBuffer exceeds MaxMemory")
+	}
+	// Checked here rather than at registration, because an Option cannot report
+	// anything: it is a value the caller has already built by the time NewWriter
+	// sees it. See errNilHandler.
+	for _, reg := range c.selectorRegs {
+		if reg.empty() {
+			return fmt.Errorf("%w: %s(%q)", errNilHandler, reg.kind, reg.selector)
+		}
+	}
+	for _, reg := range c.docRegs {
+		if reg.empty() {
+			return fmt.Errorf("%w: %s", errNilHandler, reg.kind)
+		}
 	}
 	return nil
 }
@@ -532,7 +573,7 @@ func (e *EncodingError) Error() string {
 // OnElement registers fn to run for every start tag matching selector.
 func OnElement(selector string, fn func(*Element) error) Option {
 	return optionFunc(func(c *config) {
-		c.selectorRegs = append(c.selectorRegs, selectorReg{selector: selector, element: fn})
+		c.selectorRegs = append(c.selectorRegs, selectorReg{kind: "OnElement", selector: selector, element: fn})
 	})
 }
 
@@ -543,7 +584,7 @@ func OnElement(selector string, fn func(*Element) error) Option {
 // package documentation on handler order.
 func OnComment(selector string, fn func(*Comment) error) Option {
 	return optionFunc(func(c *config) {
-		c.selectorRegs = append(c.selectorRegs, selectorReg{selector: selector, comment: fn})
+		c.selectorRegs = append(c.selectorRegs, selectorReg{kind: "OnComment", selector: selector, comment: fn})
 	})
 }
 
@@ -620,7 +661,7 @@ func OnComment(selector string, fn func(*Comment) error) Option {
 // package documentation on reading an element's whole text.
 func OnText(selector string, fn func(*TextChunk) error) Option {
 	return optionFunc(func(c *config) {
-		c.selectorRegs = append(c.selectorRegs, selectorReg{selector: selector, text: fn})
+		c.selectorRegs = append(c.selectorRegs, selectorReg{kind: "OnText", selector: selector, text: fn})
 	})
 }
 
@@ -654,7 +695,7 @@ func OnText(selector string, fn func(*TextChunk) error) Option {
 // where a parser discards it. Pinned in differential/doctype_test.go.
 func OnDoctype(fn func(*Doctype) error) Option {
 	return optionFunc(func(c *config) {
-		c.docRegs = append(c.docRegs, docReg{doctype: fn})
+		c.docRegs = append(c.docRegs, docReg{kind: "OnDoctype", doctype: fn})
 	})
 }
 
@@ -672,7 +713,7 @@ func OnDoctype(fn func(*Doctype) error) Option {
 // if this option came first; see the package documentation on handler order.
 func OnDocumentComment(fn func(*Comment) error) Option {
 	return optionFunc(func(c *config) {
-		c.docRegs = append(c.docRegs, docReg{comment: fn})
+		c.docRegs = append(c.docRegs, docReg{kind: "OnDocumentComment", comment: fn})
 	})
 }
 
@@ -684,7 +725,7 @@ func OnDocumentComment(fn func(*Comment) error) Option {
 // this option came first; see the package documentation on handler order.
 func OnDocumentText(fn func(*TextChunk) error) Option {
 	return optionFunc(func(c *config) {
-		c.docRegs = append(c.docRegs, docReg{text: fn})
+		c.docRegs = append(c.docRegs, docReg{kind: "OnDocumentText", text: fn})
 	})
 }
 
@@ -696,7 +737,7 @@ func OnDocumentText(fn func(*TextChunk) error) Option {
 // ones after it.
 func OnDocumentEnd(fn func(*DocumentEnd) error) Option {
 	return optionFunc(func(c *config) {
-		c.docRegs = append(c.docRegs, docReg{docEnd: fn})
+		c.docRegs = append(c.docRegs, docReg{kind: "OnDocumentEnd", docEnd: fn})
 	})
 }
 

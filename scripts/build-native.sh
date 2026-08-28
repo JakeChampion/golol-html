@@ -11,6 +11,7 @@
 #   scripts/build-native.sh linux_amd64      # one named target
 #   scripts/build-native.sh --all            # every supported target
 #   scripts/build-native.sh --verify         # rebuild host target, diff, restore
+#   scripts/build-native.sh --print-pins     # print the pinned ref and toolchain
 #
 # Builds are `cargo rustc --crate-type staticlib`, not `cargo build`. The c-api
 # crate declares staticlib, cdylib and rlib; restricting it to the one we need
@@ -31,6 +32,13 @@
 set -euo pipefail
 
 # Pinned upstream: lol-html v3.0.1 (c-api crate 1.4.0).
+#
+# These two defaults are the single source of truth for the pin. native.yml
+# reads them with --print-pins rather than keeping its own copy, because two
+# copies drift: bump one and not the other and the workflow rebuilds the old ref
+# while `make native` builds the new one, and `make verify` then fails with a
+# hash mismatch that looks exactly like tampering. scripts/check-pins.sh keeps
+# the remaining prose copy in SPEC.md honest.
 LOL_HTML_REPO="${LOL_HTML_REPO:-https://github.com/cloudflare/lol-html.git}"
 LOL_HTML_REF="${LOL_HTML_REF:-608cc4a66b7ab4fcbe1bbdeb25df8f265572b11c}"
 
@@ -191,11 +199,18 @@ sha256() {
     if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi
 }
 
+# The header is checksummed alongside the archives. It is as much of the ABI
+# contract as they are - a changed prototype, struct layout or enum value is as
+# capable of producing memory-unsafe behaviour as a changed archive - and the
+# same run of this script replaces both. Sums are relative to internal/lib, so
+# it appears as ../include/lol_html.h; `sha256sum --check` run from there, which
+# is what ci.yml does, resolves it.
 write_sums() {
     local tool=(shasum -a 256)
     command -v sha256sum >/dev/null && tool=(sha256sum)
     ( cd "${repo_root}/internal/lib" \
-      && find . -name 'liblolhtml.a' | sort | xargs "${tool[@]}" > SHA256SUMS )
+      && { find . -name 'liblolhtml.a' | sort; echo ../include/lol_html.h; } \
+         | xargs "${tool[@]}" > SHA256SUMS )
     echo "==> internal/lib/SHA256SUMS updated"
 }
 
@@ -205,20 +220,65 @@ case "${1:-}" in
         for t in "${ALL_TARGETS[@]}"; do build_target "$t"; done
         write_sums
         ;;
+    --print-pins)
+        # Machine-readable, in the key=value form GITHUB_OUTPUT wants, so
+        # native.yml can resolve the pin and the toolchain from here instead of
+        # keeping its own copy. Both honour the environment, so passing the
+        # workflow's dispatch inputs through resolves "input if given, pin
+        # otherwise" in one place rather than two.
+        echo "lol_html_ref=${LOL_HTML_REF}"
+        echo "rust_toolchain=${RUST_TOOLCHAIN}"
+        ;;
     --verify)
         target="$(host_target)"
-        before="$(sha256 "${repo_root}/internal/lib/${target}/liblolhtml.a" | cut -d' ' -f1)"
+        archive="${repo_root}/internal/lib/${target}/liblolhtml.a"
+        header="${repo_root}/internal/include/lol_html.h"
+        license="${repo_root}/LICENSE-lol-html"
+
+        # --verify is documented as read-only: rebuild, diff, restore. It has to
+        # overwrite the committed files to do the diff at all - build_target and
+        # sync_header both write in place - so putting them back is a trap
+        # rather than a line at the end, and covers the mismatch exit and any
+        # failure in between. Without it a failed verify left the locally
+        # rebuilt archive in the tree, no longer matching internal/lib/SHA256SUMS,
+        # and the next commit shipped an archive CI's checksum step rejects.
+        restore_dir="$(mktemp -d)"
+        cp "${archive}" "${restore_dir}/liblolhtml.a"
+        cp "${header}" "${restore_dir}/lol_html.h"
+        cp "${license}" "${restore_dir}/LICENSE-lol-html"
+        restore_committed() {
+            cp "${restore_dir}/liblolhtml.a" "${archive}"
+            cp "${restore_dir}/lol_html.h" "${header}"
+            cp "${restore_dir}/LICENSE-lol-html" "${license}"
+            rm -rf "${restore_dir}"
+            echo "==> restored the committed archive, header and licence"
+        }
+        trap restore_committed EXIT
+
+        before="$(sha256 "${archive}" | cut -d' ' -f1)"
         fetch_source; sync_header; build_target "${target}"
-        after="$(sha256 "${repo_root}/internal/lib/${target}/liblolhtml.a" | cut -d' ' -f1)"
+        after="$(sha256 "${archive}" | cut -d' ' -f1)"
         if [[ "${before}" == "${after}" ]]; then
             echo "==> ${target} reproduced exactly: ${after}"
         else
             echo "==> ${target} DIFFERS" >&2
             echo "    committed: ${before}" >&2
             echo "    rebuilt:   ${after}" >&2
-            echo "    Rust builds are not bit-reproducible across toolchain patch" >&2
-            echo "    versions; compare with RUST_TOOLCHAIN=${RUST_TOOLCHAIN} before" >&2
-            echo "    concluding the archive was tampered with." >&2
+            echo "    Almost certainly where you built it, not what you built." >&2
+            echo "    rustc embeds absolute paths - the source tree and CARGO_HOME" >&2
+            echo "    both - in panic metadata that survives stripping, so the same" >&2
+            echo "    revision built with the same compiler in a different directory" >&2
+            echo "    hashes differently. The committed archives were built by CI, so" >&2
+            echo "    reproducing them means reproducing its paths exactly:" >&2
+            echo >&2
+            echo "      /home/runner/work/golol-html/golol-html/.native-build/lol-html" >&2
+            echo "      CARGO_HOME=/home/runner/.cargo" >&2
+            echo >&2
+            echo "    docs/provenance.md has the whole procedure. Check that, and that" >&2
+            echo "    rustc is ${RUST_TOOLCHAIN}, before concluding anything was" >&2
+            echo "    tampered with. (The lasting fix is --remap-path-prefix in" >&2
+            echo "    RUSTFLAGS, which cannot be added without rebuilding all seven" >&2
+            echo "    archives and so belongs to the next rebuild, not to a verify.)" >&2
             exit 1
         fi
         ;;

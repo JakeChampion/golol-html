@@ -145,23 +145,112 @@ var invarianceEncodings = []string{"utf-8", "windows-1252", "shift_jis", "koi8-r
 
 // maxFuzzInput bounds the harness so the fuzzer keeps making progress; see the
 // note in the Fuzz body.
-const maxFuzzInput = 4 << 10
+//
+// It was 4 KB, which put lol-html's own buffering out of reach of the one oracle
+// that says the buffering does not depend on the writes: the deterministic tests
+// feed 8 KB and 16 KB documents precisely because that is where the internal
+// buffer grows and where a rescan would show up (bytecost_test.go), and this
+// target never saw a document that size.
+//
+// 16 KB is where raising it stops paying. The cost of an iteration is set by the
+// document, not by the number of writes - measured here on a document dense with
+// matches, one iteration is 0.3 ms at 1 KB, 1 ms at 4 KB, 3.8 ms at 16 KB and
+// 7.8 ms at 32 KB, while the writes in it stay bounded throughout. 16 KB clears
+// the 8 KB boundary with room on both sides for about four times the price of
+// the old ceiling; 32 KB doubles that price for nothing the boundaries below it
+// do not already cover, and this target is one where cheap iterations find more
+// than thorough ones that barely run.
+const maxFuzzInput = 16 << 10
+
+// maxFuzzWrites bounds how many times one iteration crosses into C. A write
+// costs a crossing whatever its size, so this is what keeps a large input from
+// also being a slow one: 256 is about what a 256-byte input already spends
+// writing itself byte at a time.
+const maxFuzzWrites = 256
+
+// fuzzChunkSizes are the write sizes the split is drawn from once an input is
+// too large to write byte at a time.
+//
+// They sit on the boundaries a buffering bug hides at - the powers of two the
+// buffer grows through, and one either side of each, so that a document is cut
+// just before, exactly at, and just after the place the library changes its
+// mind. A single ratio like n/64 lands on the same relative offset for every
+// input and so never lands on any of them.
+var fuzzChunkSizes = []int{
+	1, 2, 3, 7, 63, 64, 65, 255, 256, 257,
+	1023, 1024, 1025, 4095, 4096, 4097, 8191, 8192,
+}
 
 // fuzzChunk keeps the split fine-grained where it is cheap - one byte at a time
 // is the strictest test of chunk-invariance - while bounding the number of
-// writes for larger inputs.
+// writes for larger inputs. Which size a larger input gets is drawn from the
+// input itself, so the search covers the boundaries rather than one ratio.
 //
 // The byte-at-a-time threshold is low on purpose. Every write costs a crossing
 // into C whatever its size, so a 1 KB input meant roughly a thousand crossings
 // where a chunked one means a handful, and every iteration does that on top of a
-// whole-document rewrite. On a CI runner that dropped throughput to about// 1600 execs/sec and the engine then failed to shut down inside its grace
+// whole-document rewrite. On a CI runner that dropped throughput to about
+// 1600 execs/sec and the engine then failed to shut down inside its grace
 // period at the end of a timed run, reporting "context deadline exceeded".
 // Cheap iterations find more than thorough ones that barely run.
-func fuzzChunk(n int) int {
+//
+// The floor is what keeps that true as the ceiling rises: a 16 KB input split
+// into 7-byte writes would be 2340 crossings, so any size below the floor is
+// raised to it, and the fine splits stay where they are affordable - on the
+// smaller inputs, which is also where a rune split across a write is the thing
+// worth searching for. At the ceiling the floor is 64, so every size in the
+// table from 64 up is still reached there, including all four that straddle
+// 4 KB and 8 KB.
+func fuzzChunk(n int, sel byte) int {
 	if n <= 256 {
 		return 1
 	}
-	return max(1, n/64)
+	size := fuzzChunkSizes[int(sel)%len(fuzzChunkSizes)]
+	return max(size, (n+maxFuzzWrites-1)/maxFuzzWrites)
+}
+
+// expectedFailure reports whether err is a refusal the library documents, as
+// opposed to a rewrite that should have worked and did not.
+//
+// The distinction is the whole point of asking. This harness feeds malformed
+// markup on purpose, and malformed markup is not a reason to fail: lol-html
+// parses it the way a browser would. So an error here is either one of these
+// refusals, each of which has a sentinel precisely so a caller can act on it, or
+// it is a document that used to rewrite and now does not - which is the
+// regression no other oracle in this target can see, because comparing the two
+// runs to each other says nothing when both of them fail.
+//
+// Only ErrAmbiguousTag is expected to arrive in practice: the settings vary the
+// encoding and strict mode and nothing else, and the handlers insert a fixed
+// comment, an uppercased copy of text the document already held, and an href the
+// document already held. The rest are listed because they are refusals with a
+// sentinel to match rather than because anything here provokes them. Nothing
+// broader is: an error without a sentinel is an unexplained failure, and this
+// oracle exists to notice exactly that.
+func expectedFailure(err error) bool {
+	for _, refusal := range []error{
+		lolhtml.ErrAmbiguousTag,
+		lolhtml.ErrMemoryLimitExceeded,
+		lolhtml.ErrRawTextBreakout,
+		lolhtml.ErrCommentBreakout,
+		lolhtml.ErrInvalidUTF8,
+		lolhtml.ErrIncompleteRune,
+	} {
+		if errors.Is(err, refusal) {
+			return true
+		}
+	}
+	return false
+}
+
+// firstErr is the failure a run reported, which is the one from Write if there
+// was one: a Close after a failed Write answers ErrPoisoned wrapping it, so the
+// later error says less than the earlier one.
+func firstErr(writeErr, closeErr error) error {
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }
 
 func rewrite(f *testing.F, handlers func(*int, *bytes.Buffer) []lolhtml.Option) {
@@ -174,6 +263,15 @@ func rewrite(f *testing.F, handlers func(*int, *bytes.Buffer) []lolhtml.Option) 
 		if len(in) > maxFuzzInput {
 			t.Skip("input larger than the harness budget")
 		}
+
+		// The write size for the split run is drawn from the input, so that the
+		// same document is cut in different places across iterations. Anything
+		// up to 256 bytes is still written byte at a time whatever this says.
+		var chunkSel byte
+		if len(in) > 0 {
+			chunkSel = in[0]
+		}
+		chunk := fuzzChunk(len(in), chunkSel)
 
 		handlesBefore := lolhtml.LiveHandles()
 
@@ -207,8 +305,8 @@ func rewrite(f *testing.F, handlers func(*int, *bytes.Buffer) []lolhtml.Option) 
 			t.Fatalf("NewWriter: %v", err)
 		}
 		var pieceWriteErr error
-		for i := 0; i < len(in); i += fuzzChunk(len(in)) {
-			end := min(i+fuzzChunk(len(in)), len(in))
+		for i := 0; i < len(in); i += chunk {
+			end := min(i+chunk, len(in))
 			if _, pieceWriteErr = w2.Write([]byte(in[i:end])); pieceWriteErr != nil {
 				break
 			}
@@ -217,20 +315,46 @@ func rewrite(f *testing.F, handlers func(*int, *bytes.Buffer) []lolhtml.Option) 
 
 		// Either both fail or both succeed; a split that changes success is a
 		// bug regardless of what the document was.
-		wholeFailed := wholeWriteErr != nil || wholeCloseErr != nil
-		pieceFailed := pieceWriteErr != nil || pieceCloseErr != nil
-		if wholeFailed != pieceFailed {
+		wholeErr := firstErr(wholeWriteErr, wholeCloseErr)
+		pieceErr := firstErr(pieceWriteErr, pieceCloseErr)
+		if (wholeErr != nil) != (pieceErr != nil) {
 			t.Fatalf("chunking changed the outcome for %q:\n whole: write=%v close=%v\n bytewise: write=%v close=%v",
 				in, wholeWriteErr, wholeCloseErr, pieceWriteErr, pieceCloseErr)
 		}
-		if wholeFailed {
-			return
+		// Failing the same way, not merely failing: the same document reaching
+		// the same refusal by two routes is the claim, and two different
+		// refusals would satisfy the check above while meaning the split
+		// changed what the parser saw.
+		if wholeErr != nil && pieceErr != nil && wholeErr.Error() != pieceErr.Error() {
+			t.Fatalf("chunking changed the error for %q:\n whole:    %v\n bytewise: %v",
+				in, wholeErr, pieceErr)
+		}
+		// And a failure at all has to be one the library explains. A document
+		// that used to rewrite and now does not is a regression this target
+		// would otherwise report as a pass, because comparing two runs that both
+		// fail says nothing about whether either should have.
+		for _, err := range []error{wholeErr, pieceErr} {
+			if err != nil && !expectedFailure(err) {
+				t.Fatalf("rewriting %q failed with an error nothing here should provoke: %v\n"+
+					"either the input is legitimately refused - in which case add the sentinel "+
+					"to expectedFailure - or a rewrite that should have worked did not", in, err)
+			}
 		}
 
-		if !bytes.Equal(whole.Bytes(), pieces.Bytes()) {
+		// The output is compared only when there is a whole document to compare.
+		// What a failed rewrite has already handed to the destination is a
+		// prefix cut off at the token that failed, and this harness makes no
+		// claim about where the two runs stop flushing.
+		if wholeErr == nil && !bytes.Equal(whole.Bytes(), pieces.Bytes()) {
 			t.Fatalf("chunking changed the output for %q:\n whole:    %q\n bytewise: %q",
 				in, whole.String(), pieces.String())
 		}
+		// Everything below runs whether or not the rewrite failed, which is the
+		// half that used to be skipped. Teardown after an error is the path a
+		// binding leaks on - it is the one the ordinary Close does not take -
+		// so the failing iterations are the ones worth asserting on, not the
+		// ones to return early from.
+		//
 		// A leaked handle is invisible in the output, so it has to be
 		// asserted separately - and every iteration is the cheapest place.
 		// No GC here: this runs on every iteration, and releases only ever

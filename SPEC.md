@@ -58,7 +58,7 @@ under `lib/` - build constraints prune un-imported modules from a `go build`, th
 `go mod download`. Git LFS is NOT an option: the module proxy would serve LFS pointer files.
 
 Trust mitigation: archives are built in CI from the pinned upstream commit, `SHA256SUMS` is
-committed alongside, and `make verify-native` reproduces and diffs them locally.
+committed alongside, and `make verify` reproduces and diffs them locally.
 
 ### D2. Platforms
 
@@ -242,19 +242,23 @@ explicit toolchain; this machine's `stable` is 1.87, so `cargo +1.95.0` was used
 
 ```
 go.mod
-SPEC.md  README.md  LICENSE  LICENSE-lol-html
+SPEC.md  README.md  CHANGELOG.md  LICENSE  LICENSE-lol-html
 lolhtml.go          package docs, Rewrite convenience
-rewriter.go         Writer (io.WriteCloser), Option, settings
-handler.go          OnElement / OnComment / OnText / OnDoctype / OnDocumentEnd
+rewriter.go         Writer (io.WriteCloser), the native lifetime
+options.go          Option, settings, OnElement / OnComment / OnText / ...
 callbacks.go        //export'ed Go callbacks (no C definitions in preamble)
-element.go endtag.go comment.go text.go doctype.go docend.go attribute.go
-selector.go streaming.go errors.go
+cgo.go cfuncs.go    the shared C include path, and the shim adapter table
+element.go endtag.go comment.go text.go doctype.go docend.go
+unit.go handles.go strings.go streaming.go errors.go escape.go rawtext.go
 shim.h shim.c       C trampolines + single-call error retrieval
-link_darwin_arm64.go link_linux_amd64.go link_linux_arm64.go
+link_<goos>_<goarch>.go   linker flags, one per shipped platform (seven)
+musl.go nocgo.go unsupported.go   the build-constraint guards
 internal/include/lol_html.h
 internal/lib/<goos>_<goarch>/liblolhtml.a
-scripts/build-native.sh
-.github/workflows/{ci.yml,native.yml}
+scripts/{build-native,changelog,check-*}.sh
+.github/workflows/{ci.yml,fuzz.yml,native.yml}
+changelog.d/        changelog fragments, folded at release time
+docs/gip/           the GIP process, known behaviours, settled rulings
 ```
 
 ## Verification
@@ -269,7 +273,8 @@ Implemented:
   error *messages* arrive (an empty message would mean C1 regressed).
 - `fuzz_test.go` - `FuzzRewrite` asserts chunk-invariance of the output, plus a cleanup test
   that drops 200 unclosed Writers and forces GC.
-- `bench_test.go` - six benchmarks over a generated 16 KB page.
+- `bench_test.go` - ten benchmarks: seven over a generated 16 KB page, and three comparing
+  the ways of writing one rule over a page built for that question.
 - `go test -race` clean.
 
 - `parity_test.go` - the corners of the upstream C suite that the behaviour tests missed: every
@@ -351,8 +356,11 @@ format fails for reasons that have nothing to do with the code under test.
 Three assumptions written into the first draft of this spec turned out to be wrong, and the tests
 now encode the real behaviour:
 
-- **Attribute escaping.** lol-html escapes `&` and `"` in attribute values but not `>`, which is
-  correct: a bare `>` cannot terminate a quoted value.
+- **Attribute escaping.** lol-html escapes the double quote in attribute values and nothing
+  else: `&`, `<`, `>` and `'` all pass through, because only the quote the value is emitted in
+  can terminate it. The draft assumed `&` was escaped too, which would have meant `&amp;`
+  round-tripping as literal text when it reads back as a single `&`. Pinned by
+  `TestWhatSetAttributeEscapes`.
 - **Character references are never decoded.** Found by the differential test, which is exactly
   what it was for. `TextChunk.Text`, `Comment.Text` and attribute values all return raw source:
   the href of `<a href="?a=1&amp;b=2">` is `?a=1&amp;b=2`. The binding's documentation claimed
@@ -407,7 +415,9 @@ which usually yields a truncated document"); the README's table contradicted it
 and the README is what people read first. Both are now the table above, and
 `memory_test.go` pins all four rows.
 
-Benchmarks, Apple M3 Pro, darwin/arm64, 16 KB page with 200 links:
+Benchmarks, Apple M3 Pro, darwin/arm64, 16 KB page with 200 links - the six recorded here of
+the ten. `BenchmarkCrossing`'s numbers are in its own comment, being allocation counts rather
+than throughput, and the three selector-cost benchmarks run on a page built for that question:
 
 | Benchmark | ns/op | MB/s | B/op | allocs/op |
 |---|---|---|---|---|
@@ -424,7 +434,7 @@ throughput tracks handler invocation count rather than document size.
 ## Deferred
 
 - wasm/wazero backend for `CGO_ENABLED=0`.
-- linux/musl, windows, darwin/amd64.
+- linux/arm, 32-bit anything, windows/arm64 - the platforms D2 defers.
 - Bail-out handlers (`Settings::append_bail_out_handler`) - Rust-only upstream, no C API yet.
 - `graceful_bail_out_on_content_handler_error` - Rust-only upstream.
 

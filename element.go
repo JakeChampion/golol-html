@@ -6,6 +6,7 @@ package lolhtml
 import "C"
 
 import (
+	"fmt"
 	"iter"
 	"runtime"
 	"unsafe"
@@ -1010,6 +1011,12 @@ func (e *Element) OnEndTag(fn func(*EndTag) error) error {
 	p, err := e.live()
 	if err != nil {
 		return err
+	}
+	// Before the handle is taken: registering a nil function costs one handle
+	// for the rest of the rewrite and then dereferences it when the end tag
+	// arrives, which reaches the caller as a nil-pointer panic out of Write.
+	if fn == nil {
+		return fmt.Errorf("%w: OnEndTag", errNilHandler)
 	}
 
 	// The C API offers no drop callback for end-tag handlers, so the handle

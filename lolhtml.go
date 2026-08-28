@@ -1892,13 +1892,6 @@ func (ct ContentType) String() string {
 // call. One space decides it: `</ x>` is not a tag but a bogus comment, so a
 // comment handler does see that.
 //
-// A range can be empty. The final chunk of a text node carries no bytes, and its
-// range is the zero-width point where the node ended - which is the way to find a
-// text node's extent, from the first chunk's Start to the last chunk's End. A
-// replacement character the rewriter produced for a byte that could not be decoded
-// can have one too: fed "caf\xe9" as UTF-8, the chunk reporting U+FFFD stands at a
-// point rather than over any bytes. So the length of the reported text and the
-// length of the range are unrelated numbers.
 // A range can be empty. The final chunk of a text node has a range that is the
 // zero-width point where the node ended - which is the way to find a text node's
 // extent, from the first chunk's Start to the last chunk's End. Its range, not its

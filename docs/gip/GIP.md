@@ -136,11 +136,10 @@ Until Phase 4 you are NOT authorized to read golol-html's implementation: no
   moment the Go docs go quiet, and "the Go docs are quiet where the header is
   not" is one of the better findings available to you.
 
-You are a USER of this library, and a user has the docs and the header.
-`CLAUDE.md` and this file are in your context and you cannot unsee them: do not
-use them to route around the restriction. Anything you know from them about
-where the bodies are buried is Phase 4 knowledge. Treat it as unavailable until
-then.
+You are a USER of this library, and a user has the docs and the header. This
+file is in your context and you cannot unsee it: do not use it to route around
+the restriction. Anything you know from it about where the bodies are buried is
+Phase 4 knowledge. Treat it as unavailable until then.
 
 The purpose is not ceremony. It is that the author of a binding cannot feel a
 bad doc comment, because they know what it was meant to say. You need one turn
@@ -652,6 +651,17 @@ Nothing gates the following. This is the shopping list.
   rewriter, a tag threaded onto the streaming handle plus a rolling tail, or an
   exported check the caller can apply itself, since a text handler does know the
   tag it registered. `TestWhatIsStillNotChecked` pins where it stops.
+
+- **The merge itself.** Every row in the table above is a test, and Phase 5 is
+  explicit that there is no other kind: "you do not ask permission at any step",
+  and the loop ends in `gh pr merge --squash`. No approving review is required on
+  `main` today, so what reaches a consumer of this module - source and seven
+  prebuilt archives both - is whatever an agent believed and CI did not catch.
+  The point of the table is that every gate is blind to something; the merge
+  inherits all of those blind spots at once, and it is the only one of them that
+  no row can be added for. A deliberate trade for throughput, and the largest
+  ungated thing on this page, which is worth writing down rather than leaving as
+  the one gate nobody listed.
 
 - **`-race` on darwin/amd64 and on both musl rows.** Rosetta and the container
   skip it, so the race detector runs on four of seven rows.

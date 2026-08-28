@@ -15,40 +15,99 @@ package lolhtml_test
 // recover the error their own handler returned, which is how they tell their
 // failure from the library's.
 //
-// A name in a comment counts, which is the compromise that keeps this cheap. It
-// is a reminder to write the test, not a substitute for having written it.
+// Both halves of the check are parsed rather than matched as text, and both were
+// text once.
+//
+// The surface came from top-level declarations only, so a method promoted from an
+// unexported embedded type was not in it at all. Detached is declared once, on
+// the generic unit every rewritable unit embeds, and the seven exported methods
+// promotion makes of it - Element.Detached and its six siblings - were invisible
+// to the guard whose whole job is to notice a name nothing exercises.
+//
+// The mention check was strings.Contains over the test sources, comments
+// included. For needles like Is, Text, Len, Name, Write and Close that is
+// satisfied by prose, so the names most in need of the reminder were the ones the
+// check could not fail on. A mention is now an identifier in code: lolhtml.Name
+// for a package-level name, .Name for a method, which is how a method appears at
+// a call site - e.SetAttribute names Element.SetAttribute without naming the
+// type, so the type cannot be part of what is looked for.
+//
+// It stays a reminder to write the test, not a substitute for having written it.
 
 import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-// exportedNames returns every exported top-level name declared in the package,
-// with methods reported as Type.Method.
-func exportedNames(t *testing.T) []string {
+// importPath is how the tests and the sibling modules import this package. A
+// package-level name counts as mentioned when it is qualified with it.
+const importPath = "github.com/JakeChampion/golol-html"
+
+// parseSources parses every file matching the patterns, and no build constraint
+// excludes anything: a file that only builds on one platform still declares
+// names there, and the surface is meant to be the same everywhere.
+func parseSources(t *testing.T, patterns ...string) []*ast.File {
 	t.Helper()
 
-	sources, err := filepath.Glob("*.go")
+	fset := token.NewFileSet()
+	var files []*ast.File
+	for _, pattern := range patterns {
+		paths, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range paths {
+			file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("%s: %v", path, err)
+			}
+			files = append(files, file)
+		}
+	}
+	return files
+}
+
+// packageSources is the package's own files, which is what it promises. Test
+// files are not part of that even when they are in the package: export_test.go
+// declares LiveHandles for the tests to use and no caller can reach it.
+func packageSources(t *testing.T) []*ast.File {
+	t.Helper()
+
+	paths, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
+	var patterns []string
+	for _, path := range paths {
+		if !strings.HasSuffix(path, "_test.go") {
+			patterns = append(patterns, path)
+		}
+	}
+	return parseSources(t, patterns...)
+}
 
-	fset := token.NewFileSet()
+// exportedNames returns every exported name the package promises, with methods
+// reported as Type.Method.
+//
+// Promotion is resolved rather than skipped. A method reached through an
+// embedded field is callable on the outer type whether or not the type it was
+// declared on is exported, and unit[P].Detached is exactly that: one declaration,
+// seven names a caller can write.
+func exportedNames(t *testing.T) []string {
+	t.Helper()
+
 	var names []string
-	for _, path := range sources {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("%s: %v", path, err)
-		}
+	var declared []string             // every type declared here, exported or not
+	methods := map[string][]string{}  // type -> exported methods declared on it
+	embedded := map[string][]string{} // type -> the types it embeds
+
+	for _, file := range packageSources(t) {
 		for _, decl := range file.Decls {
 			switch d := decl.(type) {
 			case *ast.FuncDecl:
@@ -59,18 +118,18 @@ func exportedNames(t *testing.T) []string {
 					names = append(names, d.Name.Name)
 					continue
 				}
-				recv := receiverName(d.Recv)
-				if recv == "" || !ast.IsExported(recv) {
-					continue
+				if recv := receiverName(d.Recv); recv != "" {
+					methods[recv] = append(methods[recv], d.Name.Name)
 				}
-				names = append(names, recv+"."+d.Name.Name)
 			case *ast.GenDecl:
 				for _, spec := range d.Specs {
 					switch s := spec.(type) {
 					case *ast.TypeSpec:
+						declared = append(declared, s.Name.Name)
 						if s.Name.IsExported() {
 							names = append(names, s.Name.Name)
 						}
+						embedded[s.Name.Name] = embeddedTypes(s.Type)
 					case *ast.ValueSpec:
 						for _, n := range s.Names {
 							if n.IsExported() {
@@ -82,66 +141,150 @@ func exportedNames(t *testing.T) []string {
 			}
 		}
 	}
+
+	for _, typ := range declared {
+		if !ast.IsExported(typ) {
+			continue
+		}
+		for _, m := range methodSet(typ, methods, embedded) {
+			names = append(names, typ+"."+m)
+		}
+	}
+
 	sort.Strings(names)
 	return names
+}
+
+// methodSet is the exported methods callable on typ: its own, then those reached
+// through embedding, breadth first because that is Go's rule - a method declared
+// on the type shadows one promoted from a field, and two promoted from different
+// fields at the same depth are ambiguous and belong to neither.
+func methodSet(typ string, methods, embedded map[string][]string) []string {
+	found := map[string]bool{}
+	seen := map[string]bool{typ: true}
+	level := []string{typ}
+
+	for len(level) > 0 {
+		depth := map[string]int{}
+		for _, t := range level {
+			for _, m := range methods[t] {
+				depth[m]++
+			}
+		}
+		for m, n := range depth {
+			if !found[m] && n == 1 {
+				found[m] = true
+			}
+		}
+
+		var next []string
+		for _, t := range level {
+			for _, e := range embedded[t] {
+				if !seen[e] {
+					seen[e] = true
+					next = append(next, e)
+				}
+			}
+		}
+		level = next
+	}
+
+	var out []string
+	for m := range found {
+		out = append(out, m)
+	}
+	return out
+}
+
+// embeddedTypes returns the types a struct embeds, by name. The generic units
+// are embedded as unit[*C.lol_html_element_t] and friends, so the index has to
+// come off before the name is there.
+func embeddedTypes(spec ast.Expr) []string {
+	st, ok := spec.(*ast.StructType)
+	if !ok || st.Fields == nil {
+		return nil
+	}
+	var out []string
+	for _, f := range st.Fields.List {
+		if len(f.Names) > 0 {
+			continue // named, so nothing is promoted
+		}
+		if name := typeName(f.Type); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 func receiverName(recv *ast.FieldList) string {
 	if recv == nil || len(recv.List) == 0 {
 		return ""
 	}
-	switch e := recv.List[0].Type.(type) {
-	case *ast.StarExpr:
-		if id, ok := e.X.(*ast.Ident); ok {
-			return id.Name
-		}
+	return typeName(recv.List[0].Type)
+}
+
+// typeName reduces a type expression to the name it is rooted at, dropping
+// pointers and type arguments. A qualified name from another package has no name
+// here and returns "".
+func typeName(e ast.Expr) string {
+	switch t := e.(type) {
 	case *ast.Ident:
-		return e.Name
+		return t.Name
+	case *ast.StarExpr:
+		return typeName(t.X)
+	case *ast.IndexExpr:
+		return typeName(t.X)
+	case *ast.IndexListExpr:
+		return typeName(t.X)
 	}
 	return ""
 }
 
 // TestEveryExportedNameIsMentionedByATest.
 func TestEveryExportedNameIsMentionedByATest(t *testing.T) {
-	tests, err := filepath.Glob("*_test.go")
-	if err != nil {
-		t.Fatal(err)
-	}
+	patterns := []string{"*_test.go"}
 	// The other modules exercise the surface too, and a name only used from
 	// there is still covered.
 	for _, dir := range []string{"differential", "properties", "examples/gip"} {
-		matches, err := filepath.Glob(filepath.Join(dir, "*.go"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		tests = append(tests, matches...)
-		subdirs, err := filepath.Glob(filepath.Join(dir, "*", "*.go"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		tests = append(tests, subdirs...)
+		patterns = append(patterns,
+			filepath.Join(dir, "*.go"),
+			filepath.Join(dir, "*", "*.go"))
 	}
 
-	var haystack strings.Builder
-	for _, path := range tests {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		haystack.Write(b)
-		haystack.WriteByte('\n')
+	// qualified is what the tests name through the package - lolhtml.Element -
+	// and selected is every selector they use at all, which is the only form a
+	// method call takes.
+	qualified := map[string]bool{}
+	selected := map[string]bool{}
+
+	for _, file := range parseSources(t, patterns...) {
+		// export_test.go is inside the package, so its names need no qualifier.
+		internal := file.Name.Name == "lolhtml"
+		local := importName(file)
+
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch e := n.(type) {
+			case *ast.SelectorExpr:
+				selected[e.Sel.Name] = true
+				if id, ok := e.X.(*ast.Ident); ok && local != "" && id.Name == local {
+					qualified[e.Sel.Name] = true
+				}
+			case *ast.Ident:
+				if internal {
+					qualified[e.Name] = true
+				}
+			}
+			return true
+		})
 	}
-	all := haystack.String()
 
 	var missing []string
 	for _, name := range exportedNames(t) {
-		// A method is looked for by its own name: Element.Attribute is written
-		// as e.Attribute at a call site, so the type is not in the text.
-		needle := name
+		mentioned := qualified[name]
 		if i := strings.IndexByte(name, '.'); i >= 0 {
-			needle = name[i+1:]
+			mentioned = selected[name[i+1:]]
 		}
-		if !strings.Contains(all, needle) {
+		if !mentioned {
 			missing = append(missing, name)
 		}
 	}
@@ -149,6 +292,22 @@ func TestEveryExportedNameIsMentionedByATest(t *testing.T) {
 		t.Errorf("no test mentions these exported names, so nothing exercises them:\n  %s",
 			strings.Join(missing, "\n  "))
 	}
+}
+
+// importName is what this file calls the package under test, or "" if it does
+// not import it.
+func importName(file *ast.File) string {
+	for _, imp := range file.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil || path != importPath {
+			continue
+		}
+		if imp.Name != nil {
+			return imp.Name.Name
+		}
+		return "lolhtml"
+	}
+	return ""
 }
 
 // TestTheSurfaceIsNotAccidentallyGrowing counts the exported names, so adding one
@@ -189,7 +348,18 @@ func TestTheSurfaceIsNotAccidentallyGrowing(t *testing.T) {
 	// names, a different set by exactly textarea and title. Its own doc comment
 	// argues against copying names out of a doc comment, which is what every
 	// caller of the reading path was doing.
-	const want = 145
+	// 146: ErrReentrant, because a handler calling back into its own Writer was
+	// memory-unsafety rather than a mistake - a nested Close freed the rewriter
+	// underneath the write still running on it - and refusing needs a sentinel a
+	// caller can match on. See reentrancy_test.go.
+	// 153: nothing was exported. The count was 146 because this test could not
+	// see a promoted method, and the seven it could not see are
+	// Comment.Detached, Doctype.Detached, DocumentEnd.Detached,
+	// Element.Detached, EndTag.Detached, Sink.Detached and TextChunk.Detached -
+	// one declaration on the unexported generic unit[P] that every rewritable
+	// unit embeds, and seven names a caller can write. They were part of the
+	// promise all along; only the guard was counting wrong.
+	const want = 153
 
 	names := exportedNames(t)
 	if len(names) != want {

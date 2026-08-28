@@ -67,6 +67,14 @@ import (
 // reader safe - but a sequence still open when the function returns is dropped,
 // so returning then is [ErrIncompleteRune] rather than a shorter insertion
 // nobody mentioned.
+//
+// None of the streaming insertions is checked for a raw-text breakout, which the
+// equivalent one-shot methods on [Element] are: content arrives in pieces and a
+// "</script>" can straddle two of them, so there is nothing whole to check. An
+// insertion into a script or a style body therefore ends the element if the
+// content says so, silently. [CheckRawText] is the guard to call, on content the
+// StreamFunc assembled rather than on the pieces. See [ErrRawTextBreakout], which
+// records this as one of its two gaps.
 type StreamFunc func(*Sink) error
 
 // A Sink receives the output of a StreamFunc.
@@ -369,12 +377,16 @@ func (e *Element) StreamAfter(fn StreamFunc) error {
 
 // StreamPrepend inserts content as the element's first child, produced on
 // demand by fn.
+//
+// Inside a raw-text element this is unguarded: see [StreamFunc].
 func (e *Element) StreamPrepend(fn StreamFunc) error {
 	return withStream(&e.unit, e.selector, fn, "element_streaming_prepend", cfElementStreamPrepend)
 }
 
 // StreamAppend inserts content as the element's last child, produced on demand
 // by fn.
+//
+// Inside a raw-text element this is unguarded: see [StreamFunc].
 func (e *Element) StreamAppend(fn StreamFunc) error {
 	return withStream(&e.unit, e.selector, fn, "element_streaming_append", cfElementStreamAppend)
 }
