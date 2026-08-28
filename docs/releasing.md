@@ -59,12 +59,15 @@ because, against what `v0.1.1` actually published, it is a different API.
 
 - **Tags are unsigned.** `v0.1.0`, `v0.1.1` and `v0.2.0` are annotated but not
   signed.
-- **Nothing ties the committed archives to the pinned lol-html revision at
-  release time.** `SHA256SUMS` is self-referential and `check-pins.sh` compares
-  prose against prose; the link is the bit-for-bit rebuild in
-  `docs/provenance.md`, which no job runs. A pin bumped and tagged before the
-  `native` rebuild landed would ship old binaries under a new claimed revision
-  with every check green.
+- **The archives are tied to the pin by one job on one platform.**
+  `verify-native.yml` rebuilds `linux_amd64` from the pinned revision and diffs
+  it against `SHA256SUMS`, on every `v*` tag, on a pull request touching the pin
+  or `internal/`, and weekly. That closes the hole where a pin bumped and tagged
+  before the `native` rebuild landed would ship old binaries under a new claimed
+  revision with every check green. The other six are cross-built from the same
+  source in the same run of `native.yml`, so one is strong evidence for all
+  seven - but it is evidence, not proof, and a tag run that is red means do not
+  release whatever else is green.
 - **`git describe` does not work on `main`** and will not until the pre-`v0.2.0`
   tags are irrelevant, because they sit on the abandoned history. Nothing
   depends on it; it is worth knowing before reaching for it in a script.
