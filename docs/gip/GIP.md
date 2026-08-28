@@ -652,6 +652,17 @@ Nothing gates the following. This is the shopping list.
   exported check the caller can apply itself, since a text handler does know the
   tag it registered. `TestWhatIsStillNotChecked` pins where it stops.
 
+- **The merge itself.** Every row in the table above is a test, and Phase 5 is
+  explicit that there is no other kind: "you do not ask permission at any step",
+  and the loop ends in `gh pr merge --squash`. No approving review is required on
+  `main` today, so what reaches a consumer of this module - source and seven
+  prebuilt archives both - is whatever an agent believed and CI did not catch.
+  The point of the table is that every gate is blind to something; the merge
+  inherits all of those blind spots at once, and it is the only one of them that
+  no row can be added for. A deliberate trade for throughput, and the largest
+  ungated thing on this page, which is worth writing down rather than leaving as
+  the one gate nobody listed.
+
 - **`-race` on darwin/amd64 and on both musl rows.** Rosetta and the container
   skip it, so the race detector runs on four of seven rows.
 - **Benchmarks on the musl and Rosetta rows.** They compile nowhere and run
