@@ -1,7 +1,7 @@
 GO ?= go
 REPO ?= JakeChampion/golol-html
 
-.PHONY: all test race vet lint bench differential properties platforms workflows modules native native-all verify attest-verify tidy clean
+.PHONY: all test race vet lint bench differential properties platforms workflows modules changelog changelog-fold native native-all verify attest-verify tidy clean
 
 all: test
 
@@ -23,7 +23,7 @@ vet:
 
 # Not `gofmt -l . | ... | (! read)`: that idiom aborts under macOS bash 3.2
 # with set -e even when it passes.
-lint: vet platforms workflows modules
+lint: vet platforms workflows modules changelog
 	@unformatted=$$(gofmt -l .); \
 	if [ -n "$$unformatted" ]; then \
 		echo "unformatted files:"; echo "$$unformatted"; \
@@ -47,6 +47,17 @@ workflows:
 # Catch a module that CI does not vet or test.
 modules:
 	scripts/check-modules.sh
+
+# Check the changelog fragments. Pass BASE=origin/main to also check that this
+# branch adds one rather than editing CHANGELOG.md, which is what CI does.
+BASE ?=
+changelog:
+	scripts/check-changelog.sh $(if $(BASE),--base $(BASE))
+
+# Fold changelog.d/*.md into CHANGELOG.md's Unreleased section. Run at release
+# time; see changelog.d/README.md.
+changelog-fold:
+	scripts/changelog.sh --apply
 
 # The differential tests are a separate module, so the root ./... misses them.
 differential:

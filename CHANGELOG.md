@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+<!-- Entries for unreleased changes go in changelog.d/, one file per
+     change, and are folded in here at release time by
+     scripts/changelog.sh. Editing this section directly conflicts with
+     every other open branch; changelog.d/README.md says why. -->
+
 - Added `DecodesCharacterReferences`, the predicate for the reading question.
   `IsRawText` answers the writing one - can content written into this element end
   it - and the same ten names come up in a second question with a different

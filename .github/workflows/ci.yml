@@ -44,6 +44,27 @@ jobs:
           fi
           echo "all files are gofmt-clean"
 
+      # The base commit is what the fragment check diffs against, and the
+      # default checkout is one commit deep, so fetch just that one. Shallow by
+      # sha rather than fetch-depth: 0, which would pull the whole history of a
+      # repository that vendors a static archive per platform.
+      - name: Changelog fragments
+        run: |
+          base=""
+          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
+            git fetch --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+            base="${{ github.event.pull_request.base.sha }}"
+          fi
+          if [ -n "$base" ]; then
+            scripts/check-changelog.sh --base "$base"
+          else
+            scripts/check-changelog.sh
+          fi
+
+      # Prove the fragments still assemble, so a release fold is never the run
+      # that discovers one of them is unreadable.
+      - run: scripts/changelog.sh >/dev/null
+
       # One vet per module: ./... stops at a module boundary, so the root's
       # invocation covers neither of the others. scripts/check-modules.sh fails
       # if a module is added and not listed here.
