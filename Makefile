@@ -29,7 +29,7 @@ vet:
 
 # Not `gofmt -l . | ... | (! read)`: that idiom aborts under macOS bash 3.2
 # with set -e even when it passes.
-lint: vet platforms workflows modules pins changelog
+lint: vet platforms workflows modules pins abi changelog
 	@unformatted=$$(gofmt -l .); \
 	if [ -n "$$unformatted" ]; then \
 		echo "unformatted files:"; echo "$$unformatted"; \
@@ -58,6 +58,13 @@ modules:
 # scripts/build-native.sh.
 pins:
 	scripts/check-pins.sh
+
+# Catch the vendored header describing an ABI the archives do not have. C
+# linkage carries no type information, so a header that has drifted from the
+# binary beside it is silent corruption rather than a compile error - and the
+# header is the only description of those archives that anything reads.
+abi:
+	scripts/check-abi.sh
 
 # Check the changelog fragments. Pass BASE=origin/main to also check that this
 # branch adds one rather than editing CHANGELOG.md, which is what CI does.

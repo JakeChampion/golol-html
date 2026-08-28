@@ -201,6 +201,10 @@ jobs:
       - run: scripts/check-workflows.sh
       - run: scripts/check-modules.sh
       - run: scripts/check-pins.sh
+      # Symbol drift is checked for all seven archives from here, because
+      # llvm-nm reads every one of them. The struct-layout probe is not: it has
+      # to run the code, so it covers this runner's archive only and says so.
+      - run: scripts/check-abi.sh
 
   # AddressSanitizer is where a cgo binding's real bugs live: use-after-free
   # across the boundary, double frees, overruns. The tests check what the

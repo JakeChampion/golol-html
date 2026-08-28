@@ -264,9 +264,21 @@ case "${1:-}" in
             echo "==> ${target} DIFFERS" >&2
             echo "    committed: ${before}" >&2
             echo "    rebuilt:   ${after}" >&2
-            echo "    Rust builds are not bit-reproducible across toolchain patch" >&2
-            echo "    versions; compare with RUST_TOOLCHAIN=${RUST_TOOLCHAIN} before" >&2
-            echo "    concluding the archive was tampered with." >&2
+            echo "    Almost certainly where you built it, not what you built." >&2
+            echo "    rustc embeds absolute paths - the source tree and CARGO_HOME" >&2
+            echo "    both - in panic metadata that survives stripping, so the same" >&2
+            echo "    revision built with the same compiler in a different directory" >&2
+            echo "    hashes differently. The committed archives were built by CI, so" >&2
+            echo "    reproducing them means reproducing its paths exactly:" >&2
+            echo >&2
+            echo "      /home/runner/work/golol-html/golol-html/.native-build/lol-html" >&2
+            echo "      CARGO_HOME=/home/runner/.cargo" >&2
+            echo >&2
+            echo "    docs/provenance.md has the whole procedure. Check that, and that" >&2
+            echo "    rustc is ${RUST_TOOLCHAIN}, before concluding anything was" >&2
+            echo "    tampered with. (The lasting fix is --remap-path-prefix in" >&2
+            echo "    RUSTFLAGS, which cannot be added without rebuilding all seven" >&2
+            echo "    archives and so belongs to the next rebuild, not to a verify.)" >&2
             exit 1
         fi
         ;;
