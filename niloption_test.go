@@ -108,3 +108,115 @@ func TestANilDestinationIsStillRefusedTheSameWay(t *testing.T) {
 		t.Errorf("%v does not mention the destination", err)
 	}
 }
+
+// A nil handler inside a non-nil option is the same mistake one level down, and
+// it used to be the quiet skip that refusing a nil option exists to prevent:
+// OnElement("p", nil) built, ran, matched, did nothing, and reported success.
+// Element.OnEndTag(nil) was worse - it registered the nil and dereferenced it
+// when the end tag arrived, so the mistake surfaced as a nil-pointer panic out
+// of Write with the Writer poisoned, pointing at the library.
+
+// TestANilHandlerIsRefusedByEveryOptionThatTakesOne. The list is every On*
+// constructor, so an option added later without a guard fails here.
+func TestANilHandlerIsRefusedByEveryOptionThatTakesOne(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		opt  lolhtml.Option
+	}{
+		{"OnElement", lolhtml.OnElement("p", nil)},
+		{"OnComment", lolhtml.OnComment("p", nil)},
+		{"OnText", lolhtml.OnText("p", nil)},
+		{"OnDoctype", lolhtml.OnDoctype(nil)},
+		{"OnDocumentComment", lolhtml.OnDocumentComment(nil)},
+		{"OnDocumentText", lolhtml.OnDocumentText(nil)},
+		{"OnDocumentEnd", lolhtml.OnDocumentEnd(nil)},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			w, err := lolhtml.NewWriter(io.Discard, tc.opt)
+			if err == nil {
+				t.Fatal("a nil handler was accepted")
+			}
+			if w != nil {
+				t.Error("a writer was returned alongside the error")
+			}
+			// The message names the call the caller wrote, because that is what
+			// they have to go and find.
+			if !strings.Contains(err.Error(), tc.what) {
+				t.Errorf("%v does not name %s", err, tc.what)
+			}
+			if !strings.Contains(err.Error(), "nil") {
+				t.Errorf("%v does not say what was wrong", err)
+			}
+		})
+	}
+}
+
+// TestANilHandlerIsRefusedBeforeTheRewriteRuns: the point is that the rewrite
+// does not start. A document that matched and was silently left alone is the
+// failure this replaced.
+func TestANilHandlerIsRefusedBeforeTheRewriteRuns(t *testing.T) {
+	out, err := lolhtml.RewriteString(`<p>x</p>`, lolhtml.OnElement("p", nil))
+	if err == nil {
+		t.Fatalf("the rewrite ran with a nil handler and returned %q", out)
+	}
+	if out != "" {
+		t.Errorf("output %q, want nothing", out)
+	}
+}
+
+// TestANilHandlerLeavesNothingBehind: the refusal happens after the options have
+// been applied, so it has to release as cleanly as any other early failure.
+func TestANilHandlerLeavesNothingBehind(t *testing.T) {
+	before := lolhtml.LiveHandles()
+	for range 50 {
+		if _, err := lolhtml.NewWriter(io.Discard,
+			lolhtml.OnElement("a", func(*lolhtml.Element) error { return nil }),
+			lolhtml.OnText("a", nil),
+		); err == nil {
+			t.Fatal("accepted a nil handler")
+		}
+	}
+	requireNoHandleLeak(t, before)
+}
+
+// TestANilEndTagHandlerIsRefusedRatherThanDeferred: OnEndTag reports it where the
+// mistake is, rather than letting it become a panic from Write later on.
+func TestANilEndTagHandlerIsRefusedRatherThanDeferred(t *testing.T) {
+	before := lolhtml.LiveHandles()
+
+	var inner error
+	out, err := lolhtml.RewriteString(`<p>x</p>`, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+		inner = e.OnEndTag(nil)
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("the rewrite failed: %v", err)
+	}
+	if out != `<p>x</p>` {
+		t.Errorf("output = %q, want the document unchanged", out)
+	}
+	if inner == nil {
+		t.Fatal("OnEndTag(nil) was accepted")
+	}
+	if !strings.Contains(inner.Error(), "OnEndTag") {
+		t.Errorf("%v does not name OnEndTag", inner)
+	}
+	requireNoHandleLeak(t, before)
+}
+
+// TestANilHandlerIsDistinguishableFromANilOption: two different mistakes, two
+// different messages, and neither is reported as the other.
+func TestANilHandlerIsDistinguishableFromANilOption(t *testing.T) {
+	_, nilOpt := lolhtml.NewWriter(io.Discard, nil)
+	_, nilFn := lolhtml.NewWriter(io.Discard, lolhtml.OnElement("p", nil))
+
+	if !errors.Is(nilOpt, lolhtml.ErrNilOption) {
+		t.Errorf("a nil option reported %v, want ErrNilOption", nilOpt)
+	}
+	if errors.Is(nilFn, lolhtml.ErrNilOption) {
+		t.Errorf("a nil handler reported ErrNilOption: %v", nilFn)
+	}
+	if nilFn == nil {
+		t.Fatal("a nil handler was accepted")
+	}
+}

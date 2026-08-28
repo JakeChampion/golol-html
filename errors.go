@@ -55,6 +55,30 @@ var errNilStreamFunc = errors.New("lolhtml: StreamFunc is nil")
 // ErrClosed is returned by Write on a Writer that has already been closed.
 var ErrClosed = errors.New("lolhtml: writer is closed")
 
+// ErrReentrant is returned by [Writer.Write] and [Writer.Close] when they are
+// called from inside the Writer's own handler - or from the destination writer,
+// which lol-html calls on the same stack.
+//
+// A handler runs in the middle of lol_html_rewriter_write, and lol-html has no
+// idea it is being called at all. Re-entering it there is not a Go-level
+// nuisance but memory-unsafety: a nested Write hands the same rewriter to Rust
+// twice, which is a second &mut alias, and the parser state it corrupts is
+// reported - when it is reported - as an internal consistency error against a
+// document that was fine. A nested Close is worse, because it finishes the
+// document and then frees the rewriter and every handle underneath the call
+// still running on them, so the outer write continues on freed memory.
+//
+// The refusal changes nothing for a Writer used the ordinary way. It matters for
+// an "early stop" handler, which is where the reflex to call Close from inside a
+// handler comes from: stop by returning an error from the handler instead, which
+// [Writer.Write] reports and which leaves the Writer poisoned rather than
+// half-freed. See [OnElement] on stopping early. Measured in reentrancy_test.go.
+//
+// It is not a poison. The interrupted call carries on and reports whatever it
+// was going to, so a caller who ignores a reentrant Close still gets the real
+// outcome from the real one.
+var ErrReentrant = errors.New("lolhtml: writer re-entered from its own handler")
+
 // ErrPoisoned is returned by Write and Close on a Writer whose earlier Write or
 // Close failed. lol-html leaves the rewriter unusable after an error, and calling
 // into it again would abort the process, so golol-html refuses instead.

@@ -168,14 +168,41 @@ func golol_sink_cb(chunk *C.char, n C.size_t, ud C.uintptr_t) {
 	}
 	// The sink cannot report failure to lol-html, and there is no directive to
 	// return, so a destination error is parked and surfaces from Write or
-	// Close. Later chunks are dropped: the output is already incomplete.
-	if cb.c.st.sinkErr != nil {
+	// Close. Later chunks are dropped: the output is already incomplete. A
+	// parked panic drops them for the same reason, and because the rewrite it
+	// belongs to is already being abandoned.
+	if cb.c.st.sinkErr != nil || cb.c.st.panicVal != nil {
 		return
 	}
 	// borrowBytes rather than a copy: io.Writer implementations must not
 	// retain p, so the destination may read but not keep lol-html's buffer.
 	b := borrowBytes(chunk, n)
-	written, err := cb.c.st.dst.Write(b)
+	if err := writeSink(cb.c.st, b); err != nil {
+		cb.c.st.sinkErr = err
+	}
+}
+
+// writeSink hands one chunk to the destination under the same panic containment
+// runHandler gives a handler.
+//
+// The destination is user code like any handler, and it runs on the same stack,
+// called from Rust. A panic crossing back through those frames skips lol-html's
+// own cleanup - the crate is built with panic = "abort", so the frames carry no
+// landing pads - which leaks whatever they own, including the drop callbacks
+// that release streaming handles. It also frees a rewriter abandoned mid-write,
+// because Write's deferred recovery cannot tell this panic from a handler's.
+//
+// So it is parked like a handler panic and re-raised by takeDeferred, on the
+// caller's goroutine. No error is recorded alongside it: takeDeferred prefers
+// the panic anyway, and a sinkErr would only outlive it. Pinned in panic_test.go.
+func writeSink(st *state, b []byte) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			st.panicVal = r
+		}
+	}()
+
+	written, err := st.dst.Write(b)
 
 	// A short write with no error breaks io.Writer's contract, and trusting it
 	// would truncate the response in silence: a destination that accepted five
@@ -185,9 +212,7 @@ func golol_sink_cb(chunk *C.char, n C.size_t, ud C.uintptr_t) {
 	if err == nil && written < len(b) {
 		err = io.ErrShortWrite
 	}
-	if err != nil {
-		cb.c.st.sinkErr = err
-	}
+	return err
 }
 
 //export golol_streaming_write_cb

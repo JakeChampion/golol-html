@@ -5,8 +5,6 @@ package lolhtml
 */
 import "C"
 
-import "unsafe"
-
 // A TextChunk is a run of character data matched by a text handler.
 //
 // Text is reported in chunks with no guaranteed boundaries: one text node may
@@ -101,7 +99,7 @@ func (t *TextChunk) Text() string {
 	if c.data == nil || c.len == 0 {
 		return ""
 	}
-	return C.GoStringN(c.data, C.int(c.len))
+	return goStrN(c.data, c.len)
 }
 
 // Bytes returns the chunk's text as a freshly allocated byte slice. As with
@@ -115,7 +113,7 @@ func (t *TextChunk) Bytes() []byte {
 	if c.data == nil || c.len == 0 {
 		return nil
 	}
-	return C.GoBytes(unsafe.Pointer(c.data), C.int(c.len))
+	return goBytesN(c.data, c.len)
 }
 
 // IsLastInTextNode reports whether this is the final chunk of its text node.

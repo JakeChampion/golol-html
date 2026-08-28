@@ -24,10 +24,18 @@ import (
 // A Writer is not safe for concurrent use, and independent Writers on separate
 // goroutines are fine - as long as their handlers are independent too. See
 // [Option] on reusing one.
+//
+// Nor is it reentrant: a handler, or a destination writer, must not call Write
+// or Close on the Writer that is running it. Both refuse with [ErrReentrant]
+// rather than re-entering lol-html, which has no idea it is already running.
 type Writer struct {
 	c        *core
 	closed   bool
 	poisoned bool
+	// inCall is set for as long as a call into lol-html is on the stack, which
+	// is exactly when a handler or the destination writer can run and call back
+	// in. See ErrReentrant.
+	inCall bool
 	// cause is the error that poisoned the Writer, kept so that every later
 	// refusal can carry it. Without it, a caller who checks only Close - which
 	// is where Go idiom puts the check - learns that something failed and never
@@ -102,6 +110,17 @@ type native struct {
 // Nothing is buffered here on purpose: a caller streaming to a client wants the
 // bytes as they are produced, and a buffer belongs where that caller can flush
 // it. Pinned in writecount_test.go.
+//
+// Close every Writer, including one being abandoned. There is a cleanup attached
+// here that frees the native resources if a Writer is dropped without it, but it
+// is a backstop rather than a second way of doing this, and it is one a caller can
+// take away without noticing: handler payloads live in a process-global handle
+// table until the Writer is released, so a handler that closes over the Writer -
+// to count into it, to stop it, to reach it from a nested rewrite - makes the
+// Writer permanently reachable through that table, and the cleanup that would have
+// released it can never run. The rewriter, its selectors and every handle then
+// leak for the life of the process. Nothing detects it at runtime; a deferred
+// Close is the whole answer.
 func NewWriter(dst io.Writer, opts ...Option) (*Writer, error) {
 	if dst == nil {
 		return nil, errNilDst
@@ -121,16 +140,23 @@ func NewWriter(dst io.Writer, opts ...Option) (*Writer, error) {
 	c := &core{st: &state{dst: dst}, nt: &native{cerr: new(C.lol_html_str_t)}}
 
 	builder := C.lol_html_rewriter_builder_new()
-	// The builder is only needed until the rewriter is built; selectors must
-	// outlive the builder, so they are released after it.
-	defer C.lol_html_rewriter_builder_free(builder)
 
+	// The builder is only needed until the rewriter is built, and lol-html is
+	// explicit that a selector outlives every builder that accepted it: "
+	// Deallocate all dependant rewriter builders first and then use
+	// lol_html_selector_free" (internal/include/lol_html.h). release() frees the
+	// selectors, so the builder has to be gone before it is called - which a
+	// deferred free is exactly the wrong shape for, since a defer runs after the
+	// release on the error paths rather than before it. Freed explicitly on each
+	// path instead, once and only once.
 	if err := cfg.register(c, builder); err != nil {
+		C.lol_html_rewriter_builder_free(builder)
 		c.nt.release()
 		return nil, err
 	}
 
 	rw, err := cfg.build(c, builder)
+	C.lol_html_rewriter_builder_free(builder)
 	if err != nil {
 		c.nt.release()
 		return nil, err
@@ -175,6 +201,17 @@ func NewWriter(dst io.Writer, opts ...Option) (*Writer, error) {
 // because handlers run as tokens are parsed and the destination is written to
 // afterwards.
 //
+// What the destination is handed is lol-html's own buffer, not a copy: the slice
+// passed to dst.Write is a view of Rust memory that is reused or freed as soon as
+// the call returns. io.Writer already forbids retaining p, so an ordinary
+// destination is unaffected - but here the cost of breaking that rule is not a
+// stale read of Go memory the garbage collector is still holding. It is a read of
+// freed native memory, which the race detector cannot see and which fails at
+// whatever distance the retained slice is finally looked at. A destination that
+// queues its argument - an asynchronous logger, a tee that buffers slices - must
+// copy before it does. This is by construction rather than by measurement: there
+// is no copy to leave out, and no test can safely demonstrate the read.
+//
 // Failing is not atomic. Everything before the token whose handler failed has
 // already reached the destination, at every write size and including a single
 // Write of the whole document, and what it holds is a whole number of tokens -
@@ -187,6 +224,8 @@ func NewWriter(dst io.Writer, opts ...Option) (*Writer, error) {
 // delivered all of it.
 func (w *Writer) Write(p []byte) (int, error) {
 	switch {
+	case w.inCall:
+		return 0, ErrReentrant
 	case w.closed:
 		return 0, ErrClosed
 	case w.poisoned:
@@ -198,11 +237,15 @@ func (w *Writer) Write(p []byte) (int, error) {
 	// A handler panic is parked by the callback and re-raised below by
 	// takeDeferred, at which point the C stack has already unwound. Releasing
 	// here means a caller who recovers from that panic does not leak the
-	// rewriter and its handles, however they were driving the Writer.
-	defer w.releaseOnPanic()
+	// rewriter and its handles, however they were driving the Writer. The same
+	// deferred call clears inCall, so a recovered panic does not leave the
+	// Writer refusing every later call as reentrant.
+	defer w.endCall()
 
 	cerr := w.c.nt.cerr
+	w.inCall = true
 	rc := C.golol_rewriter_write(w.c.nt.rw, (*C.char)(bytePtr(p)), C.size_t(len(p)), cerr)
+	w.inCall = false
 	runtime.KeepAlive(p)
 
 	if err := w.c.st.takeDeferred(nativeErrIf(rc != 0, "write", *cerr)); err != nil {
@@ -250,20 +293,34 @@ func (w *Writer) Write(p []byte) (int, error) {
 // one that assigns to the returned error; keep one Close, and let it be the one
 // whose error is checked. Measured in faults_test.go, which asserts the quiet
 // second Close deliberately, and demonstrated in examples/gip/poisoned.
+//
+// Not from inside a handler, though, which is the one place "safe to call more
+// than once" used to read as an invitation: closing from a handler would free the
+// rewriter underneath the write still running on it. Called there, or from the
+// destination writer, Close does nothing and returns [ErrReentrant]. A handler
+// stops the document by returning an error instead.
 func (w *Writer) Close() error {
+	// Before the closed check, and before anything is marked: a reentrant Close
+	// must leave the Writer exactly as it found it, because the call it
+	// interrupted is still running and still owns the rewriter.
+	if w.inCall {
+		return ErrReentrant
+	}
 	if w.closed {
 		return nil
 	}
 	w.closed = true
 	defer w.c.nt.release()
-	defer w.releaseOnPanic()
+	defer w.endCall()
 
 	if w.poisoned {
 		return w.poisonErr()
 	}
 
 	var cerr C.lol_html_str_t
+	w.inCall = true
 	rc := C.golol_rewriter_end(w.c.nt.rw, &cerr)
+	w.inCall = false
 	if err := w.c.st.takeDeferred(nativeErrIf(rc != 0, "end", cerr)); err != nil {
 		w.poison(err)
 		return err
@@ -345,13 +402,15 @@ func (n *native) newHandle(v any) cgo.Handle {
 	return h
 }
 
-// releaseOnPanic frees the native resources when a handler panic is on its way
-// out, then lets the panic continue.
+// endCall closes out one call into lol-html: the stack is back on the caller's
+// side, so nothing can re-enter, and if a handler panic is on its way out the
+// native resources are freed before it continues.
 //
 // Close stays safe afterwards: it returns ErrPoisoned before touching the
 // rewriter, and release is guarded by a sync.Once, so neither the caller's
 // deferred Close nor the cleanup can double-free.
-func (w *Writer) releaseOnPanic() {
+func (w *Writer) endCall() {
+	w.inCall = false
 	if r := recover(); r != nil {
 		w.poisoned = true
 		w.c.nt.release()

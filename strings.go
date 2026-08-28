@@ -10,6 +10,44 @@ import (
 	"unsafe"
 )
 
+// goStrN copies n bytes of a C buffer into a Go string.
+//
+// Not C.GoStringN, whose length is a C.int - 32 bits on every platform here.
+// lol-html puts no ceiling on a token, so a comment or text node past 2 GiB
+// arrives with a size_t length that does not fit: the conversion keeps the low
+// 32 bits, which silently halves a 4 GiB token and panics outright whenever bit
+// 31 is set. unsafe.Slice takes the length the library actually reported.
+func goStrN(p *C.char, n C.size_t) string {
+	if p == nil || n == 0 {
+		return ""
+	}
+	return unsafe.String(&copyOut(p, n)[0], int(n))
+}
+
+// goBytesN is goStrN for callers wanting bytes.
+func goBytesN(p *C.char, n C.size_t) []byte {
+	if p == nil || n == 0 {
+		return nil
+	}
+	return copyOut(p, n)
+}
+
+// copyOut copies n bytes out of C memory into one fresh Go allocation.
+//
+// Written out rather than left to string(unsafe.Slice(...)), which is shorter
+// and sometimes free: the compiler keeps a short result on the stack when it
+// does not escape, so reading a one-byte tag name would cost nothing and
+// reading a forty-byte one would cost an allocation. This package documents the
+// cost of reading a name or a value as a fixed number per call, and alloc_test.go
+// pins it; a number that depends on the length of the document's identifiers and
+// on what the caller does with the answer is not one worth documenting. One
+// allocation, always, is the same bargain C.GoStringN made.
+func copyOut(p *C.char, n C.size_t) []byte {
+	b := make([]byte, n)
+	copy(b, unsafe.Slice((*byte)(unsafe.Pointer(p)), n))
+	return b
+}
+
 // takeStr copies a library-allocated string into Go memory and frees the
 // original with lol_html_str_free, the only legal way to release it. A NULL
 // data pointer means "absent" and yields "".
@@ -17,7 +55,7 @@ func takeStr(s C.lol_html_str_t) string {
 	if s.data == nil {
 		return ""
 	}
-	out := C.GoStringN(s.data, C.int(s.len))
+	out := goStrN(s.data, s.len)
 	C.lol_html_str_free(s)
 	return out
 }
@@ -28,7 +66,7 @@ func takeOptStr(s C.lol_html_str_t) (string, bool) {
 	if s.data == nil {
 		return "", false
 	}
-	out := C.GoStringN(s.data, C.int(s.len))
+	out := goStrN(s.data, s.len)
 	C.lol_html_str_free(s)
 	return out, true
 }
