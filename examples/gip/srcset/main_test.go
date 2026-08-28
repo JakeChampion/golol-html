@@ -117,13 +117,19 @@ func TestSourceURLIsEncoded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The attribute arrives as raw source, so the & is still &amp; here, and
-	// QueryEscape encodes every byte of it.
+	// The attribute arrives as raw source, so the & is still &amp; here: it is
+	// decoded first, because the URL the browser fetches is "/a.jpg?v=1&x=2", and
+	// then QueryEscape encodes every byte of that. Encoding the raw source instead
+	// asked the CDN for a URL with a literal "&amp;" in it, which is a different
+	// resource and usually no resource at all.
 	if strings.Contains(got, "srcset=\"/cdn?u=/a.jpg?v=1") {
 		t.Errorf("the source URL was not encoded: %s", got)
 	}
-	if !strings.Contains(got, "u=%2Fa.jpg%3Fv%3D1%26amp%3Bx%3D2") {
-		t.Errorf("expected a fully encoded source: %s", got)
+	if !strings.Contains(got, "u=%2Fa.jpg%3Fv%3D1%26x%3D2") {
+		t.Errorf("expected the decoded source, fully encoded: %s", got)
+	}
+	if strings.Contains(got, "%26amp%3B") {
+		t.Errorf("the reference was encoded as data rather than decoded: %s", got)
 	}
 }
 

@@ -47,9 +47,22 @@ type Table struct {
 	// HeaderFrom says which guess produced the keys: "thead", "first row" or
 	// "none".
 	HeaderFrom string `json:"headerFrom"`
-	// Renamed are the columns whose names had to be made unique, as
-	// original -> final.
-	Renamed map[string]string `json:"renamed,omitempty"`
+	// Renamed are the columns whose names had to be made unique, in column
+	// order.
+	//
+	// A slice and not a map keyed by the original name, because the original
+	// name is not unique - that is what a rename is for. Three columns called
+	// "a" produce two renames, "a 2" and "a 3", both from "a", and a map keeps
+	// only the last: it reported one rename where there were two, which is the
+	// count a caller uses to decide whether the table was worth reading.
+	Renamed []Rename `json:"renamed,omitempty"`
+}
+
+// A Rename is one column whose name had to be made unique.
+type Rename struct {
+	// From is the name the header row spelled, To the key it became.
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 // Convert reads a document and returns its tables.
@@ -379,10 +392,10 @@ func allHeaders(row []cell) bool {
 // JSON has no answer for a duplicate key: one of them wins and which one depends
 // on the reader. A colspan in the header is the usual source, and two cells with
 // the same text is the other.
-func names(row []cell) ([]string, map[string]string) {
+func names(row []cell) ([]string, []Rename) {
 	keys := make([]string, 0, len(row))
 	seen := map[string]int{}
-	var renamed map[string]string
+	var renamed []Rename
 
 	for i, c := range row {
 		name := c.text
@@ -400,10 +413,7 @@ func names(row []cell) ([]string, map[string]string) {
 					break
 				}
 			}
-			if renamed == nil {
-				renamed = map[string]string{}
-			}
-			renamed[original] = name
+			renamed = append(renamed, Rename{From: original, To: name})
 		}
 		seen[name]++
 		keys = append(keys, name)

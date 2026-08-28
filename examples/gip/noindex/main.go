@@ -122,7 +122,6 @@ func (m *marker) options() []lolhtml.Option {
 	// meta could be in the head - which is what makes "rewrite the existing one
 	// or insert a new one, never both" possible without a second pass.
 	headRegion := true
-	sawHead := false
 	placed := false
 
 	return []lolhtml.Option{
@@ -147,11 +146,22 @@ func (m *marker) options() []lolhtml.Option {
 		}),
 
 		lolhtml.OnElement("head", func(e *lolhtml.Element) error {
-			sawHead = true
 			if !e.CanHaveContent() {
 				return nil
 			}
 			return e.OnEndTag(func(end *lolhtml.EndTag) error {
+				if end.Name() != "head" {
+					// The name test, without which this callback takes a
+					// position that is not in the head. </head> is
+					// optional and nothing synthesises one: leave it out
+					// and the head is closed by <body>, so this runs at
+					// the enclosing </body> or </html> and end.Before()
+					// puts the meta after the body - not in the head, and
+					// on a truncated response perhaps not in the document
+					// at all. The <body> handler below is the insertion
+					// point for that shape, and it runs first.
+					return nil
+				}
 				defer func() { headRegion = false }()
 				if placed || !m.wanted() {
 					return nil
@@ -162,12 +172,14 @@ func (m *marker) options() []lolhtml.Option {
 			})
 		}),
 
-		// No head element in the source, which is legal - <head> is optional.
-		// The start of <body> is the end of the implied head, so inserting
-		// before it puts the meta in the head a parser builds.
+		// The end of the head, when the source did not spell one: either there
+		// was no head element, which is legal because <head> is optional, or
+		// there was one whose </head> was left out. The start of <body> is the
+		// end of the head either way, so inserting before it puts the meta in
+		// the head a parser builds.
 		lolhtml.OnElement("body", func(e *lolhtml.Element) error {
 			defer func() { headRegion = false }()
-			if sawHead || placed || !m.wanted() {
+			if !headRegion || placed || !m.wanted() {
 				return nil
 			}
 			placed = true
@@ -180,7 +192,8 @@ func (m *marker) options() []lolhtml.Option {
 				// Deliberately not appended at the end of the output: a meta
 				// there is not in the head, and on a truncated response it may
 				// not be markup at all. See DocumentEnd.Append.
-				m.note("no head and no body to put the meta in")
+				m.note("nowhere to put the meta: the source had " +
+					"neither </head> nor <body>")
 			}
 			return nil
 		}),

@@ -11,11 +11,23 @@
 //
 // Microdata is a tree - an itemprop belongs to the nearest enclosing itemscope,
 // and an itemprop can itself open a new scope - and a rewriter has no tree. The
-// shape is recovered with a stack of open scopes, pushed at a start tag and
-// popped at the matching end tag, which works because those arrive in order. An
-// element that cannot have content, such as the <meta itemprop content> that
-// most microdata is written with, is never pushed: it has no end tag to pop it,
-// and the stack would never come back down.
+// shape is recovered with a stack, and the stack has to be of open *elements*
+// rather than of open scopes, because the question is where an element ended and
+// an end-tag callback does not answer it. HTML lets an element be closed by the
+// next start tag - <p itemprop=a>x<p itemprop=b>y is two properties - and there
+// is no end tag for the first one: its callback runs at the enclosing element's
+// end tag instead, by which time the second property's text has already gone by.
+// Popping there gave "a" the value "xy" and made every following property a child
+// of a scope that had closed.
+//
+// So this keeps every open element and applies the specification's implied end
+// tags on each start tag, the way examples/gip/markdown and examples/gip/depth
+// do, and closes a scope or a property when its element leaves that stack. That
+// costs an end-tag registration per element, which is the price of being exact
+// about where content ends; a program that only needs positions can register far
+// fewer. An element that cannot have content, such as the <meta itemprop content>
+// that most microdata is written with, is never pushed: it has no end tag to pop
+// it, and the stack would never come back down.
 //
 // One thing this program has to decide that a rewriting program does not. An
 // element can carry the same attribute twice, and the API is split about it:
@@ -43,7 +55,7 @@ import (
 type scope struct {
 	typ   string // the last path segment of itemtype, or "item"
 	path  string // the dotted path from the outermost scope
-	depth int    // stack depth when it was pushed, for matching the end tag
+	depth int    // open-element depth it was pushed at, so it closes with its element
 }
 
 // A pair is one line of the report.
@@ -82,6 +94,14 @@ func (r *reader) validate() error {
 }
 
 func (r *reader) options() []lolhtml.Option {
+	// open is every element the source has open at this point. It is what makes an
+	// implicitly closed element close where it actually ended rather than where its
+	// callback happens to arrive; see the package comment.
+	var open []string
+	// seen is the source offset of every end-tag token already applied. One token
+	// reaches this program once per element it closes, and the stack must move once.
+	seen := map[int]bool{}
+
 	var stack []scope
 
 	// Text properties being gathered. A stack rather than one, because an
@@ -90,12 +110,61 @@ func (r *reader) options() []lolhtml.Option {
 	// the outer value is "before in after" and the inner one is "in". A single
 	// variable produced "in" twice and lost the outer entirely.
 	type pending struct {
-		key  string
-		text strings.Builder
+		key   string
+		depth int // open-element depth, as for a scope
+		text  strings.Builder
 	}
-	var open []*pending
+	var props []*pending
+
+	// popTo unwinds the open elements to n deep, finishing whatever microdata was
+	// opened inside them: a property's value is complete when its element ends,
+	// wherever that turns out to be.
+	popTo := func(n int) {
+		for len(open) > n {
+			open = open[:len(open)-1]
+			d := len(open)
+			for len(props) > 0 && props[len(props)-1].depth > d {
+				p := props[len(props)-1]
+				props = props[:len(props)-1]
+				r.add(p.key, squash(decoded(p.text.String())))
+			}
+			for len(stack) > 0 && stack[len(stack)-1].depth > d {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
 
 	return []lolhtml.Option{
+		// The open-element stack is kept for every element, not only for the ones
+		// carrying microdata: what closes an itemprop is the next start tag, and
+		// that tag need not carry anything itself.
+		lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+			tag := e.TagName()
+			popTo(impliedEnd(open, tag))
+			if !e.CanHaveContent() {
+				// Nothing can be inside it, so it never goes on the stack.
+				return nil
+			}
+			open = append(open, tag)
+			return e.OnEndTag(func(t *lolhtml.EndTag) error {
+				at := t.SourceLocation().Start
+				if seen[at] {
+					return nil
+				}
+				seen[at] = true
+				// Pop to and including the innermost open element of that name.
+				// An end tag that matches nothing open is stray and changes
+				// nothing.
+				for i := len(open) - 1; i >= 0; i-- {
+					if open[i] == t.Name() {
+						popTo(i)
+						return nil
+					}
+				}
+				return nil
+			})
+		}),
+
 		lolhtml.OnElement("[itemscope], [itemprop]", func(e *lolhtml.Element) error {
 			// Read through Attribute, not through the iterator: an element can
 			// carry itemprop twice, and the first copy is the one a parser
@@ -127,17 +196,16 @@ func (r *reader) options() []lolhtml.Option {
 					r.items++
 				}
 				if !e.CanHaveContent() {
-					// No end tag will arrive, so pushing it would leave the
-					// stack permanently deeper. A scope with no content has no
-					// properties either, so nothing is lost.
+					// It is not on the open-element stack, so nothing would
+					// ever close it. A scope with no content has no properties
+					// either, so nothing is lost.
 					r.note("an itemscope on an element with no content was skipped")
 					return nil
 				}
-				stack = append(stack, scope{typ: typ, path: path, depth: len(stack)})
-				return e.OnEndTag(func(*lolhtml.EndTag) error {
-					stack = stack[:len(stack)-1]
-					return nil
-				})
+				// len(open) is this element's own depth: the handler above ran
+				// first and pushed it.
+				stack = append(stack, scope{typ: typ, path: path, depth: len(open)})
+				return nil
 			}
 
 			if key == "" {
@@ -156,23 +224,89 @@ func (r *reader) options() []lolhtml.Option {
 				r.note("an itemprop with no value attribute and no content")
 				return nil
 			}
-			p := &pending{key: key}
-			open = append(open, p)
-			return e.OnEndTag(func(*lolhtml.EndTag) error {
-				open = open[:len(open)-1]
-				r.add(p.key, squash(decoded(p.text.String())))
-				return nil
-			})
+			props = append(props, &pending{key: key, depth: len(open)})
+			return nil
 		}),
 
 		lolhtml.OnDocumentText(func(tc *lolhtml.TextChunk) error {
 			// Every open property gets the text: it belongs to all of them.
-			for _, p := range open {
+			for _, p := range props {
 				p.text.WriteString(tc.Text())
 			}
 			return nil
 		}),
 	}
+}
+
+// impliedEnd applies the specification's implied end tags for a start tag named
+// next, and returns how many of the open elements are left: the element next
+// closes, and everything still open inside it.
+//
+// Each rule has a barrier, because these only reach within their own structure. A
+// <li> closes an open list item in the same list and not one in a list two levels
+// out, which is what stops a malformed document from unwinding the whole stack.
+// Written this way rather than as a test of the innermost element alone, because
+// the element being closed need not be innermost: the second <li> of
+// <ul><li><em>a<li>b</ul> ends the <em> as well as the item.
+func impliedEnd(open []string, next string) int {
+	n := len(open)
+	through := func(want, barrier map[string]bool) {
+		for i := n - 1; i >= 0; i-- {
+			if want[open[i]] {
+				n = i
+				return
+			}
+			if barrier[open[i]] {
+				return
+			}
+		}
+	}
+	switch next {
+	case "li":
+		through(set("li"), set("ul", "ol", "menu"))
+	case "dd", "dt":
+		through(set("dd", "dt"), set("dl"))
+	case "td", "th":
+		through(set("td", "th"), set("tr", "table"))
+	case "tr":
+		through(set("tr"), set("table", "tbody", "thead", "tfoot"))
+	case "option":
+		through(set("option"), set("select", "datalist"))
+	case "optgroup":
+		through(set("option", "optgroup"), set("select"))
+	case "rt", "rp":
+		through(set("rt", "rp"), set("ruby"))
+	}
+	// A paragraph is closed by any of the block elements that cannot be inside
+	// one. Nothing above a <p> on the stack is a block, so there is no barrier to
+	// respect.
+	if closesAParagraph[next] {
+		through(set("p"), nil)
+	}
+	return n
+}
+
+func set(names ...string) map[string]bool {
+	m := make(map[string]bool, len(names))
+	for _, n := range names {
+		m[n] = true
+	}
+	return m
+}
+
+// closesAParagraph is the set of start tags that end an open <p>. A paragraph
+// cannot contain flow content that is itself a block, so the parser closes it
+// rather than nesting.
+var closesAParagraph = map[string]bool{
+	"address": true, "article": true, "aside": true, "blockquote": true,
+	"center": true, "details": true, "dialog": true, "dir": true, "div": true,
+	"dl": true, "dt": true, "dd": true, "fieldset": true, "figcaption": true,
+	"figure": true, "footer": true, "form": true, "h1": true, "h2": true,
+	"h3": true, "h4": true, "h5": true, "h6": true, "header": true,
+	"hgroup": true, "hr": true, "li": true, "listing": true, "main": true,
+	"menu": true, "nav": true, "ol": true, "p": true, "plaintext": true,
+	"pre": true, "search": true, "section": true, "summary": true,
+	"table": true, "ul": true, "xmp": true,
 }
 
 // pathFor builds the dotted key for a property in the current scope.

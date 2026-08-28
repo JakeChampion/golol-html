@@ -94,10 +94,19 @@ type Result struct {
 	TextBefore string
 }
 
-// Meta is the tag this writes. The content is attribute-value source, so a value from the
-// environment is escaped rather than trusted: a deploy id is not markup.
+// Meta is the tag this writes. Both values are attribute-value source, so both are escaped
+// rather than trusted: neither a deploy id nor the name it is given is markup.
+//
+// Escaped with EscapeAttribute and quoted by hand, not with %q. Go's %q is strconv.Quote,
+// which is Go string quoting and not HTML attribute quoting, and the two differ in exactly
+// the way that matters here. It escapes a double quote as \" and HTML honours no backslash
+// escapes, so the attribute value simply ends at that quote: a name of
+// `x"><img src=q onerror=alert(1)><meta z="` came out as three nodes, one of them a live
+// img. And it escapes what Go considers unprintable, so a tab in the id reached the document
+// as the two characters \t rather than as a tab.
 func (r Result) Meta() string {
-	return fmt.Sprintf(`<meta name=%q content=%q>`, r.Name, lolhtml.EscapeAttribute(r.ID))
+	return `<meta name="` + lolhtml.EscapeAttribute(r.Name) +
+		`" content="` + lolhtml.EscapeAttribute(r.ID) + `">`
 }
 
 func (r Result) String() string {

@@ -39,11 +39,23 @@ import (
 )
 
 // skipped elements hold content that is not prose, and where escaping would
-// corrupt rather than protect.
+// corrupt rather than protect. These are the ones that are not raw text: the
+// raw-text names are asked of the library instead, in skip below.
 var skipped = map[string]bool{
-	"script": true, "style": true, "title": true, "textarea": true,
-	"template": true, "noscript": true, "iframe": true, "xmp": true,
-	"noembed": true, "noframes": true, "option": true, "select": true,
+	"template": true, "option": true, "select": true,
+}
+
+// skip reports whether an element's content is left alone.
+//
+// The raw-text half of the question goes to lolhtml.IsRawText rather than to a
+// list written out here. A hand-copied list is the failure the library documents:
+// it had ten names and this file had nine, and the missing one was plaintext -
+// whose text was escaped, so "&" and "<b>" reached the output as "&amp;" and
+// "&lt;b&gt;" and a browser rendered them literally. That is the corruption the
+// package comment above says this program avoids, arriving by way of a copy that
+// had fallen behind.
+func skip(tag string) bool {
+	return skipped[tag] || lolhtml.IsRawText(tag)
 }
 
 // Marks are the characters put around a match. They must not be markup, which is
@@ -96,14 +108,28 @@ func Highlight(dst io.Writer, src io.Reader, terms []string, marks Marks) (Resul
 	w, err := lolhtml.NewWriter(dst,
 		lolhtml.OnElement("*", func(e *lolhtml.Element) error {
 			tag := e.TagName()
-			if !skipped[tag] || !e.CanHaveContent() {
+			if !skip(tag) || !e.CanHaveContent() {
 				return nil
 			}
 			depth++
 			return e.OnEndTag(func(t *lolhtml.EndTag) error {
-				if t.Name() != tag {
-					return nil
-				}
+				// No name guard here, deliberately. The usual
+				// "t.Name() != tag" test decides whether a *position* belongs
+				// to this element; this handler takes no position and only
+				// needs to know the content is over. End tags are omissible in
+				// HTML - </option> almost always is - and an element closed
+				// implicitly is handed the enclosing end tag, whose name
+				// differs: guarding on it left depth raised for the rest of the
+				// document, so nothing after the first <option> was ever
+				// highlighted. One call per registration, innermost first, so
+				// the counter balances without the guard.
+				//
+				// It can still be called later than the element ended, when a
+				// sibling's start tag was what closed it. That skips a little
+				// too much rather than too little, which is the safe direction
+				// for this program; being exact would mean keeping the stack of
+				// open elements and applying implied end tags, as
+				// examples/gip/markdown does.
 				depth--
 				return nil
 			})

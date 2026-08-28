@@ -93,7 +93,6 @@ func (e *enforcer) options() []lolhtml.Option {
 	// canonical link could occupy in the head, which is what makes "rewrite the
 	// first or insert one, never both" a single-pass decision.
 	headRegion := true
-	sawHead := false
 	seen := 0
 
 	return []lolhtml.Option{
@@ -122,11 +121,22 @@ func (e *enforcer) options() []lolhtml.Option {
 		}),
 
 		lolhtml.OnElement("head", func(el *lolhtml.Element) error {
-			sawHead = true
 			if !el.CanHaveContent() {
 				return nil
 			}
 			return el.OnEndTag(func(end *lolhtml.EndTag) error {
+				if end.Name() != "head" {
+					// </head> is optional in HTML and nothing synthesises
+					// one: when it is left out the head is closed by
+					// <body>, and this callback runs against the tag that
+					// did close it - </body> or </html>, an enclosing
+					// element's. A position taken from that tag is not in
+					// the head, so end.Before() wrote the canonical link
+					// into the body, which is the one place this program
+					// says it must not be. The <body> handler below is the
+					// insertion point for that shape, and it runs first.
+					return nil
+				}
 				defer func() { headRegion = false }()
 				return e.insertIfMissing(seen, func(markup string) error {
 					return end.Before(markup, lolhtml.HTML)
@@ -136,7 +146,12 @@ func (e *enforcer) options() []lolhtml.Option {
 
 		lolhtml.OnElement("body", func(el *lolhtml.Element) error {
 			defer func() { headRegion = false }()
-			if sawHead {
+			if !headRegion {
+				// The head ended at its own </head> and the decision was
+				// taken there. Otherwise this is the end of the head -
+				// whether the document had no head element at all or only
+				// left its end tag out - and inserting before <body> lands
+				// in the head a parser builds.
 				return nil
 			}
 			return e.insertIfMissing(seen, func(markup string) error {
@@ -153,7 +168,8 @@ func (e *enforcer) options() []lolhtml.Option {
 			case e.inserted == 0 && !headRegion:
 				e.note("no canonical link, and the head had already closed")
 			case e.inserted == 0:
-				e.note("no head and no body to insert the canonical link into")
+				e.note("nowhere to insert the canonical link: the source had " +
+					"neither </head> nor <body>")
 			}
 			return nil
 		}),

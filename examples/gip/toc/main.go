@@ -275,15 +275,21 @@ func (b *tocBuilder) onePass(src io.Reader, dst io.Writer) error {
 // renderList builds a nested list, with each sublist inside the <li> it belongs
 // to rather than beside it.
 //
-// The heading text is written through unescaped, and that is deliberate: text
-// read from the document arrives as raw source, with character references still
-// encoded. Escaping it again turns "Configure &amp; run" into
-// "Configure &amp;amp; run", which is what an earlier version of this did.
-// Re-emitting source text as HTML round-trips, because a literal < could not
-// have been text in the first place.
+// The heading text is decoded and then escaped again, which is the same
+// discipline as the id below and for the same reason. Writing the source text
+// straight through as HTML looks like a round trip - the text arrives as raw
+// source, with character references still encoded, so escaping it a second time
+// would turn "Configure &amp; run" into "Configure &amp;amp; run" - and the
+// justification for it was that a literal < could not have been text in the first
+// place. It can: OnText fires for text in the heading's descendants too, and
+// inside a raw-text one a literal < is text, so
+// <h2>Hi<script>document.write("<img src=x onerror=alert(1)>")</script></h2> put a
+// live img into the table of contents. Decoded first and escaped after keeps
+// "Configure &amp; run" intact and makes that < a &lt;.
 //
-// The id cannot be written through the same way, because it is being put inside
-// quotes this function chose. See the comment where it is written.
+// Decoding is a small lie for the raw-text case, where a parser does not decode
+// references - a "&amp;" written inside that script becomes "&" in the contents -
+// and it is the escaping that matters here.
 func renderList(entries []entry) string {
 	if len(entries) == 0 {
 		return ""
@@ -324,15 +330,15 @@ func renderList(entries []entry) string {
 			sb.WriteString("</li>")
 		}
 
-		// The id is escaped and the text is not, and the difference is the
-		// point. Both arrive as raw source, but the id is going into an
-		// attribute this function is quoting itself, and a single-quoted id in
-		// the document may hold a bare double quote: a heading with
-		// id='a" onmouseover="alert(1)' put a working event handler in the
-		// table of contents. Decoded first and escaped after, so an id of
-		// "a&amp;b" does not come out as "a&amp;amp;b".
+		// Both are decoded and then escaped, each for the position it is going
+		// into. The id is going inside quotes this function chose, and a
+		// single-quoted id in the document may hold a bare double quote: a
+		// heading with id='a" onmouseover="alert(1)' put a working event
+		// handler in the table of contents. Decoded first and escaped after, so
+		// an id of "a&amp;b" does not come out as "a&amp;amp;b".
 		fmt.Fprintf(&sb, `<li><a href="#%s">%s</a>`,
-			lolhtml.EscapeAttribute(stdhtml.UnescapeString(e.id)), e.text)
+			lolhtml.EscapeAttribute(stdhtml.UnescapeString(e.id)),
+			lolhtml.EscapeText(stdhtml.UnescapeString(e.text)))
 		openLi = true
 	}
 
