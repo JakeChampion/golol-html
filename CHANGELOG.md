@@ -7,6 +7,197 @@
      scripts/changelog.sh. Editing this section directly conflicts with
      every other open branch; changelog.d/README.md says why. -->
 
+## v0.2.0
+
+The first release cut from this history. `v0.1.1` was tagged on an earlier one
+that `main` shares no ancestor with and whose tree `main` has never held, so
+`go get` - which resolves to the highest semver tag - served a prototype 521
+files and 144,120 lines behind the library, without `CheckRawText`,
+`CheckComment`, `DecodesCharacterReferences` or `ErrReentrant`. Everything
+below had been merged and was reachable by nobody installing the documented
+way. A minor bump rather than a patch because, against what `v0.1.1` published,
+this is a different API.
+
+- Unreleased changelog entries move to `changelog.d/`, one file per change,
+  folded into `CHANGELOG.md` at release time by `scripts/changelog.sh`. The
+  Unreleased list was a single list that every branch appended to at the same
+  point, so two open pull requests conflicted there by construction - and every
+  merge to `main` re-conflicted every other open branch, whatever else they
+  touched. Four open pull requests, none of them near each other in the code,
+  were all conflicted in exactly this one file.
+
+  `scripts/check-changelog.sh` runs in the lint job and fails a branch that adds
+  an entry to `CHANGELOG.md` instead of a fragment. It looks for an added `- `
+  bullet rather than any edit, so fixing a typo in a released section is still
+  free, and a release fold - the one commit that is supposed to add entries - is
+  recognised by the fragments it deletes in the same diff.
+
+- Documentation corrections, each against the behaviour the tests already
+  measure: the README's strict-mode trigger list gave the `<frameset>` set as the
+  `<select>` set minus `<noframes>`, when it is that plus `<script>` and
+  `<textarea>`; the README and `docs/gip/wontfix.md` said a retained unit
+  "returns `ErrDetached`", when only a mutator does and a getter answers with a
+  silent zero value; `SPEC.md` contradicted itself and the tests on what
+  `SetAttribute` escapes, which is the double quote and nothing else;
+  `known-behaviours.md` B16 still described the behaviour from before the
+  raw-text guard and cited a test that no longer exists; `SPEC.md`'s layout and
+  deferred sections named files that do not exist, the wrong `make` target, a
+  stale platform list and a stale benchmark count; and `SourceLocation` carried
+  two versions of the same paragraph, the first of which stated the claim the
+  second corrects.
+
+  New notes for behaviour that was only ever implicit: `Writer.Write` says that
+  the destination is handed a view of lol-html's own buffer rather than a copy,
+  so a destination that retains it holds a pointer into freed native memory;
+  `NewWriter` says that the cleanup which frees a Writer dropped without `Close`
+  cannot run at all if a handler closes over the Writer, because the handle table
+  then keeps it reachable; `StreamFunc` says that none of the streaming
+  insertions is checked for a raw-text breakout; and the README's memory section
+  says that bounding an untrusted rewrite takes a limit, a bounded input and
+  care with `OnEndTag`, rather than any one of the three.
+
+- Token lengths no longer narrow to a 32-bit `int` on the way out of C, so a
+  token larger than 2 GiB is copied whole rather than truncated.
+
+  `C.GoStringN` and `C.GoBytes` take a `C.int` length, and lol-html reports a
+  `size_t`. Nothing bounds the size of a comment or a text node, so a token past
+  2 GiB kept only the low 32 bits - silently halving a 4 GiB one, and panicking
+  outright whenever bit 31 landed set. The conversion now carries the length the
+  library actually reported. It still costs exactly one allocation per string,
+  which is what `alloc_test.go` pins: the shorter `string(unsafe.Slice(...))`
+  would sometimes cost none, but only for a short result the caller discards, and
+  a per-call cost that depends on the length of a document's identifiers is not
+  one worth documenting.
+
+- An option carrying a nil handler is refused by `NewWriter`, and
+  `Element.OnEndTag(nil)` is refused where it is called.
+
+  `ErrNilOption` refuses a nil `Option` on the grounds that "a rewrite that
+  quietly did less than it was told to is worse than one that did not start", but
+  `OnElement("p", nil)` is a non-nil option carrying nothing, and it was exactly
+  that quiet skip: the rewrite built, ran, matched, did nothing and reported
+  success. `OnComment`, `OnText`, `OnDoctype`, `OnDocumentComment`,
+  `OnDocumentText` and `OnDocumentEnd` all behaved the same way. The error names
+  the call the caller wrote, since that is what they have to go and find.
+
+  `Element.OnEndTag(nil)` was the sharper edge: it registered the nil function,
+  cost a handle for the rest of the rewrite, and dereferenced it when the end tag
+  arrived - reaching the caller as a nil-pointer panic out of `Write`, with the
+  Writer poisoned and the stack pointing at the library.
+
+- The vendored archives are now shown to come from the pinned lol-html revision
+  rather than assumed to: all seven rebuild bit-for-bit from `608cc4a`, which is
+  upstream's `v3.0.1`, with the pinned `rustc 1.95.0`. `docs/provenance.md`
+  records what that establishes, the exact commands, and what is left over as
+  trust.
+
+  It also records why `make verify` reports `DIFFERS` on almost every machine
+  while nothing is wrong: rustc embeds the absolute path of the source tree and
+  of `CARGO_HOME` in metadata that survives stripping, so the same revision
+  built with the same compiler somewhere else hashes differently. The script
+  used to blame the toolchain patch version for this, which sent a reader after
+  the wrong thing; it now names the paths to recreate, and the lasting fix
+  (`--remap-path-prefix`) for whoever does the next rebuild.
+
+- `scripts/check-abi.sh` pins the vendored header against the archives beside
+  it, run from `make lint` and CI. C linkage carries no type information, so a
+  header that has drifted from its binary is silent corruption rather than a
+  compile error, and the header is the only description of those archives that
+  anything reads. It checks that every symbol the binding calls is declared and
+  defined in all seven archives, that the seven export an identical set, and -
+  on the host archive, because this part has to run the code - that the structs
+  and callback signatures behave as the header describes.
+
+  Nothing was wrong. The one thing it found is that the archives export four
+  functions the header does not declare - `lol_html_comment_streaming_before`,
+  `_after`, `_replace` and `lol_html_end_tag_replace` - which is why there is no
+  `Comment.StreamBefore` or non-streaming `EndTag.Replace` in the Go API. They
+  work when declared by hand, so this is an upstream cbindgen gap rather than a
+  bad header sync, and the check pins the set of four so a change to it is
+  noticed.
+
+- `Writer.Write` and `Writer.Close` refuse a reentrant call with the new
+  `ErrReentrant`, rather than re-entering lol-html from inside a handler.
+
+  A handler runs in the middle of `lol_html_rewriter_write`, and lol-html has no
+  idea it is being called. A nested `Write` handed the same rewriter to Rust
+  twice - a second `&mut` alias - and corrupted the parser state, which surfaced,
+  when it surfaced at all, as an internal consistency error against a document
+  that was fine; the outer `Write` still reported success. A nested `Close` was
+  worse: it finished the document and freed the rewriter and every handle
+  underneath the call still running on them, which was demonstrated to crash
+  inside the output sink of a rewriter that had already been freed.
+
+  The reflex it refuses is stopping early from a handler. Return an error from
+  the handler instead: `Write` reports it, and the Writer is left poisoned rather
+  than half-freed. Nothing changes for a Writer driven the ordinary way - the
+  guard is per call, not sticky, and a refused call leaves the Writer exactly as
+  it found it, so the interrupted call still reports whatever it was going to.
+
+- `NewWriter`'s error paths free the rewriter builder before the selectors it
+  accepted, which is the order lol-html asks for.
+
+  The header is explicit - "Deallocate all dependant rewriter builders first and
+  then use `lol_html_selector_free`" - and the success path honoured it. Both
+  error paths did the reverse: the builder was freed by a `defer`, so it ran
+  after the `release()` that frees the selectors. Reachable with two handlers
+  whose second selector fails to parse, or with any valid selector plus a bad
+  encoding. Today's upstream builder drop only releases borrowed references
+  without dereferencing them, so nothing crashed; the ordering was a bet on an
+  implementation detail against a documented contract, and it is now freed
+  explicitly on each path instead.
+
+- A panic from the destination `io.Writer` is now contained the way a panic from
+  a handler always was: parked at the callback boundary and re-raised from
+  `Write` or `Close` on the caller's goroutine.
+
+  The output sink is the one `//export`ed callback that runs user code without
+  being a handler, and it called the destination with no recover around it. A
+  destination that panicked therefore unwound through lol-html's own frames,
+  which are built with `panic = "abort"` and carry no cleanup: the drop callbacks
+  those frames own never ran, so their handles leaked, and the rewriter was then
+  freed from underneath a write that had been abandoned mid-document. Reachable
+  from ordinary code - `bytes.Buffer` panics with `bytes.ErrTooLarge` when it
+  cannot grow, and `Rewrite` writes into one - and from any `http.ResponseWriter`
+  that panics. `panic_test.go` now covers the destination alongside every
+  handler.
+
+- `differential`'s `golang.org/x/net` moves from v0.35.0 to v0.55.0, clearing
+  eight advisories in `x/net/html` - the package it uses as its second opinion
+  on what a document means. Two of them are a quadratic parse and an infinite
+  loop on hostile markup, which is not what you want in an oracle fed generated
+  documents. Test-only either way: `differential` is a separate module with a
+  `replace`, so nothing about it reaches a consumer's module graph.
+
+  v0.55.0 rather than latest, and the ceiling is measured: v0.56.0 changes what
+  the oracle says about a NUL in an attribute value, the `<select>` content
+  model, and what a rename does to content, so v0.56.0 and later fail three
+  tests here. Those are upstream conformance changes, so moving past v0.55.0
+  means deciding which behaviour is right and rewriting the expectations rather
+  than bumping a number. The reasoning is in `differential/go.mod` where the
+  next person to try will see it.
+
+- The 171 example applications under `examples/gip` were audited and 129
+  confirmed defects fixed. None was a defect in the library, which behaved
+  correctly in all of them; CI already ran every one of these programs on every
+  platform, so they compiled and ran, and what nobody had checked was whether
+  they were right.
+
+  Five turned inert input into executing markup, which matters more here than in
+  ordinary code because these files exist to be copied: `absolutise` let a
+  document's own `<base href>` into a hand-assembled report comment, where a
+  crafted query carrying `-->` ended the comment and the rest became markup;
+  `inlinesvg` inlined an `<iframe srcdoc>` inside a `<foreignObject>` verbatim;
+  `toc` put heading text in unescaped; `idmerge` and `deployid` quoted HTML
+  attributes with Go's `%q`, where a backslash escapes nothing. Four more were
+  bypasses one character reference wide, and `sandbox`'s "no host means same
+  origin" exempted `data:`, `blob:` and `javascript:`.
+
+  The largest class was seventeen apps holding a depth counter that never came
+  back down, because an omitted end tag never fires `Element.OnEndTag` - so the
+  feature switched off for the rest of the document while the output still
+  looked right. `docs/audit-examples-2026-08-28.md` is the catalogue.
+
 - Added `DecodesCharacterReferences`, the predicate for the reading question.
   `IsRawText` answers the writing one - can content written into this element end
   it - and the same ten names come up in a second question with a different
