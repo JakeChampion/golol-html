@@ -154,10 +154,14 @@ type converter struct {
 	// depth is how many skipped elements this position is inside.
 	depth int
 	// node accumulates a text node, because a quantity can straddle chunks.
+	//
+	// The text is kept here, not the chunks. A *TextChunk is valid only inside the
+	// handler that received it, and a retained one answers every getter with a zero
+	// value and silently does nothing when told to Remove - so holding the chunks of
+	// a node in a slice, to remove them once the whole node is known, removes nothing
+	// and duplicates every text node, with no error anywhere to say so. Each chunk is
+	// removed in its own handler instead; see text below.
 	node strings.Builder
-	// chunks are the chunks of the node so far, so they can be removed once the
-	// whole node is known.
-	pending []*lolhtml.TextChunk
 }
 
 func (c *converter) options() []lolhtml.Option {
@@ -181,10 +185,16 @@ func (c *converter) element(e *lolhtml.Element) error {
 		return nil
 	}
 	c.res.Regions++
-	c.depth++
 	if !e.CanHaveContent() {
+		// A self-closing foreign element - <svg><title/>, <svg><style/> - has no
+		// content to skip and no end tag to wait for, so OnEndTag would return an
+		// error rather than register anything. The counter must not go up either:
+		// the decrement lives in that handler, so raising it here would leave depth
+		// permanently above zero and text() returns immediately whenever it is,
+		// which silently disables the rewrite for the whole rest of the document.
 		return nil
 	}
+	c.depth++
 	return e.OnEndTag(func(*lolhtml.EndTag) error {
 		c.depth--
 		return nil

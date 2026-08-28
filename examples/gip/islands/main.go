@@ -169,9 +169,12 @@ func Annotate(src io.Reader, attr, def string) (Result, error) {
 				is.Parent = stack[len(stack)-1]
 			}
 
-			// A page that already said how this island hydrates keeps its answer.
+			// A page that already said how this island hydrates keeps its answer -
+			// and keeps its own spelling of it.
+			declared := false
 			switch existing, ok := e.Attribute("data-hydrate"); {
 			case ok && existing != "":
+				declared = true
 				is.Hydrate = html.UnescapeString(existing)
 			case is.Parent != "":
 				is.Hydrate = "parent"
@@ -182,8 +185,17 @@ func Annotate(src io.Reader, attr, def string) (Result, error) {
 			if err := e.SetAttribute("data-island-id", id); err != nil {
 				return err
 			}
-			if err := e.SetAttribute("data-hydrate", is.Hydrate); err != nil {
-				return err
+			// Only when the page did not write one. Attribute returns raw source
+			// text with character references still encoded and SetAttribute takes
+			// raw source text, so reading a value, decoding it and writing it
+			// straight back decodes it once too often: data-hydrate="a&amp;amp;b"
+			// came out as "a&amp;b", and what a browser reads changed from
+			// "a&amp;b" to "a&b". The manifest holds the decoded form, the
+			// document keeps the encoded one - the same split props relies on.
+			if !declared {
+				if err := e.SetAttribute("data-hydrate", is.Hydrate); err != nil {
+					return err
+				}
 			}
 			if is.Parent != "" {
 				if err := e.SetAttribute("data-island-parent", is.Parent); err != nil {

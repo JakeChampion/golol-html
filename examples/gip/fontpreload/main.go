@@ -239,7 +239,6 @@ func (in *injector) options() []lolhtml.Option {
 	// A preload the page already has, matched on href so the same font linked
 	// under a different rel is not mistaken for one.
 	have := map[string]bool{}
-	sawHead := false
 	placed := false
 
 	return []lolhtml.Option{
@@ -249,11 +248,22 @@ func (in *injector) options() []lolhtml.Option {
 		}),
 
 		lolhtml.OnElement("head", func(e *lolhtml.Element) error {
-			sawHead = true
 			if !e.CanHaveContent() {
 				return nil
 			}
 			return e.OnEndTag(func(end *lolhtml.EndTag) error {
+				if end.Name() != "head" {
+					// </head> is optional and nothing synthesises one.
+					// When it is left out the head is closed by <body>,
+					// and this callback runs against the tag that did
+					// close it - </body> or </html>, an enclosing
+					// element's. A preload written there is emitted after
+					// the whole document has been parsed, which is after
+					// every resource it was meant to warm up. The <body>
+					// handler below is the insertion point for that shape,
+					// and it runs first.
+					return nil
+				}
 				if placed {
 					return nil
 				}
@@ -265,7 +275,11 @@ func (in *injector) options() []lolhtml.Option {
 		}),
 
 		lolhtml.OnElement("body", func(e *lolhtml.Element) error {
-			if sawHead || placed {
+			// The test is whether the hints have gone in, not whether a head
+			// was seen: a document with a head but no </head> reaches here
+			// with the head still open, and <body> is exactly where that head
+			// ends. Inserting before it lands in the head a parser builds.
+			if placed {
 				return nil
 			}
 			placed = true

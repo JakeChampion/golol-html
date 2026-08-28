@@ -244,7 +244,21 @@ func (s *scanner) element(e *lolhtml.Element) error {
 			return e.OnEndTag(func(t *lolhtml.EndTag) error {
 				for i := len(s.open) - 1; i >= 0; i-- {
 					if s.open[i] == c {
-						c.end = t.SourceLocation().End
+						// The extent is taken only from this element's
+						// own end tag. </p> and </li> are omissible and
+						// <p> is a candidate here: a following <div>
+						// closes it implicitly, so this handler runs
+						// against the ancestor's end tag and a position
+						// taken from it is the ancestor's extent, not
+						// this element's. The nesting check below would
+						// then read every later sibling as nested inside
+						// the p and drop its role. Left at the start tag,
+						// the extent contains nothing - which is the right
+						// answer for an element whose content this program
+						// cannot delimit.
+						if t.Name() == name {
+							c.end = t.SourceLocation().End
+						}
 						s.open = append(s.open[:i], s.open[i+1:]...)
 						return nil
 					}

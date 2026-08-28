@@ -256,9 +256,17 @@ func (c *coverage) run(sels []string, src io.Reader) error {
 // reason if not. Asking beats maintaining a list: the answer comes from the same
 // code that will do the matching.
 func unsupported(sel string) string {
-	_, err := lolhtml.NewWriter(io.Discard,
+	w, err := lolhtml.NewWriter(io.Discard,
 		lolhtml.OnElement(sel, func(*lolhtml.Element) error { return nil }))
 	if err == nil {
+		// Closed rather than dropped. Every Writer has to be Closed, including
+		// one built only to be thrown away: the drop cleanup is a backstop, not
+		// a second way of doing this, and it runs whenever the garbage collector
+		// gets round to it. This probe runs once per selector, and the stylesheet
+		// this program is written for has thousands of rules - so discarding the
+		// Writer here left thousands of live rewriters and their selectors alive
+		// at once.
+		w.Close()
 		return ""
 	}
 	var se *lolhtml.SelectorError

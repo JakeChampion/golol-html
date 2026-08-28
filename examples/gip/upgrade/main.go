@@ -135,6 +135,15 @@ func (u *upgrader) options() []lolhtml.Option {
 
 		// A <style> body. Accumulated whole, replaced at the end tag.
 		lolhtml.OnElement("style", func(e *lolhtml.Element) error {
+			// Selectors ignore namespaces, so "style" also matches
+			// <svg><style/> - ordinary SVG, self-closing, and an element that
+			// cannot have content. OnEndTag on such an element returns an error
+			// rather than silently doing nothing, and that error fails the
+			// rewrite after a prefix has already been written to the client. It
+			// has no body to accumulate either, so there is nothing to do.
+			if !e.CanHaveContent() {
+				return nil
+			}
 			u.css.Reset()
 			u.inStyle = true
 			return e.OnEndTag(func(t *lolhtml.EndTag) error {
@@ -164,6 +173,21 @@ func (u *upgrader) options() []lolhtml.Option {
 			// rewritten body replaces the original rather than joining it.
 			t.Remove()
 			return nil
+		}),
+
+		// An end-tag handler for an element nothing closes never runs at all, and
+		// the text handler has already removed every chunk of the body - so a
+		// <style> the source leaves open would lose its whole stylesheet, with the
+		// program still reporting success. The document end is the only remaining
+		// position for it, and it is inside the still-open element.
+		lolhtml.OnDocumentEnd(func(d *lolhtml.DocumentEnd) error {
+			if !u.inStyle {
+				return nil
+			}
+			u.inStyle = false
+			got, n := u.upgradeCSS(u.css.String())
+			u.cssUpgraded += n
+			return d.Append(got, lolhtml.HTML)
 		}),
 
 		// Navigations are counted, not changed.

@@ -128,6 +128,15 @@ func Read(r io.Reader) (*Schema, error) {
 	// to one.
 	selectDepth := 0
 	rawInSelect := 0
+	// optionOwner is the select whose option is currently accumulating text, and
+	// optionSelected whether that option carried a selected attribute. An option's end tag
+	// is omissible - <option>date<option>score is valid - and every option in such a select
+	// reaches OnEndTag against the same </select>, all reading the one shared builder, which
+	// by then holds only the last option's text. So an option is closed by whatever actually
+	// closed it: the next option's start tag, the select's end tag, or its own </option>
+	// when the source spells one.
+	var optionOwner *Field
+	optionSelected := false
 
 	// attr reads an attribute through Attribute - the first copy, which is the one a parser
 	// keeps and so the one a browser submits - and decodes it, because a schema holds what
@@ -145,6 +154,22 @@ func Read(r io.Reader) (*Schema, error) {
 			schema.decoded = true
 		}
 		return stdhtml.UnescapeString(raw)
+	}
+
+	// flushOption records the option whose text has been accumulating, if there is one. It
+	// is idempotent, so it can be called at every position that could have closed an option.
+	flushOption := func() {
+		if optionOwner == nil {
+			return
+		}
+		v := strings.TrimSpace(stdhtml.UnescapeString(text.String()))
+		text.Reset()
+		optionOwner.Options = append(optionOwner.Options, v)
+		if optionSelected {
+			optionOwner.Value = v
+		}
+		optionOwner = nil
+		optionSelected = false
 	}
 
 	handlers := []lolhtml.Option{
@@ -260,6 +285,8 @@ func Read(r io.Reader) (*Schema, error) {
 			}
 			return e.OnEndTag(func(*lolhtml.EndTag) error {
 				selectDepth--
+				// </select> closes a last option that had no end tag of its own.
+				flushOption()
 				// A select with no selected option submits its first one, which is
 				// what a browser does and what a replay has to send.
 				if pending.Value == "" && len(pending.Options) > 0 {
@@ -275,9 +302,13 @@ func Read(r io.Reader) (*Schema, error) {
 			if field == nil || field.Type != "select" || selectDepth == 0 {
 				return nil
 			}
+			// A start tag is one of the things that closes a previous option: an
+			// option's end tag is optional, so <option>date<option>score is two
+			// options and the second tag is what ends the first.
+			flushOption()
 			// An option's value is its value attribute, or its text when it has none -
 			// and its text needs the same accumulation a textarea's does, so an option
-			// without a value attribute is recorded at its end tag.
+			// without a value attribute is recorded once something closes it.
 			value := attr(e, "value")
 			selected := has(e, "selected")
 			owner := field
@@ -292,13 +323,17 @@ func Read(r io.Reader) (*Schema, error) {
 				return nil
 			}
 			text.Reset()
-			return e.OnEndTag(func(*lolhtml.EndTag) error {
-				v := strings.TrimSpace(stdhtml.UnescapeString(text.String()))
-				text.Reset()
-				owner.Options = append(owner.Options, v)
-				if selected {
-					owner.Value = v
+			optionOwner, optionSelected = owner, selected
+			return e.OnEndTag(func(t *lolhtml.EndTag) error {
+				if t.Name() != "option" {
+					// Not this option's end tag: the option was closed
+					// implicitly, by a sibling <option> or by </select>, and
+					// both of those flush it themselves. Reading the shared
+					// builder here would read some later option's text - the
+					// same text for every option in the select.
+					return nil
 				}
+				flushOption()
 				return nil
 			})
 		}),
@@ -339,10 +374,27 @@ func Read(r io.Reader) (*Schema, error) {
 			"the document's end", len(f.Fields))
 		schema.Forms = append(schema.Forms, *f)
 	}
+	// Orphans holds every field that was not inside a form, which is two different things to
+	// a replay client: one that names a form is submitted with that form, one that names
+	// nothing is submitted with none. So the notes partition them rather than asserting the
+	// first of the whole list.
 	if len(schema.Orphans) > 0 {
-		schema.note("%d field(s) carry a form attribute and are not inside a form: which form "+
-			"owns them cannot be known in one pass, so they are reported separately",
-			len(schema.Orphans))
+		named := 0
+		for _, f := range schema.Orphans {
+			if f.FormAttr != "" {
+				named++
+			}
+		}
+		if named > 0 {
+			schema.note("%d field(s) carry a form attribute and are not inside a form: "+
+				"which form owns them cannot be known in one pass, so they are "+
+				"reported separately", named)
+		}
+		if loose := len(schema.Orphans) - named; loose > 0 {
+			schema.note("%d field(s) are outside every form and name none: a browser "+
+				"submits them with no form at all, so they are reported separately "+
+				"rather than attributed to one", loose)
+		}
 	}
 	if schema.decoded {
 		schema.note("attribute values are decoded, because a schema holds what would be " +

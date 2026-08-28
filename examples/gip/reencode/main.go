@@ -2,7 +2,13 @@
 // proves the text survived.
 //
 //	$ reencode -from windows-1252 < old.html > new.html
-//	reencode: 1284 bytes in, 1301 out; 640 characters, fingerprints match
+//	reencode: 1284 bytes in, 1299 out; 640 characters, fingerprints match; 1 charset declaration(s) rewritten to utf-8
+//
+// The document's own charset declaration is rewritten too, because converting the bytes
+// alone leaves a file that says it is windows-1252 and is not: a browser believes the
+// declaration and decodes UTF-8 through the legacy table, which is the mojibake this
+// program exists to avoid. The proof below cannot catch that, since both of its passes
+// are told the encoding rather than reading it out of the document.
 //
 // The conversion is a byte-for-character table and is not the interesting part. The
 // proof is: the same document is read twice through the rewriter - once declared as the
@@ -97,6 +103,10 @@ type Result struct {
 	After     Fingerprint
 	Unmapped  int    // bytes the table has no character for
 	FirstDiff string // where the two passes first disagreed, if they did
+	// Redeclared is how many of the document's own charset declarations were
+	// rewritten to utf-8. Zero means the document declared nothing, and a document
+	// that declares nothing is read with whatever the server or the browser decides.
+	Redeclared int
 }
 
 // OK reports whether the conversion is one the program vouches for.
@@ -120,6 +130,11 @@ func (r Result) String() string {
 	}
 	if r.Unmapped > 0 {
 		s += fmt.Sprintf("; %d bytes this table has no character for", r.Unmapped)
+	}
+	if r.Redeclared > 0 {
+		s += fmt.Sprintf("; %d charset declaration(s) rewritten to utf-8", r.Redeclared)
+	} else {
+		s += "; the document declares no encoding, so it has to be served as utf-8"
 	}
 	return s
 }
@@ -279,10 +294,97 @@ func Convert(dst io.Writer, src io.Reader, from string) (Result, error) {
 			res.FirstDiff = firstDifference(before, after)
 		}
 	}
-	if _, err := io.WriteString(dst, converted); err != nil {
+	// The last step, and the one converting the bytes does not do on its own: the
+	// document says what encoding it is in, and a browser believes the document. A
+	// file whose bytes are UTF-8 and whose <meta> still says windows-1252 is decoded
+	// with the legacy table on the way back in, so every character converted above is
+	// mojibake on screen - and the proof cannot see it, because both of its passes are
+	// told the encoding rather than reading it out of the document.
+	//
+	// It runs after the fingerprints are taken, deliberately. The declaration is an
+	// attribute value, so it is one of the runs the proof compares; rewriting it first
+	// would make the two passes disagree about the one thing this program means to
+	// change.
+	counted := &countingWriter{w: dst}
+	res.Redeclared, err = redeclare(counted, converted)
+	res.Out = counted.n
+	if err != nil {
 		return res, err
 	}
 	return res, nil
+}
+
+// countingWriter is dst plus a byte count, so the report says how many bytes were
+// written rather than how many were converted - the redeclaration changes the length.
+type countingWriter struct {
+	w io.Writer
+	n int
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += n
+	return n, err
+}
+
+// redeclare copies the converted document to dst, rewriting its charset declaration to
+// utf-8, and reports how many declarations it changed.
+//
+// Both spellings count: <meta charset> and the http-equiv Content-Type form, which is
+// what a document old enough to be in a legacy encoding is likely to use. Nothing is
+// inserted when the document declares nothing - where a declaration belongs is a
+// question about the document's head that this program has no answer for, and the
+// report says so instead.
+func redeclare(dst io.Writer, converted string) (int, error) {
+	n := 0
+	w, err := lolhtml.NewWriter(dst,
+		lolhtml.WithEncoding("utf-8"),
+		lolhtml.OnElement("meta[charset]", func(e *lolhtml.Element) error {
+			n++
+			return e.SetAttribute("charset", "utf-8")
+		}),
+		lolhtml.OnElement("meta[http-equiv][content]", func(e *lolhtml.Element) error {
+			equiv, _ := e.Attribute("http-equiv")
+			if !strings.EqualFold(strings.TrimSpace(equiv), "content-type") {
+				return nil
+			}
+			content, _ := e.Attribute("content")
+			got, ok := replaceCharset(content)
+			if !ok {
+				return nil
+			}
+			n++
+			return e.SetAttribute("content", got)
+		}),
+	)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := io.WriteString(w, converted); err != nil {
+		w.Close()
+		return n, err
+	}
+	// Close is the final flush and the only place the last bytes and a late error
+	// appear, so its error is the one that decides whether the output is whole.
+	if err := w.Close(); err != nil {
+		return n, err
+	}
+	return n, nil
+}
+
+// replaceCharset swaps the charset parameter of a Content-Type value for utf-8, keeping
+// the rest of the value as the document spelled it. It reports whether there was one.
+func replaceCharset(content string) (string, bool) {
+	i := strings.Index(strings.ToLower(content), "charset=")
+	if i < 0 {
+		return content, false
+	}
+	rest := content[i+len("charset="):]
+	end := strings.IndexAny(rest, ";, \t")
+	if end < 0 {
+		end = len(rest)
+	}
+	return content[:i] + "charset=utf-8" + rest[end:], true
 }
 
 // firstDifference names the first run the two passes disagree about, which is what a

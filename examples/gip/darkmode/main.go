@@ -91,16 +91,53 @@ func validColour(s string) bool {
 		}
 		return true
 	}
-	if s == "" {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i] | 0x20
-		if c < 'a' || c > 'z' {
-			return false
-		}
-	}
-	return true
+	// A name has to be one a browser knows. Accepting any run of letters would put
+	// a typo straight into the meta, and a theme-color a browser cannot parse is
+	// ignored - which looks exactly like the meta being absent, so the tool would
+	// report success for a page it had not changed the appearance of at all. That
+	// is the failure the package comment says is refused rather than emitted, and
+	// only the list refuses it.
+	return namedColours[strings.ToLower(s)]
+}
+
+// namedColours is the CSS <named-color> keyword list, which is what a browser will
+// parse and nothing else. Case does not matter in CSS, so lookups are lower-cased.
+// "transparent" and "currentcolor" are deliberately absent: they are separate
+// keywords rather than named colours, and neither is a useful theme-color.
+var namedColours = map[string]bool{
+	"aliceblue": true, "antiquewhite": true, "aqua": true, "aquamarine": true, "azure": true,
+	"beige": true, "bisque": true, "black": true, "blanchedalmond": true, "blue": true,
+	"blueviolet": true, "brown": true, "burlywood": true, "cadetblue": true, "chartreuse": true,
+	"chocolate": true, "coral": true, "cornflowerblue": true, "cornsilk": true, "crimson": true,
+	"cyan": true, "darkblue": true, "darkcyan": true, "darkgoldenrod": true, "darkgray": true,
+	"darkgreen": true, "darkgrey": true, "darkkhaki": true, "darkmagenta": true,
+	"darkolivegreen": true, "darkorange": true, "darkorchid": true, "darkred": true,
+	"darksalmon": true, "darkseagreen": true, "darkslateblue": true, "darkslategray": true,
+	"darkslategrey": true, "darkturquoise": true, "darkviolet": true, "deeppink": true,
+	"deepskyblue": true, "dimgray": true, "dimgrey": true, "dodgerblue": true, "firebrick": true,
+	"floralwhite": true, "forestgreen": true, "fuchsia": true, "gainsboro": true,
+	"ghostwhite": true, "gold": true, "goldenrod": true, "gray": true, "green": true,
+	"greenyellow": true, "grey": true, "honeydew": true, "hotpink": true, "indianred": true,
+	"indigo": true, "ivory": true, "khaki": true, "lavender": true, "lavenderblush": true,
+	"lawngreen": true, "lemonchiffon": true, "lightblue": true, "lightcoral": true,
+	"lightcyan": true, "lightgoldenrodyellow": true, "lightgray": true, "lightgreen": true,
+	"lightgrey": true, "lightpink": true, "lightsalmon": true, "lightseagreen": true,
+	"lightskyblue": true, "lightslategray": true, "lightslategrey": true, "lightsteelblue": true,
+	"lightyellow": true, "lime": true, "limegreen": true, "linen": true, "magenta": true,
+	"maroon": true, "mediumaquamarine": true, "mediumblue": true, "mediumorchid": true,
+	"mediumpurple": true, "mediumseagreen": true, "mediumslateblue": true,
+	"mediumspringgreen": true, "mediumturquoise": true, "mediumvioletred": true,
+	"midnightblue": true, "mintcream": true, "mistyrose": true, "moccasin": true,
+	"navajowhite": true, "navy": true, "oldlace": true, "olive": true, "olivedrab": true,
+	"orange": true, "orangered": true, "orchid": true, "palegoldenrod": true, "palegreen": true,
+	"paleturquoise": true, "palevioletred": true, "papayawhip": true, "peachpuff": true,
+	"peru": true, "pink": true, "plum": true, "powderblue": true, "purple": true,
+	"rebeccapurple": true, "red": true, "rosybrown": true, "royalblue": true, "saddlebrown": true,
+	"salmon": true, "sandybrown": true, "seagreen": true, "seashell": true, "sienna": true,
+	"silver": true, "skyblue": true, "slateblue": true, "slategray": true, "slategrey": true,
+	"snow": true, "springgreen": true, "steelblue": true, "tan": true, "teal": true,
+	"thistle": true, "tomato": true, "turquoise": true, "violet": true, "wheat": true,
+	"white": true, "whitesmoke": true, "yellow": true, "yellowgreen": true,
 }
 
 const (
@@ -114,7 +151,6 @@ func (a *adder) options() []lolhtml.Option {
 	haveDark, haveLight, haveBare := false, false, false
 	haveSheet := false
 
-	sawHead := false
 	placed := false
 
 	return []lolhtml.Option{
@@ -142,11 +178,23 @@ func (a *adder) options() []lolhtml.Option {
 		}),
 
 		lolhtml.OnElement("head", func(e *lolhtml.Element) error {
-			sawHead = true
 			if !e.CanHaveContent() {
 				return nil
 			}
 			return e.OnEndTag(func(end *lolhtml.EndTag) error {
+				if end.Name() != "head" {
+					// OnEndTag fires on whatever token closed the
+					// element, and </head> is optional: when it is left
+					// out the head is closed by <body>, and this callback
+					// runs against </body> or </html> instead. A position
+					// taken from a tag with another name is not in the
+					// head, so the tags would land after the body - where
+					// a theme-color is read too late to matter and a
+					// dark-mode stylesheet is a render-blocking surprise.
+					// The <body> handler below is the insertion point for
+					// that shape, and it runs first.
+					return nil
+				}
 				if placed {
 					return nil
 				}
@@ -160,7 +208,11 @@ func (a *adder) options() []lolhtml.Option {
 		}),
 
 		lolhtml.OnElement("body", func(e *lolhtml.Element) error {
-			if sawHead || placed {
+			// The test is whether the tags have gone in, not whether a head
+			// was seen: a document with a head but no </head> arrives here
+			// with the head still open, and <body> is where that head ends.
+			// Inserting before it lands in the head a parser builds.
+			if placed {
 				return nil
 			}
 			placed = true

@@ -39,6 +39,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	stdhtml "html"
 	"io"
 	"os"
 	"sort"
@@ -188,8 +189,11 @@ func (f *finder) element(e *lolhtml.Element) error {
 		tag = "svg:image"
 	}
 
-	if style, ok := e.Attribute("style"); ok && strings.Contains(style, "url(") {
-		for _, u := range cssURLs(style) {
+	// Decoded before the scan, not after: the "url(" this looks for can itself be
+	// spelled with character references, so a raw-source scan misses the whole
+	// declaration rather than just its scheme.
+	if style, ok := e.Attribute("style"); ok && strings.Contains(decode(style), "url(") {
+		for _, u := range cssURLs(decode(style)) {
 			if err := f.note(Finding{tag, "style", u, Upgradeable}); err != nil {
 				return err
 			}
@@ -200,17 +204,21 @@ func (f *finder) element(e *lolhtml.Element) error {
 		return f.link(e)
 	}
 	for _, w := range Sources[tag] {
-		raw, ok := e.Attribute(w.attr)
+		src, ok := e.Attribute(w.attr)
 		if !ok {
 			continue
 		}
+		raw := decode(src)
 		if w.attr == "srcset" {
 			next, changed, err := f.srcset(tag, raw, w.class)
 			if err != nil {
 				return err
 			}
 			if changed {
-				if err := e.SetAttribute(w.attr, next); err != nil {
+				// The decided-on value is a decoded one, so it is
+				// re-encoded on the way back: SetAttribute takes raw
+				// source text and escapes only the quote.
+				if err := e.SetAttribute(w.attr, lolhtml.EscapeAttribute(next)); err != nil {
 					return err
 				}
 			}
@@ -224,7 +232,7 @@ func (f *finder) element(e *lolhtml.Element) error {
 		}
 		if f.opts.Upgrade && w.class != Navigation {
 			f.res.Upgraded++
-			if err := e.SetAttribute(w.attr, upgrade(raw)); err != nil {
+			if err := e.SetAttribute(w.attr, lolhtml.EscapeAttribute(upgrade(raw))); err != nil {
 				return err
 			}
 		}
@@ -233,13 +241,14 @@ func (f *finder) element(e *lolhtml.Element) error {
 }
 
 func (f *finder) link(e *lolhtml.Element) error {
-	raw, ok := e.Attribute("href")
+	src, ok := e.Attribute("href")
+	raw := decode(src)
 	if !ok || !insecure(raw) {
 		return nil
 	}
 	rel, _ := e.Attribute("rel")
 	class := Navigation
-	for _, token := range strings.Fields(strings.ToLower(rel)) {
+	for _, token := range strings.Fields(strings.ToLower(decode(rel))) {
 		if LinkBlockable[token] {
 			class = Blockable
 			break
@@ -250,7 +259,7 @@ func (f *finder) link(e *lolhtml.Element) error {
 	}
 	if f.opts.Upgrade && class != Navigation {
 		f.res.Upgraded++
-		return e.SetAttribute("href", upgrade(raw))
+		return e.SetAttribute("href", lolhtml.EscapeAttribute(upgrade(raw)))
 	}
 	return nil
 }
@@ -330,6 +339,23 @@ func (f *finder) note(fi Finding) error {
 func insecure(raw string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(raw)), "http://")
 }
+
+// decode resolves the character references in an attribute value, which is the step
+// that has to happen before anything is decided about it.
+//
+// Element.Attribute hands back raw source text with references left encoded, and a
+// browser decodes an attribute value before it acts on it. So src="http&#58;//evil/x.js"
+// is an http:// subresource to a browser and a string that does not begin with
+// "http://" to a check reading the source - which is a one-character bypass of every
+// classification here, -strict refusal included. Every value this program looks at goes
+// through here first, and a value written back goes through EscapeAttribute so that
+// what it decodes to is what was decided about.
+//
+// html.UnescapeString is not exactly a parser's attribute-value rule - it decodes a
+// semicolon-less named reference that a browser leaves alone - but it decodes more
+// rather than less, and for a check that must not be bypassed that is the safe
+// direction to be wrong in.
+func decode(raw string) string { return stdhtml.UnescapeString(raw) }
 
 // upgrade turns http:// into https://, keeping everything else about the URL.
 func upgrade(raw string) string {

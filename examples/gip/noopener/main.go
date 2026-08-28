@@ -33,7 +33,9 @@ import (
 func main() {
 	noReferrer := flag.Bool("no-referrer", true, `also add rel="noreferrer"`)
 	limit := flag.Int("limit", 0, "memory limit in bytes for the rewriter, 0 for none")
-	graceful := flag.Bool("graceful", true, "on exceeding the limit, pass the rest through unrewritten")
+	graceful := flag.Bool("graceful", true,
+		"on exceeding the limit, pass the rest through unrewritten rather than "+
+			"truncating; the run fails either way, because the page is not hardened")
 	flag.Parse()
 
 	h := &hardener{noReferrer: *noReferrer, limit: *limit, graceful: *graceful}
@@ -69,6 +71,9 @@ type hardener struct {
 
 	hardened  int
 	alreadyOK int
+	// unfixable counts elements that open a new window and carry no rel
+	// attribute to harden - a form. They are found and reported, never changed.
+	unfixable int
 	byTarget  map[string]int
 	// bailedOut records that the rewriter hit its memory limit, which is the
 	// difference between a document that was hardened and one that merely
@@ -96,20 +101,23 @@ func (h *hardener) run(src io.Reader, dst io.Writer) error {
 	return h.classify(w.Close())
 }
 
-// classify separates a memory bail-out from any other failure, because they
-// need different responses: a bail-out with GracefulBailOut set means the
-// document reached the client intact but unhardened past some boundary, which is
-// a security-relevant outcome rather than a transport error.
+// classify records a memory bail-out so the report can say the document is only
+// partly hardened. It does not turn one into success.
+//
+// The graceful setting decides what the client gets - a whole document rather
+// than a truncated one - and nothing about whether the job was done. This is a
+// rewrite that neutralises something, and the library is explicit about which way
+// those have to fail: "For a rewrite that removes or neutralises something - a
+// sanitiser, a token, an autoplay attribute, a tracking script - continuing to
+// serve is serving the thing the rewrite existed to stop. There the truncated
+// response is the safer failure." Returning nil here handed a caller an exit
+// status of 0 for a page on which nothing had been hardened at all.
 func (h *hardener) classify(err error) error {
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, lolhtml.ErrMemoryLimitExceeded) {
 		h.bailedOut = true
-		if h.graceful {
-			// The response is whole; it is simply not fully rewritten.
-			return nil
-		}
 	}
 	return err
 }
@@ -134,10 +142,14 @@ func (h *hardener) options() []lolhtml.Option {
 				want = append(want, "noreferrer")
 			}
 
-			// A form has no rel attribute, so the only thing to do is report it.
+			// A form has no rel attribute, so the only thing to do is report
+			// it. Counted apart from the hardened links: nothing was changed
+			// here, and a counter that says otherwise tells an operator
+			// checking a corpus that a page is fixed when its form still
+			// hands window.opener to the new context.
 			if e.TagName() == "form" {
 				h.count(target)
-				h.hardened++
+				h.unfixable++
 				return nil
 			}
 
@@ -203,13 +215,25 @@ func (h *hardener) report() string {
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "hardened=%d already-safe=%d", h.hardened, h.alreadyOK)
+	if h.unfixable > 0 {
+		fmt.Fprintf(&sb, " unfixable=%d", h.unfixable)
+	}
 	if len(targets) > 0 {
 		fmt.Fprintf(&sb, " [%s]", strings.Join(targets, " "))
 	}
 	sb.WriteString("\n")
+	if h.unfixable > 0 {
+		fmt.Fprintf(&sb, "%d form(s) target a new window and cannot be hardened by "+
+			"an attribute: a form has no rel\n", h.unfixable)
+	}
 	if h.bailedOut {
-		sb.WriteString("WARNING: the memory limit was exceeded; " +
-			"the tail of this document was passed through unhardened\n")
+		// Not "the tail": the buffer requirement is decided early, so a limit
+		// too small for the document usually bails on the first write and the
+		// hardened prefix is empty. What reached the client is the input, not
+		// the output, past some boundary that can be byte zero.
+		sb.WriteString("WARNING: the memory limit was exceeded; this document " +
+			"was hardened only up to some boundary, which can be the very " +
+			"beginning - do not serve it as hardened\n")
 	}
 	return sb.String()
 }
