@@ -158,11 +158,14 @@ func survey(doc string) (map[string]*Term, error) {
 				if linkDepth == 1 {
 					linkText.Reset()
 				}
-				return e.OnEndTag(func(t *lolhtml.EndTag) error {
+				return e.OnEndTag(func(*lolhtml.EndTag) error {
 					flush()
-					if t.Name() != tag {
-						return nil
-					}
+					// Lowered whatever the token is named. The handler runs once
+					// for this element, and where the source left an end tag out
+					// it runs against an enclosing element's tag instead - so a
+					// name guard here, which is the right test for a handler
+					// writing at the position, would leave the counter raised for
+					// the rest of the document.
 					linkDepth--
 					if linkDepth == 0 {
 						linked = append(linked, collapse(linkText.String()))
@@ -257,10 +260,12 @@ func Rewrite(dst io.Writer, src io.Reader) (Result, error) {
 				return nil
 			}
 			depth++
-			return e.OnEndTag(func(t *lolhtml.EndTag) error {
-				if t.Name() != tag {
-					return nil
-				}
+			return e.OnEndTag(func(*lolhtml.EndTag) error {
+				// Lowered whatever the token is named: see the same counter in
+				// survey. <option> is in this list and its end tag is omissible,
+				// so a name guard sticks the counter above zero and every later
+				// text node in the document goes unexamined - which here also
+				// makes the report say a term is not mentioned when it is.
 				depth--
 				return nil
 			})

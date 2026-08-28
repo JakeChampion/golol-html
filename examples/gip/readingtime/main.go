@@ -58,8 +58,17 @@ var blocks = map[string]bool{
 }
 
 // skipped elements hold content that is not prose.
+//
+// <head> is deliberately not on the list, and the reason is the counter below. Its
+// end tag is omissible, and an element whose end tag the source leaves out is
+// reported as ending at the tag that did close it - for a head that is </html>, so
+// a skip that started at <head> would still be running at the end of the document
+// and the whole body would count as nothing. It does not need to be here anyway:
+// everything in a head that holds text - title, script, style - is on the list in
+// its own right, and text a document puts directly in the head is text a browser
+// moves into the body and shows, which is prose.
 var skipped = map[string]bool{
-	"script": true, "style": true, "head": true, "title": true, "template": true,
+	"script": true, "style": true, "title": true, "template": true,
 	"noscript": true, "select": true, "option": true, "iframe": true,
 	"noembed": true, "noframes": true,
 }
@@ -120,10 +129,14 @@ func (c *Counter) Options() []lolhtml.Option {
 				return nil
 			}
 			c.skipDepth++
-			return e.OnEndTag(func(t *lolhtml.EndTag) error {
-				if t.Name() != tag {
-					return nil
-				}
+			return e.OnEndTag(func(*lolhtml.EndTag) error {
+				// Lowered whatever the token is named. The handler runs exactly
+				// once for this element, and where the source left its end tag out
+				// - </head> and </option> are both omissible, and both tags are on
+				// the skip list - the token that closed it belongs to an enclosing
+				// element. Comparing the names, which is the right test for a
+				// handler writing at the position, would leave the counter above
+				// zero and count nothing at all for the rest of the document.
 				c.flush()
 				c.skipDepth--
 				return nil

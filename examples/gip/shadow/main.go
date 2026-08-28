@@ -198,6 +198,18 @@ func Insert(src io.Reader, templates Templates, mode string) (Result, error) {
 					c.Had++
 					return nil
 				}
+				if end.Name() != tag {
+					// Not this host's end tag. The source left it out, so the
+					// token belongs to an enclosing element and the position is
+					// outside the host: on <my-card><my-badge>x</my-card> the
+					// badge's handler runs at </my-card>, and inserting there
+					// gives the badge a second shadow root - or the card's root
+					// to the badge - while the report claims both were done. A
+					// host with no end tag of its own is the case counted below,
+					// so it is counted the same way here.
+					c.Unclosed++
+					return nil
+				}
 				c.Given++
 				return end.Before(shadowRoot(markup, mode), lolhtml.HTML)
 			})

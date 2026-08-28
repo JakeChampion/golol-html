@@ -1,5 +1,7 @@
-// Command dimensions reports every image and iframe that does not declare its
-// size, which is what makes a page shift under the reader as it loads.
+// Command dimensions reports every image, iframe, video, embed and object that
+// does not declare its size, which is what makes a page shift under the reader as
+// it loads. All five reserve space for content the layout cannot measure until it
+// arrives, and with -fix all five get the style attribute.
 //
 //	dimensions < page.html
 //	dimensions -fix -ratio 16:9 < page.html > out.html
@@ -74,8 +76,14 @@ func parseRatio(s string) (w, h int, err error) {
 }
 
 type finding struct {
-	tag    string
+	tag string
+	// src is the element's URL, and attr the attribute it came from: <object>
+	// names its resource with data rather than src, and a <video> often names
+	// none, leaving that to child <source> elements. Reporting every finding as
+	// src=... would name three of the five elements after an attribute they do
+	// not have.
 	src    string
+	attr   string
 	reason string
 	loc    lolhtml.SourceLocation
 }
@@ -149,10 +157,15 @@ func (a *auditor) options() []lolhtml.Option {
 				reason = "height without width"
 			}
 
-			src, _ := e.Attribute("src")
+			attr := "src"
+			if e.TagName() == "object" {
+				attr = "data"
+			}
+			src, _ := e.Attribute(attr)
 			a.findings = append(a.findings, finding{
 				tag:    e.TagName(),
 				src:    src,
+				attr:   attr,
 				reason: reason,
 				loc:    e.SourceLocation(),
 			})
@@ -178,8 +191,11 @@ func (a *auditor) report() string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "checked=%d findings=%d fixed=%d\n", a.checked, len(a.findings), a.fixed)
 	for _, f := range a.findings {
-		fmt.Fprintf(&sb, "%d-%d <%s src=%q>: %s\n",
-			f.loc.Start, f.loc.End, f.tag, f.src, f.reason)
+		el := "<" + f.tag + ">"
+		if f.src != "" {
+			el = fmt.Sprintf("<%s %s=%q>", f.tag, f.attr, f.src)
+		}
+		fmt.Fprintf(&sb, "%d-%d %s: %s\n", f.loc.Start, f.loc.End, el, f.reason)
 	}
 	return sb.String()
 }

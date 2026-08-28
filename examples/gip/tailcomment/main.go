@@ -106,6 +106,14 @@ func Run(r io.Reader, w io.Writer, mode Mode) (Summary, error) {
 		return summary, err
 	}
 	if _, err := io.Copy(rw, r); err != nil {
+		// Closed even though it is being abandoned - a read error, a handler error or a
+		// failing destination all land here. Every Writer has to be closed: it holds the
+		// native rewriter, its selectors and its cgo handles until then, and the runtime
+		// cleanup that would otherwise free them is a leak backstop rather than a second
+		// way of doing it - one that cannot run at all for a Writer a handler has
+		// captured. The Copy error is the one reported; Close's is about a rewrite that
+		// has already failed.
+		rw.Close()
 		return summary, err
 	}
 	// Close first: an error means the output is the early-stop prefix, and a summary of a

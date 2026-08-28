@@ -1,7 +1,7 @@
 // Command hoiststyle moves inline style attributes into a stylesheet.
 //
 //	hoiststyle < page.html > out.html
-//	hoiststyle -prefix h -at head < page.html
+//	hoiststyle -prefix h -report < page.html
 //
 // Each distinct declaration block becomes one class, so a style repeated across
 // fifty elements is written once. The stylesheet is emitted at the document end,
@@ -181,7 +181,11 @@ func (h *hoister) stylesheet() string {
 //
 // Property names are lower-cased because CSS matches them case-insensitively.
 // Values are not: a font family, a content string or a custom property value can
-// all be case-sensitive.
+// all be case-sensitive. Nor is a custom property's *name*: --Brand and --brand
+// are two different properties, so those are left as the document spelled them.
+// Lower-casing one would leave the var(--Brand) in the value - values are never
+// touched - referring to a property that no longer exists, and the element would
+// silently lose the declaration that used it.
 func normalise(decls string) string {
 	parts := strings.Split(decls, ";")
 	out := make([]string, 0, len(parts))
@@ -195,8 +199,11 @@ func normalise(decls string) string {
 			out = append(out, strings.Join(strings.Fields(p), " "))
 			continue
 		}
-		out = append(out, strings.ToLower(strings.TrimSpace(name))+":"+
-			strings.Join(strings.Fields(value), " "))
+		name = strings.TrimSpace(name)
+		if !strings.HasPrefix(name, "--") {
+			name = strings.ToLower(name)
+		}
+		out = append(out, name+":"+strings.Join(strings.Fields(value), " "))
 	}
 	return strings.Join(out, ";")
 }
@@ -204,8 +211,18 @@ func normalise(decls string) string {
 // plausibleDeclarations refuses anything that would not survive being written
 // into a stylesheet: a declaration block cannot contain the characters that end
 // a rule or a <style> element, and one without a colon is not a declaration.
+//
+// A comment opener is refused for the same reason as a brace, and it is the less
+// obvious of the two. A block ending in an unterminated "/*" is harmless in a
+// style attribute, where nothing follows it; written into the stylesheet it
+// comments out its own closing brace and every rule after it, because CSS closes
+// an unterminated comment at the end of the sheet. One element's style attribute
+// would take out every style on the page.
 func plausibleDeclarations(decls string) bool {
 	if !strings.Contains(decls, ":") {
+		return false
+	}
+	if strings.Contains(decls, "/*") {
 		return false
 	}
 	return !strings.ContainsAny(decls, "<>{}\"")

@@ -82,6 +82,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	stdhtml "html"
 	"io"
 	"net/url"
 	"os"
@@ -416,8 +417,17 @@ func Inline(r io.Reader, w io.Writer, opts Options) (Report, error) {
 			report.FooterAdded = true
 			return d.Append(opts.Footer, lolhtml.Text)
 		}),
-		lolhtml.OnElement("a[href], img[src], link[href]", func(e *lolhtml.Element) error {
-			for _, name := range []string{"href", "src"} {
+		// Every attribute a client might follow, not only the three that a page's visible
+		// links live in: a javascript: URL in a form's action or an iframe's src is the same
+		// hazard spelled differently, and the report's "removed N javascript: URLs" line
+		// reads as a claim about the document rather than about its anchors. Two shapes are
+		// still outside it, because neither is an attribute lookup: an SVG anchor's
+		// xlink:href, which no selector here matches, and a <meta http-equiv=refresh> whose
+		// URL is buried in the content attribute.
+		lolhtml.OnElement("a[href], area[href], base[href], link[href], img[src], iframe[src], "+
+			"embed[src], source[src], input[formaction], button[formaction], object[data], "+
+			"form[action]", func(e *lolhtml.Element) error {
+			for _, name := range []string{"href", "src", "action", "formaction", "data"} {
 				v, ok := e.Attribute(name)
 				if !ok {
 					continue
@@ -527,12 +537,31 @@ func normaliseDeclaration(decl string) string {
 	return strings.ToLower(strings.TrimSpace(name)) + ":" + strings.TrimSpace(value)
 }
 
-// isJavaScriptURL reports whether a URL's scheme is javascript:, allowing for the whitespace and
-// case a parser tolerates.
+// isJavaScriptURL reports whether a URL's scheme is javascript:, allowing for the whitespace,
+// case and character references a parser tolerates.
+//
+// The decoding is the point of the first line. An attribute value arrives as raw source with
+// its character references intact - [lolhtml.Element.Attribute] says so - and a browser decodes
+// before it acts, so a check on the raw string sees a scheme called "&#106;avascript" and lets
+// it through. Every one of these runs in a client and none of them is "javascript" to a check
+// that skips the decode:
+//
+//	&#106;avascript:alert(1)
+//	&#x6a;avascript:alert(1)
+//	jav&#x09;ascript:alert(1)
+//
+// The rule is: decide on the decoded form, rewrite the raw one - which is what the caller does,
+// since it removes the attribute rather than writing the decoded value back. html.UnescapeString
+// decodes a little more of an attribute value than a browser does, and for a filter that is the
+// safe direction: it can only reject a URL a browser would have allowed, never the reverse. The
+// sibling examples/gip/emailstrip has the same function with the full scheme grammar.
 func isJavaScriptURL(v string) bool {
-	trimmed := strings.ToLower(strings.TrimLeft(v, " \t\r\n\f"))
+	trimmed := strings.ToLower(strings.TrimLeft(stdhtml.UnescapeString(v), " \t\r\n\f"))
+	// A parser ignores tab, newline and carriage return inside a scheme, so "jav\tascript"
+	// is "javascript" to it and has to be here too.
 	trimmed = strings.ReplaceAll(trimmed, "\t", "")
 	trimmed = strings.ReplaceAll(trimmed, "\n", "")
+	trimmed = strings.ReplaceAll(trimmed, "\r", "")
 	return strings.HasPrefix(trimmed, "javascript:")
 }
 
