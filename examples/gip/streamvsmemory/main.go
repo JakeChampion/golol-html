@@ -1,24 +1,30 @@
 // Command streamvsmemory runs the same rewrite twice - once in memory, once streamed -
 // and reports what differs.
 //
-//	$ streamvsmemory -chunk 64 < page.html
-//	output            identical (4,812 bytes)
+//	$ streamvsmemory -chunk 64 -floor < page.html
+//	output            identical (4472 bytes)
 //	element handlers  118 both ways
-//	text handlers     41 in memory, 96 streamed
+//	text handlers     240 in memory, 276 streamed
+//	text nodes        120 both ways
 //	comment handlers  2 both ways
-//	memory floor      5 in memory, 76 streamed
+//	doctype handlers  1 both ways
+//	memory floor      832 bytes in memory, 905 bytes streamed
 //
-// Two of those lines are guarantees and one is not. The output is byte-identical however
-// the input arrives, and so is the number of times an element, comment or doctype handler
-// runs. A text handler is different: a text node is delivered in chunks whose boundaries
-// follow the writes, so the same node arrives once in memory and several times when
-// streamed - which is why anything accumulating text has to accumulate to
+// Most of those lines are guarantees and two are not. The output is byte-identical
+// however the input arrives, and so is the number of times an element, comment or
+// doctype handler runs - and so is the number of text nodes, which is why this program
+// counts them separately. A text handler is different: a text node is delivered in chunks
+// whose boundaries follow the writes, so the same node arrives once in memory and several
+// times when streamed - which is why anything accumulating text has to accumulate to
 // [lolhtml.TextChunk.IsLastInTextNode] rather than treat a chunk as a node.
 //
-// The fourth line is the memory limit, which is where the two shapes really part company:
-// a document that completes under a tiny limit in one Write can need a hundred times as
-// much when streamed, because a token that straddles two writes has to be copied. See
-// [lolhtml.MemorySettings].
+// The last line, printed only for -floor, is the memory limit, and it is where the two
+// shapes really part company: a document that completes under a tight limit in one Write
+// needs more when streamed, because a token that straddles two writes has to be copied.
+// It is measured rather than estimated - the smallest MaxMemory under which the whole
+// rewrite completes, found by bisection, in bytes - because a figure rounded up to a power
+// of two is not a floor and is not a budget. A run that completes under no limit says so
+// in words rather than reporting a number. See [lolhtml.MemorySettings].
 //
 // # Why compare at all
 //
@@ -96,10 +102,25 @@ func (r Result) String() string {
 	line("text nodes", r.Memory.Counts.Nodes, r.Streamed.Counts.Nodes)
 	line("comment handlers", r.Memory.Counts.Comments, r.Streamed.Counts.Comments)
 	line("doctype handlers", r.Memory.Counts.Doctypes, r.Streamed.Counts.Doctypes)
-	if r.Memory.Floor > 0 || r.Streamed.Floor > 0 {
-		line("memory floor", r.Memory.Floor, r.Streamed.Floor)
+	if r.Memory.Floor != 0 || r.Streamed.Floor != 0 {
+		mem, streamed := limit(r.Memory.Floor), limit(r.Streamed.Floor)
+		if mem == streamed {
+			fmt.Fprintf(&b, "%-17s %s both ways\n", "memory floor", mem)
+		} else {
+			fmt.Fprintf(&b, "%-17s %s in memory, %s streamed\n", "memory floor", mem, streamed)
+		}
 	}
 	return b.String()
+}
+
+// limit renders one memory floor. FloorNotFound is spelled out rather than
+// printed as a number, because every number on this line is a budget somebody
+// might copy.
+func limit(n int) string {
+	if n == FloorNotFound {
+		return fmt.Sprintf("not found under %d bytes", MaxLimit)
+	}
+	return fmt.Sprintf("%d bytes", n)
 }
 
 // rewrite is the rewrite being compared: it sets an attribute on every paragraph and
@@ -171,14 +192,42 @@ func run(name string, doc []byte, chunk int, limit int) Pass {
 	return p
 }
 
-// floor is the smallest power-of-two MaxMemory that completes at this write size.
+// FloorNotFound is the Floor of a pass that completed under no limit up to
+// MaxLimit. It is a different fact from a small floor and has to read as one: a
+// zero there would be reported as "needs nothing".
+const FloorNotFound = -1
+
+// MaxLimit is the largest MaxMemory tried before giving up.
+const MaxLimit = 1 << 24
+
+// floor is the smallest MaxMemory that completes at this write size, exactly, or
+// FloorNotFound.
+//
+// Doubling finds one limit that completes and one that does not; bisecting
+// between them finds the boundary. The doubling alone would report a power of
+// two, which is an upper bound of up to twice the real figure - a number to
+// multiply a safety margin by, not a floor, and the whole point of this line is
+// to size a MaxMemory budget from a caller's own document.
 func floor(doc []byte, chunk int) int {
-	for limit := 8; limit <= 1<<24; limit *= 2 {
-		if p := run("floor", doc, chunk, limit); p.Err == nil {
-			return limit
+	lo, hi := 0, 8 // lo never completes, hi is not known to yet
+	for {
+		if p := run("floor", doc, chunk, hi); p.Err == nil {
+			break
+		}
+		if hi >= MaxLimit {
+			return FloorNotFound
+		}
+		lo, hi = hi, hi*2
+	}
+	for lo+1 < hi {
+		mid := lo + (hi-lo)/2
+		if p := run("floor", doc, chunk, mid); p.Err == nil {
+			hi = mid
+		} else {
+			lo = mid
 		}
 	}
-	return 0
+	return hi
 }
 
 // Compare runs both shapes.

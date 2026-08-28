@@ -161,9 +161,19 @@ func anchor(e *lolhtml.Element, rep *Report, existing *bool, payload, what strin
 // literal bytes "</script" and nothing else terminates it, so a specifier or a
 // URL containing them would end the element early and spill the rest of the map
 // into the page as markup. JSON's own escaping is the fix, because "\u003c" is
-// the same string to a JSON reader and is not a "<" to an HTML parser. The
-// result is checked afterwards anyway: the library refuses a breakout, and an
-// error here is much better than a page that silently renders the map.
+// the same string to a JSON reader and is not a "<" to an HTML parser.
+//
+// Nothing in the library checks that afterwards, and the reason is worth knowing.
+// A breakout is refused only for an insertion into an element's own content -
+// Prepend, Append, SetInnerContent and EndTag.Before. This element is written
+// with [lolhtml.Element.Before], which puts it outside the anchor element, where
+// a closing tag is ordinary markup. It has to be: the payload itself ends in
+// "</script>", so a check that applied here would refuse every injection this
+// program makes. What is checked is the position, not the type. So the escaping
+// below is the only thing standing between a specifier from a build file and a
+// page that renders the map as text - and a caller who wants the check as well
+// can run [lolhtml.CheckRawText] over the JSON body, which is the part that lands
+// inside the script.
 func payload(m Map) (string, error) {
 	if len(m.Imports) == 0 && len(m.Scopes) == 0 {
 		return "", errors.New("importmap: nothing to inject")

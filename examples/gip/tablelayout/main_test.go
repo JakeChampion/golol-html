@@ -72,8 +72,9 @@ func TestARowInsideAParagraphIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if report.RefusedInParagraph != 2 {
-		t.Errorf("refused %d, want the row and its column", report.RefusedInParagraph)
+	if report.RefusedRows != 1 || report.RefusedColumns != 1 {
+		t.Errorf("refused %d rows and %d columns, want the row and its column",
+			report.RefusedRows, report.RefusedColumns)
 	}
 	if report.Rows != 0 || report.Columns != 0 {
 		t.Errorf("converted %d rows and %d columns inside a paragraph", report.Rows, report.Columns)
@@ -99,8 +100,8 @@ func TestTheParagraphDepthIsTrackedAcrossTheDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Rows != 2 || report.RefusedInParagraph != 1 {
-		t.Errorf("converted %d and refused %d, want 2 and 1", report.Rows, report.RefusedInParagraph)
+	if report.Rows != 2 || report.RefusedRows != 1 {
+		t.Errorf("converted %d and refused %d, want 2 and 1", report.Rows, report.RefusedRows)
 	}
 	if strings.Count(out, "<table") != 2 {
 		t.Errorf("%d tables in the output:\n%s", strings.Count(out, "<table"), out)

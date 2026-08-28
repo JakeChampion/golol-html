@@ -188,8 +188,12 @@ func literal(expr string) (string, bool) {
 		return "", false
 	}
 
-	// A quoted string, single or double. A backslash means an escape this does not
-	// understand, so it is not treated as a literal at all.
+	// A quoted string: an apostrophe or a backtick, which are the two quotes a
+	// template expression can use inside a double-quoted attribute without escaping
+	// them. A double-quoted expression is not recognised here and is reported as an
+	// expression instead - a miss in the harmless direction, and the place to start
+	// for anyone widening what this accepts. A backslash means an escape this does
+	// not understand, so it is not treated as a literal at all.
 	if len(expr) >= 2 && (expr[0] == '\'' || expr[0] == '`') && expr[len(expr)-1] == expr[0] {
 		inner := expr[1 : len(expr)-1]
 		if strings.ContainsAny(inner, "\\'`") {

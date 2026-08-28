@@ -18,6 +18,16 @@
 // that only ever returns trusted files loses nothing by that; one that can be
 // pointed at user uploads needs it.
 //
+// Those three rules are a blocklist, and a blocklist only holds while the content
+// model does. A <foreignObject> breaks it: inside one the parser switches back to
+// HTML, so the whole of HTML is in scope there and an <iframe srcdoc="…"> is a
+// real iframe, running real script in the page's own origin, with no on* attribute
+// and no href for the rules to catch. Extending the blocklist would mean listing
+// every element and attribute HTML has, so the fourth rule drops the
+// foreignObject itself, with everything inside it. Anything a filter of this shape
+// gains has to be checked against that question: which content model is this
+// element's children parsed in.
+//
 // # An HTML tag name inside an <svg> ends the svg
 //
 // The parser's foreign-content rules break out of SVG when they meet an HTML tag
@@ -99,6 +109,7 @@ type Result struct {
 	Escaping     int      // files holding a tag name that would end the svg
 	EscapingTags []string // which tag names those were, so the report is actionable
 	Scripts      int      // script and style elements dropped from inlined files
+	Foreign      int      // foreignObject elements dropped, with their HTML content
 	Handlers     int      // on* attributes dropped
 	Renamed      int      // ids rewritten
 	Opaque       int      // references left alone because they were not understood
@@ -110,8 +121,8 @@ func (r Result) String() string {
 	if len(r.EscapingTags) > 0 {
 		escaping += " (<" + strings.Join(r.EscapingTags, "> <") + ">)"
 	}
-	return fmt.Sprintf("inlinesvg: inlined %d (%d ids renamed, %d scripts and %d handlers dropped); %d too big, %s escaping, %d unresolved, %d opaque refs, %d not svg",
-		r.Inlined, r.Renamed, r.Scripts, r.Handlers, r.TooBig, escaping, r.Unresolved, r.Opaque, r.Skipped)
+	return fmt.Sprintf("inlinesvg: inlined %d (%d ids renamed, %d scripts, %d handlers and %d foreignObjects dropped); %d too big, %s escaping, %d unresolved, %d opaque refs, %d not svg",
+		r.Inlined, r.Renamed, r.Scripts, r.Handlers, r.Foreign, r.TooBig, escaping, r.Unresolved, r.Opaque, r.Skipped)
 }
 
 // OK reports whether every SVG image was inlined.
@@ -176,10 +187,27 @@ func (e escapes) Error() string { return "the file contains <" + e.tag + ">, whi
 // is - matched and edited rather than searched and spliced.
 func (in *inliner) clean(file, prefix string) (string, error) {
 	var bad string
-	var scripts, handlers, renamed, opaque int
+	var scripts, handlers, renamed, opaque, foreign int
 	out, err := lolhtml.RewriteString(file,
 		lolhtml.OnElement("script,style", func(e *lolhtml.Element) error {
 			scripts++
+			e.Remove()
+			return nil
+		}),
+		// A foreignObject is an HTML document inside the image, and the rules
+		// below are written for SVG. Inside one the parser switches back to
+		// HTML - NamespaceURI says so - and an <iframe srcdoc="…"> there is a
+		// real iframe running real script, same-origin, with no on* attribute
+		// and no href for anything below to catch. Widening the two blocklists
+		// would mean carrying the whole of HTML in them, so the element goes
+		// instead, with everything in it.
+		//
+		// Removing it does not stop the handler below running for its content:
+		// a <div> in there still sets bad and the file is still refused. That is
+		// the conservative answer of the two and costs nothing, since the
+		// content was going to be dropped anyway.
+		lolhtml.OnElement("foreignObject", func(e *lolhtml.Element) error {
+			foreign++
 			e.Remove()
 			return nil
 		}),
@@ -241,6 +269,7 @@ func (in *inliner) clean(file, prefix string) (string, error) {
 		return "", escapes{bad}
 	}
 	in.res.Scripts += scripts
+	in.res.Foreign += foreign
 	in.res.Handlers += handlers
 	in.res.Renamed += renamed
 	in.res.Opaque += opaque

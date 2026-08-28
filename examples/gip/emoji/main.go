@@ -113,10 +113,16 @@ func Expand(dst io.Writer, src io.Reader, encoding string) (Result, error) {
 				return nil
 			}
 			depth++
-			return e.OnEndTag(func(t *lolhtml.EndTag) error {
-				if t.Name() != tag {
-					return nil
-				}
+			return e.OnEndTag(func(*lolhtml.EndTag) error {
+				// Unconditionally, and in particular without comparing the end
+				// tag's name to this element's. This handler runs once, for the
+				// end of this element, and a name that does not match means the
+				// end tag was omitted and an ancestor's closed it: </select>
+				// ends an <option>, and EndTag.Name says "select" for both
+				// handlers. Skipping the decrement there leaves depth raised for
+				// the rest of the document, which quietly stops every later
+				// expansion - <select><option>a</select> is enough, and the
+				// report still says the run succeeded.
 				depth--
 				return nil
 			})

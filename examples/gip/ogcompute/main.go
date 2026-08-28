@@ -176,8 +176,11 @@ func (f *filler) resolve(raw string) string {
 	return base.ResolveReference(u).String()
 }
 
-// markup builds the tags to insert, and records what was left out and why.
-func (f *filler) markup() string {
+// markup builds the tags to insert, and records what was left out and why. The
+// keys come back rather than going straight into f.inserted: whether the tags
+// reach the document is settled by the rewrite below, and a report that names
+// them before that is a report that can lie.
+func (f *filler) markup() (string, []string) {
 	title := f.title
 	if title == "" {
 		title = f.haveTitle
@@ -191,6 +194,7 @@ func (f *filler) markup() string {
 	}
 
 	var sb strings.Builder
+	var keys []string
 	add := func(key, value string) {
 		if value == "" {
 			return
@@ -199,7 +203,7 @@ func (f *filler) markup() string {
 			f.note("the page already declares " + key)
 			return
 		}
-		f.inserted = append(f.inserted, key)
+		keys = append(keys, key)
 		sb.WriteString(`<meta property="` + key + `" content="` +
 			lolhtml.EscapeAttribute(value) + `">`)
 	}
@@ -207,19 +211,17 @@ func (f *filler) markup() string {
 	add("og:title", title)
 	add("og:image", image)
 	add("og:description", f.desc)
-	return sb.String()
+	return sb.String(), keys
 }
 
 func (f *filler) writePass(doc []byte, w io.Writer) error {
 	f.passes++
 
-	markup := f.markup()
-	sawHead := false
+	markup, keys := f.markup()
 	placed := markup == ""
 
 	out, err := lolhtml.NewWriter(w,
 		lolhtml.OnElement("head", func(e *lolhtml.Element) error {
-			sawHead = true
 			if !e.CanHaveContent() {
 				return nil
 			}
@@ -231,8 +233,16 @@ func (f *filler) writePass(doc []byte, w io.Writer) error {
 				return end.Before(markup, lolhtml.HTML)
 			})
 		}),
+		// The fallback turns on placed alone, never on having seen a <head>
+		// start tag. </head> is one of the end tags HTML lets a document leave
+		// out, and OnEndTag simply does not fire for one that was left out - so
+		// a page written <head>...<body> reaches here with the head seen and
+		// nothing inserted. A start-tag flag would take that as done and skip
+		// the only remaining position. placed cannot make that mistake: when
+		// the head did close, its end tag came before this start tag and set
+		// it.
 		lolhtml.OnElement("body", func(e *lolhtml.Element) error {
-			if sawHead || placed {
+			if placed {
 				return nil
 			}
 			placed = true
@@ -252,7 +262,14 @@ func (f *filler) writePass(doc []byte, w io.Writer) error {
 		out.Close()
 		return err
 	}
-	return out.Close()
+	if err := out.Close(); err != nil {
+		return err
+	}
+	// Only now is it true that the tags are in the document.
+	if placed {
+		f.inserted = append(f.inserted, keys...)
+	}
+	return nil
 }
 
 func decoded(s string) string { return stdhtml.UnescapeString(strings.TrimSpace(s)) }

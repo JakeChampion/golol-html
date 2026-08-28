@@ -79,7 +79,7 @@ type slugger struct {
 	// used guards against two headings claiming one anchor within this run.
 	used map[string]bool
 
-	seen     []string // ids decided, in document order
+	seen     []string // ids decided, one slot per heading, indexed by ordinal
 	planned  []string // what the first pass decided, indexed by heading ordinal
 	assigned int
 	reused   int
@@ -180,6 +180,16 @@ func (s *slugger) options(assign bool) []lolhtml.Option {
 			if !assign {
 				// First pass: decide nothing here, because the text is not in
 				// yet. The end tag does the deciding.
+				//
+				// The slot is reserved now, though, and that is the point of
+				// this line: the plan is indexed by the heading's ordinal, and
+				// the second pass looks its id up by that ordinal. Appending
+				// only from the end-tag handler would leave no slot for a
+				// heading whose end tag never arrives - </h1> can be left out,
+				// and a heading unclosed at the end of the document gets no
+				// callback at all - and every later heading would then slide up
+				// one slot and be given its neighbour's anchor.
+				s.seen = append(s.seen, "")
 				if !h.had {
 					if id, ok := s.known[h.key()]; ok && !s.used[id] {
 						h.id = id
@@ -242,7 +252,9 @@ func (s *slugger) options(assign bool) []lolhtml.Option {
 						s.known[h.key()] = h.id
 					}
 				}
-				s.seen = append(s.seen, h.id)
+				// Into the slot this heading reserved at its start tag, not
+				// onto the end: see there.
+				s.seen[h.ord-1] = h.id
 				return nil
 			})
 		}),
