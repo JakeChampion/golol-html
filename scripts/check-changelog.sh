@@ -14,8 +14,8 @@
 # needs no remote. A diff that deletes fragments is a release fold and is
 # allowed to edit CHANGELOG.md - that is the one commit that is supposed to.
 #
-# Deliberately shallow, like check-workflows.sh: a fragment is a bullet, free of
-# conflict markers and tabs. It does not lint prose.
+# Deliberately shallow, like check-workflows.sh: a fragment declares a bump, is a
+# bullet, and is free of conflict markers and tabs. It does not lint prose.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -56,10 +56,22 @@ for f in ${fragments[@]+"${fragments[@]}"}; do
         continue
     fi
 
+    # The bump line is what makes the release number derivable rather than
+    # remembered; see changelog.d/README.md. Required rather than defaulted,
+    # because a default is a guess made by whoever is least placed to make it -
+    # the release, weeks later, rather than the author with the change in front
+    # of them.
+    if ! head -1 "${f}" | grep -qE '^<!-- bump: (major|minor|patch) -->$'; then
+        echo "FAIL ${f}: first line must be '<!-- bump: major|minor|patch -->'"
+        fail=1
+        continue
+    fi
+
     # An entry that does not start with a bullet lands in the changelog as a
-    # paragraph attached to whatever precedes it.
-    if ! head -1 "${f}" | grep -q '^- '; then
-        echo "FAIL ${f}: does not begin with a '- ' bullet"
+    # paragraph attached to whatever precedes it. Line 3, the bump line and the
+    # blank after it having been counted.
+    if ! sed -n '3p' "${f}" | grep -q '^- '; then
+        echo "FAIL ${f}: the bump line must be followed by a blank line and a '- ' bullet"
         fail=1
         continue
     fi

@@ -1,0 +1,153 @@
+name: release
+
+# Versioning and releasing from the fragments, in the shape changesets uses.
+#
+# Every change adds a file to changelog.d/ saying what it did and how far it
+# moves the version. This workflow is the other end: on a push to main it either
+# opens a release pull request holding the fold, or - if that pull request has
+# just merged - tags what it produced. The version number is then the sum of
+# what each change declared about itself, rather than a judgement someone makes
+# at the end from a diff they have to reconstruct.
+#
+# Not @changesets/cli itself. That is npm tooling, and this repository has no
+# JavaScript, a root go.mod with no requires, and a scripts/ directory that is
+# deliberately dependency-free. What changesets actually offers a Go module is
+# the fragment-declares-its-bump discipline and the two-phase release, and both
+# are a few lines of shell. Publishing - the part that would have justified the
+# dependency - is `git push origin <tag>` here.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # The token is set here rather than on the push, so the credential is
+      # handled by the action that is built to handle it and never appears in a
+      # remote URL. RELEASE_PR_TOKEN is a fine-grained PAT with contents:write
+      # and pull-requests:write; the two steps that need it say what is lost
+      # when it is absent.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          token: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
+          # Tags are needed to work out the next version, and the history to
+          # tell a release fold from an ordinary push.
+          fetch-depth: 0
+
+      - name: Work out what to do
+        id: plan
+        run: |
+          bump=$(scripts/changelog.sh --bump)
+          echo "bump=${bump}" >> "$GITHUB_OUTPUT"
+          if [ "${bump}" != "none" ]; then
+            version=$(scripts/changelog.sh --next-version)
+            echo "action=propose" >> "$GITHUB_OUTPUT"
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
+            echo "Fragments are pending: proposing ${version} (${bump})."
+            exit 0
+          fi
+          # No fragments. Either nothing is pending, or a release pull request
+          # has just merged and the section it wrote has no tag yet. The heading
+          # is the record of what was released, so ask it rather than the diff.
+          version=$(grep -m1 -oE '^## v[0-9]+\.[0-9]+\.[0-9]+$' CHANGELOG.md | awk '{print $2}' || true)
+          if [ -z "${version}" ]; then
+            echo "action=none" >> "$GITHUB_OUTPUT"
+            echo "No fragments and no version heading. Nothing to do."
+          elif git rev-parse -q --verify "refs/tags/${version}" >/dev/null; then
+            echo "action=none" >> "$GITHUB_OUTPUT"
+            echo "${version} is already tagged. Nothing to do."
+          else
+            echo "action=tag" >> "$GITHUB_OUTPUT"
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
+            echo "${version} is folded but untagged: tagging it."
+          fi
+
+      - name: Fold the changelog
+        if: steps.plan.outputs.action == 'propose'
+        run: scripts/changelog.sh --release
+
+      # The same token question as native.yml: a pull request opened with the
+      # default GITHUB_TOKEN gets no checks, and a release pull request is the
+      # one that least deserves to go without them.
+      - name: Open the release pull request
+        id: pr
+        if: steps.plan.outputs.action == 'propose'
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
+        with:
+          token: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
+          branch: release/${{ steps.plan.outputs.version }}
+          title: 'Release ${{ steps.plan.outputs.version }}'
+          commit-message: |
+            Release ${{ steps.plan.outputs.version }}
+
+            Folded from changelog.d/ by scripts/changelog.sh --release. The
+            version is the highest bump the fragments declared
+            (${{ steps.plan.outputs.bump }}), applied to the newest v* tag.
+          body: |
+            Folded from `changelog.d/` by `scripts/changelog.sh --release`.
+
+            The version is the highest bump the fragments declared
+            (**${{ steps.plan.outputs.bump }}**), applied to the newest `v*` tag.
+            Merging this tags `${{ steps.plan.outputs.version }}`; closing it
+            leaves the fragments where they are, and the next push to `main`
+            opens it again.
+
+            Read the `CHANGELOG.md` diff as the release notes, because that is
+            what they are.
+
+      - name: Say whether the release pull request will get checks
+        if: steps.plan.outputs.action == 'propose'
+        env:
+          HAS_TOKEN: ${{ secrets.RELEASE_PR_TOKEN != '' }}
+          PR: ${{ steps.pr.outputs.pull-request-url }}
+        run: |
+          if [ "${HAS_TOKEN}" = "true" ]; then
+            echo "::notice::Opened ${PR} with RELEASE_PR_TOKEN, so ci runs on it."
+          else
+            echo "::warning::Opened ${PR} with the default token, so no checks" \
+                 "will run on it. Close and reopen it by hand, or configure a" \
+                 "RELEASE_PR_TOKEN secret (contents:write, pull-requests:write)."
+          fi
+
+      # A tag pushed with the default GITHUB_TOKEN starts no workflows, so
+      # ci.yml and verify-native.yml would not run on the one commit they exist
+      # to gate. With the PAT they do. Without it the tag is still created - a
+      # release that exists unverified beats a release that does not exist - and
+      # the warning says exactly what did not happen.
+      - name: Tag it
+        if: steps.plan.outputs.action == 'tag'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+          HAS_TOKEN: ${{ secrets.RELEASE_PR_TOKEN != '' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # The section body is the release notes; there is no second place to
+          # write them and no way for the two to disagree.
+          notes=$(awk -v v="## ${VERSION}" '
+            $0 == v {found=1; next}
+            found && /^## / {exit}
+            found {print}' CHANGELOG.md)
+          printf '%s\n\n%s\n' "${VERSION}" "${notes}" | git tag -a "${VERSION}" -F -
+          git push origin "refs/tags/${VERSION}:refs/tags/${VERSION}"
+          echo "### Released ${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${HAS_TOKEN}" != "true" ]; then
+            echo "::warning::${VERSION} was tagged with the default token, so" \
+                 "ci and verify-native did NOT run on it. Check them by hand," \
+                 "or configure RELEASE_PR_TOKEN."
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Tagged with the default token, so **no workflows ran on this tag**." >> "$GITHUB_STEP_SUMMARY"
+          fi

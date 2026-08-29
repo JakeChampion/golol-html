@@ -1,3 +1,5 @@
+<!-- bump: patch -->
+
 - `verify-native.yml` rebuilds the `linux_amd64` archive from the pinned
   lol-html revision and diffs it against `SHA256SUMS` - on every `v*` tag, on a
   pull request touching the pin or `internal/`, and weekly.
