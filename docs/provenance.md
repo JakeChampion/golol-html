@@ -252,12 +252,15 @@ Two limits worth knowing before relying on it:
 
 ## What is not verifiable from the repository alone
 
-- **Nothing in the repository ties the committed binaries to the pin.**
+- **One platform of the seven is tied to the pin automatically.**
   `SHA256SUMS` is self-referential, `check-pins.sh` checks prose against prose,
   and CI's checksum step compares the archives to a file committed beside them.
-  The reproduction in check 5 is the link, and it is not automated: no job
-  rebuilds and compares. A rebuild PR merged while the pin says something else
-  would pass every check the repository runs today.
+  The link is the reproduction in check 5, and `verify-native.yml` now runs it
+  for `linux_amd64` on every `v*` tag, on a pull request touching the pin or
+  `internal/`, and weekly. The other six are not rebuilt by any job. They are
+  cross-built from the same source in the same run, so the one that is checked
+  stands for them - which is an argument, not a measurement, and the way to
+  settle it for a particular archive is the procedure above.
 - **Nothing gates a tag.** `ci.yml` triggers on `push: branches: [main]` and
   `pull_request`; a tag ref matches neither, and there is no release workflow.
   Tagging is a local act, so the binaries a tag ships are whatever was in the

@@ -1,0 +1,99 @@
+name: verify-native
+
+# Rebuild a vendored archive from the pinned lol-html revision and diff it
+# against the committed one.
+#
+# This is the only thing in the repository that ties the binaries under
+# internal/lib to the revision they claim to come from. SHA256SUMS proves the
+# files have not rotted, not where they came from - whoever can push the
+# archives can push the sums with them - and scripts/check-pins.sh compares
+# prose against prose. Without this, a pin bumped and tagged before the native
+# rebuild landed would ship the old binaries under a new claimed revision with
+# every other check green.
+#
+# It is a separate workflow rather than a job in ci.yml because it builds
+# lol-html from source: minutes, not seconds. So it runs where it pays - on a
+# tag, which is the thing a consumer installs; on a pull request that touches
+# the pin or the archives; and weekly, to catch an upstream tag that has been
+# moved under us.
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'scripts/build-native.sh'
+      - 'internal/**'
+      - '.github/workflows/verify-native.yml'
+  schedule:
+    # 04:23, off the hour for the reason fuzz.yml gives.
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  reproduce:
+    # ubuntu-24.04 specifically, matching native.yml's build job: the archives
+    # were produced there, and a different image is a different toolchain.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # rustc records the absolute path of the source tree and of CARGO_HOME in
+      # panic metadata that survives stripping, so the same revision built with
+      # the same compiler in a different directory hashes differently. That is
+      # why `make verify` cannot succeed on a laptop, and why it can succeed
+      # here: a runner's workspace is exactly the path the archives were built
+      # at. If that ever stops being true the diff below would report a
+      # mismatch that looks like tampering, so say so plainly instead.
+      - name: Check this runner reproduces the build path
+        run: |
+          expected=/home/runner/work/golol-html/golol-html
+          if [ "${GITHUB_WORKSPACE}" != "${expected}" ]; then
+            echo "::error::workspace is ${GITHUB_WORKSPACE}, not ${expected}." \
+                 "The archives embed the build path, so a rebuild here cannot" \
+                 "match the committed one and this job cannot prove anything." \
+                 "See docs/provenance.md."
+            exit 1
+          fi
+          if [ "${CARGO_HOME:-$HOME/.cargo}" != "/home/runner/.cargo" ]; then
+            echo "::error::CARGO_HOME is ${CARGO_HOME:-$HOME/.cargo}," \
+                 "not /home/runner/.cargo. Same reason."
+            exit 1
+          fi
+          echo "workspace and CARGO_HOME match the paths the archives were built at"
+
+      - name: Read the pins
+        id: pins
+        run: scripts/build-native.sh --print-pins >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install ${{ steps.pins.outputs.rust_toolchain }} --profile minimal
+          rustup default ${{ steps.pins.outputs.rust_toolchain }}
+
+      - name: Install llvm-strip
+        # GNU binutils cannot read these archives at all: LTO leaves bitcode in
+        # the members, and strip reports success having done nothing.
+        run: sudo apt-get update && sudo apt-get install -y llvm
+
+      - name: Rebuild the host archive and diff it
+        # --verify restores the committed files on its way out, including on
+        # failure, so a mismatch leaves the tree as it found it.
+        run: scripts/build-native.sh --verify
+
+      - name: Say what was proved
+        run: |
+          echo "### Archive reproduces from the pin" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`linux_amd64\` rebuilt byte-for-byte from lol-html \`${{ steps.pins.outputs.lol_html_ref }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "with rustc \`${{ steps.pins.outputs.rust_toolchain }}\`." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The other six are cross-built from the same source in the same run of" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`native.yml\`; this job checks one of them. See \`docs/provenance.md\`." >> "$GITHUB_STEP_SUMMARY"
