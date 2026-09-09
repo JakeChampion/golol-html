@@ -20,6 +20,7 @@ package lolhtml_test
 // a design property.
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"math"
@@ -170,13 +171,25 @@ func TestAllocationsPerMatchAreConstant(t *testing.T) {
 		}),
 		perHit: 2,
 	}, {
-		// Writing costs the same as reading: both are one cgo call carrying one
-		// string.
+		// Writing costs less than reading: the strings written are lent to
+		// lol-html for the call, not copied, and the error slot the call
+		// writes into on failure belongs to the Writer rather than to the
+		// call. So the only allocation is the wrapper. It used to be two,
+		// because the address of a local error slot escaped to the heap on
+		// every mutation.
 		name: "element handler setting an attribute",
 		opt: lolhtml.OnElement("a[href]", func(e *lolhtml.Element) error {
 			return e.SetAttribute("rel", "noopener")
 		}),
-		perHit: 2,
+		perHit: 1,
+	}, {
+		// An insertion into the element's content checks the tag name first
+		// and borrows it for the check rather than reading it: still one.
+		name: "element handler appending HTML",
+		opt: lolhtml.OnElement("a[href]", func(e *lolhtml.Element) error {
+			return e.Append("<i>x</i>", lolhtml.HTML)
+		}),
+		perHit: 1,
 	}, {
 		// Two strings, two allocations. Nothing is cached, so reading the same
 		// attribute twice costs twice.
@@ -385,9 +398,11 @@ func TestAttributeIterationCostsPerAttribute(t *testing.T) {
 }
 
 // TestSetAttributeCostsNoMoreThanReadingOne records a property that is easy to
-// lose: writing an attribute goes through the same single cgo call as reading
-// one, so a rewrite that edits every match costs the same as one that only
-// inspects them. A regression here would not change any output.
+// lose: writing an attribute goes through one cgo call, lends its strings to
+// lol-html rather than copying them, and reports failure through the Writer's
+// own error slot, so a rewrite that edits every match costs no more than one
+// that only inspects them - less, in fact, since a read copies the value out.
+// A regression here would not change any output.
 func TestSetAttributeCostsNoMoreThanReadingOne(t *testing.T) {
 	requireRealAllocationCounts(t)
 
@@ -401,7 +416,7 @@ func TestSetAttributeCostsNoMoreThanReadingOne(t *testing.T) {
 		return e.SetAttribute("rel", "noopener")
 	}))
 
-	if write != read {
+	if write > read {
 		t.Errorf("setting an attribute allocates %d, reading one allocates %d", write, read)
 	}
 }
@@ -624,5 +639,90 @@ func TestASecondPassCostsTwice(t *testing.T) {
 				"documentation's table says the per-element cost dominates by "+
 				"this size", one)
 		}
+	}
+}
+
+// TestStreamingThroughAsWriterDoesNotAllocatePerChunk. AsWriter is the io.Copy
+// end of the streaming API - the path the documentation recommends for a
+// template too large to hold - and every chunk through it used to be copied
+// into a string, so that the sink could look at its last four bytes. io.Copy of
+// a stream therefore allocated the size of the stream, in pieces, on the API
+// whose purpose is not to assemble content. Only the last four bytes are
+// converted now, so the count is flat in the size of the stream.
+//
+// The reader is a bare io.Reader over the bytes rather than the *bytes.Reader
+// itself: bytes.Reader implements WriterTo and hands io.Copy the whole slice as
+// one Write, and one Write was one allocation whatever its size. Through
+// io.Copy's own buffer the stream arrives in 32 KB pieces, which is how a file
+// arrives, and 1 MB is thirty-two of them to 64 KB's two.
+func TestStreamingThroughAsWriterDoesNotAllocatePerChunk(t *testing.T) {
+	requireRealAllocationCounts(t)
+
+	measure := func(n int) int {
+		data := bytes.Repeat([]byte("x"), n)
+		run := func() {
+			w, err := lolhtml.NewWriter(io.Discard, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+				return e.StreamSetInnerContent(func(s *lolhtml.Sink) error {
+					_, err := io.Copy(s.AsWriter(lolhtml.Text), struct{ io.Reader }{bytes.NewReader(data)})
+					return err
+				})
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.Write([]byte(`<p>old</p>`)); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		run()
+		return int(testing.AllocsPerRun(allocRuns, run))
+	}
+
+	small := measure(64 << 10)
+	large := measure(1 << 20)
+
+	// A per-chunk allocation would put the two thirty apart. The tolerance is
+	// for a stray allocation of setup, as in TestAllocationsPerMatchAreConstant.
+	const tolerance = 2
+	if large-small > tolerance {
+		t.Errorf("streaming allocations grew with the stream: %d for 64 KB, %d for 1 MB",
+			small, large)
+	}
+}
+
+// TestAttributesCostsLessThanAttributeList. Attributes yields name and value
+// and nothing else, so it has no reason to fetch the source spelling of each
+// name, which AttributeList does for its NamePreserveCase field - one C call
+// and one copy per attribute. It used to go through AttributeList anyway.
+// Measured: twelve allocations per element of four attributes against sixteen.
+// The assertion is only the direction, which is the part that is a design
+// property.
+func TestAttributesCostsLessThanAttributeList(t *testing.T) {
+	requireRealAllocationCounts(t)
+
+	var b strings.Builder
+	b.WriteString("<html><body>")
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&b, `<a href="/%d" class="c" data-a="1" data-b="2">t</a>`, i)
+	}
+	b.WriteString("</body></html>")
+	doc := b.String()
+
+	iterated := allocsFor(t, doc, lolhtml.OnElement("a[href]", func(e *lolhtml.Element) error {
+		for range e.Attributes() {
+		}
+		return nil
+	}))
+	listed := allocsFor(t, doc, lolhtml.OnElement("a[href]", func(e *lolhtml.Element) error {
+		_ = e.AttributeList()
+		return nil
+	}))
+
+	if iterated >= listed {
+		t.Errorf("iterating four attributes allocates %d, listing them allocates %d; "+
+			"Attributes should be the cheaper of the two", iterated, listed)
 	}
 }

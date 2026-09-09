@@ -18,7 +18,9 @@
 // data:, blob: or javascript: src names no host either and is not first-party at
 // all - it is content the page carries, which is what the sandbox attribute exists
 // for. A src the URL parser refuses is hardened too, because a guard that fails
-// open on the inputs it cannot read is not a guard. See sameOrigin.
+// open on the inputs it cannot read is not a guard. And the URL parser in question
+// is the browser's, not Go's: a backslash is a slash there, so "\\evil.example/x"
+// is a third-party frame however url.Parse reads it. See sameOrigin.
 package main
 
 import (
@@ -163,7 +165,7 @@ func (h *hardener) options() []lolhtml.Option {
 }
 
 func hostOf(src string) string {
-	u, err := url.Parse(strings.TrimSpace(stdhtml.UnescapeString(src)))
+	u, err := url.Parse(normalise(src))
 	if err != nil {
 		return ""
 	}
@@ -186,8 +188,13 @@ func hostOf(src string) string {
 // that really is this origin, and it is the only one this returns true for. A
 // parse failure returns false: failing open is how a guard that reads well ends up
 // doing nothing.
+//
+// The src is judged as a browser's URL parser reads it, not as url.Parse does:
+// see normalise. "\\evil.example/x" is a path to Go and the network-path reference
+// "//evil.example/x" to a browser, and the first version of this guard left it
+// alone on Go's reading.
 func sameOrigin(src string) bool {
-	u, err := url.Parse(strings.TrimSpace(stdhtml.UnescapeString(src)))
+	u, err := url.Parse(normalise(src))
 	if err != nil {
 		return false
 	}
@@ -195,6 +202,18 @@ func sameOrigin(src string) bool {
 	// document. A scheme-relative "//host/x" has an authority, so it is judged by
 	// its host like any absolute URL.
 	return u.Scheme == "" && u.Host == ""
+}
+
+// normalise turns an attribute's source text into the string the WHATWG URL
+// parser would see: character references decoded (Element.Attribute leaves them
+// encoded), leading and trailing C0 controls and spaces stripped, tabs and
+// newlines removed, and backslashes read as slashes - which they are for the
+// special schemes an iframe loads over, so "/\evil.example/x", "\\evil.example/x"
+// and "\/evil.example/x" all become "//evil.example/x".
+func normalise(raw string) string {
+	v := stdhtml.UnescapeString(raw)
+	v = strings.TrimFunc(v, func(r rune) bool { return r <= ' ' })
+	return strings.NewReplacer("\t", "", "\n", "", "\r", "", `\`, "/").Replace(v)
 }
 
 func displayHost(h string) string {

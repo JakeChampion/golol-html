@@ -39,16 +39,22 @@ It is required rather than defaulted, and that is the whole point of it. A
 default is a guess made by whoever is least able to make it - the release, weeks
 later, from a diff someone has to reconstruct - instead of the author with the
 change in front of them. `scripts/changelog.sh --bump` prints the highest of
-them and `--next-version` applies it to the newest `v*` tag, so the release
-number is derived rather than decided.
+them and `--next-version` applies it to the newest version there is - the
+newest `v*` tag or the newest `## vX.Y.Z` heading in `CHANGELOG.md`, whichever
+is higher, so a section folded but not yet tagged still counts - and the
+release number is derived rather than decided. A `major` bump that would pass
+v1 is refused unless the module path already ends in the matching `/vN`,
+because that is the only tag Go could resolve.
 
 This is the discipline `changesets` is built around, without the npm toolchain
 it comes in: a Go module has nothing to publish to a registry, so `changeset
 publish` would have been `git push origin <tag>` wearing a `package.json`.
 
-Nothing parses these beyond `scripts/check-changelog.sh`, which checks that a
-fragment is a bullet and is free of conflict markers and tabs. The text is
-otherwise passed through verbatim.
+Nothing parses these beyond `scripts/check-changelog.sh` and `changelog.sh`
+itself. The checker requires the bump line - a first line that is exactly
+`<!-- bump: major|minor|patch -->` - and that the entry after it is a bullet,
+free of conflict markers and tabs; `changelog.sh --bump` and `--next-version`
+read the same line. The text is otherwise passed through verbatim.
 
 ## Releasing
 
@@ -62,7 +68,7 @@ calling them:
 ```
 scripts/changelog.sh                  # print the assembled section, change nothing
 scripts/changelog.sh --bump           # the highest bump pending, or "none"
-scripts/changelog.sh --next-version   # that bump applied to the newest v* tag
+scripts/changelog.sh --next-version   # that bump applied to the newest version
 scripts/changelog.sh --apply          # fold into ## Unreleased
 scripts/changelog.sh --release        # fold, and name the section with the version
 ```

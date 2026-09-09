@@ -104,8 +104,12 @@ build_target() {
     echo "==> building ${go_target} (${rust_target})"
     rustup target add --toolchain "${RUST_TOOLCHAIN}" "${rust_target}"
 
+    # --locked: upstream ships c-api/Cargo.lock at the pin, and it is part of
+    # what the archives were built from. Without the flag a lockfile cargo
+    # decided to re-resolve would build silently and surface later as a hash
+    # mismatch that reads like tampering; with it, that is a hard error here.
     ( cd "${work}/lol-html/c-api" \
-      && cargo "+${RUST_TOOLCHAIN}" rustc --release --target "${rust_target}" \
+      && cargo "+${RUST_TOOLCHAIN}" rustc --locked --release --target "${rust_target}" \
              --crate-type staticlib )
 
     local built="${work}/lol-html/c-api/target/${rust_target}/release/liblolhtml.a"
@@ -256,7 +260,29 @@ case "${1:-}" in
         trap restore_committed EXIT
 
         before="$(sha256 "${archive}" | cut -d' ' -f1)"
-        fetch_source; sync_header; build_target "${target}"
+        fetch_source; sync_header
+
+        # The header and licence are checked before the build, because they
+        # need no build: sync_header has just written upstream's copies over
+        # the committed ones, and the committed ones are in restore_dir. The
+        # header is as much of the ABI as the archive - it is what shim.c and
+        # every cgo call compile against - and until this compared it, a
+        # verify proved the binary came from the pin while taking the header's
+        # word for itself.
+        for pair in "lol_html.h:${header}" "LICENSE-lol-html:${license}"; do
+            saved="${restore_dir}/${pair%%:*}"; synced="${pair#*:}"
+            if ! cmp -s "${saved}" "${synced}"; then
+                echo "==> ${synced#"${repo_root}/"} DIFFERS from upstream at ${LOL_HTML_REF}" >&2
+                diff -u "${saved}" "${synced}" | head -40 >&2 || true
+                echo "    The committed copy is not the pinned revision's. The header and" >&2
+                echo "    the archives are replaced together by the native workflow, so" >&2
+                echo "    one without the other means they were not rebuilt together." >&2
+                exit 1
+            fi
+        done
+        echo "==> header and licence match upstream at ${LOL_HTML_REF}"
+
+        build_target "${target}"
         after="$(sha256 "${archive}" | cut -d' ' -f1)"
         if [[ "${before}" == "${after}" ]]; then
             echo "==> ${target} reproduced exactly: ${after}"

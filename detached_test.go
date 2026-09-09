@@ -152,14 +152,37 @@ func TestEveryGetterIsSilentlyEmpty(t *testing.T) {
 			t.Errorf("%s = true, want false", name)
 		}
 	}
-	if got := el.SourceLocation(); got != (lolhtml.SourceLocation{}) {
-		t.Errorf("SourceLocation = %v, want the zero value", got)
+	// Every unit that reports a location, not only Element. These matter more
+	// than the string getters: the detached guard is what stops the call from
+	// reaching lol-html at all, and lol-html asserts on the NULL pointer a
+	// detached unit would hand it ("$var is NULL" in the C shim). That is a
+	// Rust panic across the FFI boundary, which aborts the whole process - not
+	// a Go panic, so nothing can recover from it. A guard deleted from any of
+	// these getters used to pass the suite, because no test called it detached.
+	for name, got := range map[string]lolhtml.SourceLocation{
+		"Element.SourceLocation":   el.SourceLocation(),
+		"TextChunk.SourceLocation": text.SourceLocation(),
+		"Doctype.SourceLocation":   doctype.SourceLocation(),
+		"EndTag.SourceLocation":    endTag.SourceLocation(),
+	} {
+		if got != (lolhtml.SourceLocation{}) {
+			t.Errorf("%s = %v, want the zero value", name, got)
+		}
 	}
 	if got := el.UserData(); got != nil {
 		t.Errorf("UserData = %v, want nil", got)
 	}
-	if n, ok := doctype.Name(); n != "" || ok {
-		t.Errorf("Doctype.Name = %q, %v", n, ok)
+	// The doctype's three optional strings, which answer ("", false) - the same
+	// as a declaration that simply has no identifier. The document in stash has
+	// a name, so the false here is the detachment, not an absent field.
+	for name, f := range map[string]func() (string, bool){
+		"Doctype.Name":     doctype.Name,
+		"Doctype.PublicID": doctype.PublicID,
+		"Doctype.SystemID": doctype.SystemID,
+	} {
+		if v, ok := f(); v != "" || ok {
+			t.Errorf("%s = %q, %v; want \"\", false", name, v, ok)
+		}
 	}
 	if text.Bytes() != nil {
 		t.Errorf("TextChunk.Bytes = %v, want nil", text.Bytes())
@@ -275,5 +298,19 @@ func TestARetainedSinkRefusesEveryMethod(t *testing.T) {
 	// And nothing it was told to write reached the output.
 	if strings.Contains(out, "late") {
 		t.Errorf("a write through the retained sink reached the output: %q", out)
+	}
+}
+
+// TestAZeroValueSinkIsDetached: a Sink is only ever handed to a StreamFunc, but
+// the type is exported and its zero value can be constructed. That one has no
+// rewriter behind it at all, which Err reports as ErrDetached - the same answer
+// as a Sink kept past its StreamFunc, because to the caller they are the same
+// thing: a Sink with nothing to write into. Err checks for the missing rewriter
+// before it looks for a live pointer, and this is the only call that reaches
+// that first check.
+func TestAZeroValueSinkIsDetached(t *testing.T) {
+	var zero lolhtml.Sink
+	if err := zero.Err(); !errors.Is(err, lolhtml.ErrDetached) {
+		t.Errorf("Sink{}.Err() = %v, want ErrDetached", err)
 	}
 }

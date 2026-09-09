@@ -69,5 +69,5 @@ func (d *DocumentEnd) Append(content string, ct ContentType) error {
 	if err != nil {
 		return err
 	}
-	return withContent(p, content, ct.isHTML(), "doc_end_append", cfDocEndAppend)
+	return withContent(p, d.c.nt.cerr, content, ct.isHTML(), "doc_end_append", cfDocEndAppend)
 }

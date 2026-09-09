@@ -250,6 +250,10 @@ func golol_streaming_write_cb(sink *C.lol_html_streaming_sink_t, ud C.uintptr_t)
 func golol_streaming_drop_cb(ud C.uintptr_t) {
 	// lol-html guarantees exactly one drop after the last use of the handler,
 	// which is what makes streaming handles self-releasing rather than tied to
-	// the lifetime of the rewriter.
-	deleteHandle(cgo.Handle(uintptr(ud)))
+	// the lifetime of the rewriter - except for a handler abandoned by a Goexit
+	// in the frame that owned it, which is what the map on native is for.
+	h := cgo.Handle(uintptr(ud))
+	cb := h.Value().(*streamingCB)
+	delete(cb.c.nt.streaming, h)
+	deleteHandle(h)
 }

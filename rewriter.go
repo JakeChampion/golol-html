@@ -62,6 +62,12 @@ type state struct {
 	handlerErr error // first error returned by a user handler
 	sinkErr    error // first error returned by the destination writer
 	panicVal   any   // first panic recovered at the C boundary
+
+	// inSink is set while a Sink write is on the stack. The destination writer
+	// runs synchronously inside that write, so a destination that can reach the
+	// Sink could write into it again from underneath the write already using
+	// it. Refused with ErrReentrant, like Write and Close.
+	inSink bool
 }
 
 // native owns every C allocation belonging to one rewriter, so that a single
@@ -82,6 +88,14 @@ type native struct {
 	selectors []*C.lol_html_selector_t
 	handles   []cgo.Handle
 	userData  map[cgo.Handle]struct{}
+	// streaming holds every streaming-insertion handle lol-html has not yet
+	// dropped. Ordinarily lol-html drops each one exactly once and the drop
+	// callback takes it out; the map exists for the call that never returns.
+	// A handler that leaves through runtime.Goexit skips the Rust frames that
+	// own the insertions it registered, so their drop never runs, and without
+	// this the handles lived for the life of the process. release deletes
+	// whatever is left after the rewriter is freed.
+	streaming map[cgo.Handle]struct{}
 	once      sync.Once
 }
 
@@ -119,8 +133,10 @@ type native struct {
 // to count into it, to stop it, to reach it from a nested rewrite - makes the
 // Writer permanently reachable through that table, and the cleanup that would have
 // released it can never run. The rewriter, its selectors and every handle then
-// leak for the life of the process. Nothing detects it at runtime; a deferred
-// Close is the whole answer.
+// leak for the life of the process. A destination writer that holds the Writer
+// defeats it the same way, since dst is reachable from the same table for as
+// long as the Writer is. Nothing detects it at runtime; a deferred Close is the
+// whole answer.
 func NewWriter(dst io.Writer, opts ...Option) (*Writer, error) {
 	if dst == nil {
 		return nil, errNilDst
@@ -181,10 +197,19 @@ func NewWriter(dst io.Writer, opts ...Option) (*Writer, error) {
 // the next. See the package documentation on two passes.
 //
 // An error from one of your handlers, or from the destination writer, surfaces
-// here. lol-html cannot resume after an error, so the Writer is poisoned and
-// every later Write and the Close return ErrPoisoned wrapped around that first
-// error - so errors.Is and errors.As still reach it, however late it is asked
-// for.
+// here, and a failed Write reports n = 0 whatever the rewriter consumed before
+// the failure. lol-html cannot resume after an error, so the Writer is poisoned
+// and every later Write and the Close return ErrPoisoned wrapped around that
+// first error - so errors.Is and errors.As still reach it, however late it is
+// asked for. A panic from a handler or from the destination writer is contained
+// the same way - parked at the boundary and re-raised from here, on the calling
+// goroutine, with the native resources released first - so the trace starts at
+// Write rather than in the code that panicked.
+//
+// Write is not reentrant. Called from inside a handler, or from the destination
+// writer that this Write is running, it returns [ErrReentrant] without touching
+// lol-html, and the outer call carries on; so does Close. A handler that wants
+// to stop the rewrite returns an error.
 //
 // A destination failure stops the rewrite, and stops it completely: no further
 // element, comment or text handler runs, and the [OnDocumentEnd] handler never
@@ -223,9 +248,16 @@ func NewWriter(dst io.Writer, opts ...Option) (*Writer, error) {
 // element delivers nothing, and one that fails in [OnDocumentEnd] has already
 // delivered all of it.
 func (w *Writer) Write(p []byte) (int, error) {
+	// A recorded cause outranks closed: a Writer that failed and was then
+	// closed keeps answering with the reason, however late it is asked for,
+	// which is what ErrPoisoned promises. Without a cause, closed wins - a
+	// panic inside Close leaves the Writer closed rather than poisoned, as
+	// Close documents - and a Writer that finished cleanly is simply closed.
 	switch {
 	case w.inCall:
 		return 0, ErrReentrant
+	case w.cause != nil:
+		return 0, w.poisonErr()
 	case w.closed:
 		return 0, ErrClosed
 	case w.poisoned:
@@ -388,6 +420,13 @@ func (n *native) release() {
 			deleteHandle(h)
 		}
 		n.userData = nil
+		// Freeing the rewriter dropped the insertions it still held, and each
+		// drop removed its handle from the map; what remains belongs to frames
+		// that were abandoned rather than unwound.
+		for h := range n.streaming {
+			deleteHandle(h)
+		}
+		n.streaming = nil
 		for _, s := range n.selectors {
 			C.lol_html_selector_free(s)
 		}
@@ -410,11 +449,26 @@ func (n *native) newHandle(v any) cgo.Handle {
 // rewriter, and release is guarded by a sync.Once, so neither the caller's
 // deferred Close nor the cleanup can double-free.
 func (w *Writer) endCall() {
+	// inCall is cleared on the line after each C call returns, so finding it
+	// still set here means the call never returned: the goroutine is leaving
+	// through a panic or through runtime.Goexit - t.Fatal in a handler is the
+	// usual spelling - and the Rust frames under it were skipped, not unwound.
+	// A panic is parked at the callback and re-raised by takeDeferred, so it
+	// arrives here through recover. Goexit is not a panic and recovers as nil,
+	// which used to leave the Writer looking healthy: the caller's deferred
+	// Close then ran lol-html's end on a rewriter abandoned mid-write and
+	// reported nil for a truncated document. Either way out, the rewriter is
+	// unusable; poison it and release it before the exit continues.
+	abandoned := w.inCall
 	w.inCall = false
 	if r := recover(); r != nil {
 		w.poisoned = true
 		w.c.nt.release()
 		panic(r)
+	}
+	if abandoned {
+		w.poisoned = true
+		w.c.nt.release()
 	}
 }
 

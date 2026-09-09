@@ -372,7 +372,7 @@ func main() {
 		defer f.Close()
 		r = f
 	} else if flag.NArg() > 1 {
-		fmt.Fprintln(os.Stderr, "usage: consentgate [-host h] [-inline-with s] [file.html]")
+		fmt.Fprintln(os.Stderr, "usage: consentgate [-host h] [-inline-selector s] [file.html]")
 		os.Exit(2)
 	}
 

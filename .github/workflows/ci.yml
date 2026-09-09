@@ -175,10 +175,15 @@ jobs:
       # Alpine is tested through docker rather than a container job: the
       # runner's own node binary is glibc-linked, so actions/checkout cannot
       # run inside an Alpine container.
+      # The image is pinned by digest, with the tag in the comment, for the
+      # reason the actions are pinned by SHA: a tag is whatever the registry
+      # says it is today. This is the manifest list's digest, so it resolves
+      # to the right architecture on both the amd64 and the arm64 row.
       - name: Test under musl
         if: ${{ matrix.musl }}
         run: |
-          docker run --rm -v "$PWD":/src -w /src golang:1.25-alpine sh -c '
+          # golang:1.25-alpine
+          docker run --rm -v "$PWD":/src -w /src golang@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 sh -c '
             set -eux
             apk add --no-cache gcc musl-dev
             go build -tags musl ./...
@@ -207,9 +212,19 @@ jobs:
       - run: scripts/check-modules.sh
       - run: scripts/check-pins.sh
       # Symbol drift is checked for all seven archives from here, because
-      # llvm-nm reads every one of them. The struct-layout probe is not: it has
-      # to run the code, so it covers this runner's archive only and says so.
-      - run: scripts/check-abi.sh
+      # llvm-nm reads every one of them - once it is installed. The runner
+      # image puts clang on PATH and not llvm-nm, and without it GNU nm cannot
+      # read the two Mach-O archives, so for as long as this job installed
+      # nothing the script skipped darwin on every run and stayed green.
+      # --require-all makes that skip a failure. llvm-18 by name, matching
+      # native.yml and verify-native.yml; it installs no unversioned names,
+      # hence the PATH entry. The struct-layout probe is still host-only: it
+      # has to run the code, so it covers this runner's archive and says so.
+      - name: Install llvm-nm
+        run: |
+          sudo apt-get update && sudo apt-get install -y llvm-18
+          echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
+      - run: scripts/check-abi.sh --require-all
 
   # AddressSanitizer is where a cgo binding's real bugs live: use-after-free
   # across the boundary, double frees, overruns. The tests check what the

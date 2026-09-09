@@ -3,7 +3,6 @@ package lolhtml
 import (
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // ErrRawTextBreakout is returned by an insertion into the content of a raw-text
@@ -113,11 +112,7 @@ var ErrRawTextBreakout = errors.New("lolhtml: inserted content would end the raw
 // ordinary markup. A caller who cares about that distinction has the namespace -
 // see [Element.NamespaceURI].
 func IsRawText(tag string) bool {
-	if isRawTextLower(tag) {
-		return true
-	}
-	lower := strings.ToLower(tag)
-	return lower != tag && isRawTextLower(lower)
+	return isRawTextLower(asciiLower(tag))
 }
 
 // DecodesCharacterReferences reports whether an HTML parser decodes character
@@ -160,12 +155,11 @@ func DecodesCharacterReferences(tag string) bool {
 // content still has its character references decoded. Kept next to
 // rawTextElements so the two lists cannot drift apart unnoticed.
 func escapableRawText(tag string) bool {
-	switch tag {
+	switch asciiLower(tag) {
 	case "textarea", "title":
 		return true
 	}
-	lower := strings.ToLower(tag)
-	return lower != tag && (lower == "textarea" || lower == "title")
+	return false
 }
 
 func isRawTextLower(tag string) bool {
@@ -220,7 +214,7 @@ func noEscapeExists(tag string) string {
 // which cannot be closed - and for content with nothing in it that could close
 // one.
 func checkRawText(tag, content string) error {
-	lower := strings.ToLower(tag)
+	lower := asciiLower(tag)
 	advice, ok := rawTextElements[lower]
 	if !ok {
 		return nil
@@ -281,20 +275,60 @@ func CheckRawText(tag, content string) error { return checkRawText(tag, content)
 // of ">alert(1)" produces "</script>alert(1)" and the element is closed by the
 // two halves together.
 func findClosingTag(tag, content string) int {
-	lower := strings.ToLower(content)
-	needle := "</" + tag
-	for i := 0; ; {
-		j := strings.Index(lower[i:], needle)
-		if j < 0 {
-			return -1
+	// A byte loop with ASCII folding rather than strings.Index over a lowered
+	// copy. The tokenizer folds ASCII only, so a Unicode fold is the wrong rule:
+	// it maps U+0130 to "i" and refuses "</scrİpt>", which does not end a script.
+	// And strings.ToLower is not length-preserving - U+023A grows from two bytes
+	// to three - so an offset found in the lowered copy is not an offset into
+	// content, and slicing content with it ran off the end. Pinned in
+	// rawtext_test.go.
+	n := len(tag)
+	for i := 0; i+2+n <= len(content); i++ {
+		if content[i] != '<' || content[i+1] != '/' || !asciiEqualFold(content[i+2:i+2+n], tag) {
+			continue
 		}
-		j += i
-		rest := lower[j+len(needle):]
+		rest := content[i+2+n:]
 		if rest == "" || isTagNameEnd(rest[0]) {
-			return j
+			return i
 		}
-		i = j + len(needle)
 	}
+	return -1
+}
+
+// asciiLower lowercases the ASCII letters of s and nothing else, which is the
+// tokenizer's case rule for a tag name. It returns s itself when there is
+// nothing to change, so the common lower-case name costs no allocation.
+func asciiLower(s string) string {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; 'A' <= c && c <= 'Z' {
+			b := []byte(s)
+			for ; i < len(b); i++ {
+				if c := b[i]; 'A' <= c && c <= 'Z' {
+					b[i] = c + ('a' - 'A')
+				}
+			}
+			return string(b)
+		}
+	}
+	return s
+}
+
+// asciiEqualFold reports whether s equals lower, comparing ASCII letters
+// without regard to case. lower must already be lower-case ASCII.
+func asciiEqualFold(s, lower string) bool {
+	if len(s) != len(lower) {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != lower[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // isTagNameEnd reports whether c terminates a tag name.

@@ -16,6 +16,7 @@ package lolhtml_test
 import (
 	"bytes"
 	"errors"
+	"io"
 	"runtime"
 	"strings"
 	"testing"
@@ -335,4 +336,129 @@ func TestPanicFromTheDestinationIsIdempotentToClose(t *testing.T) {
 	}
 	requireNoHandleLeak(t, before)
 	runtime.KeepAlive(w)
+}
+
+// goexiters is the third way out of user code, which the panickers table
+// cannot hold: runtime.Goexit is not a panic, so nothing recovers it, and the
+// goroutine leaves through lol-html's frames the way a panic would have. The
+// usual spelling is t.Fatal or t.Skip inside a handler. Each entry builds a
+// Writer on dst whose first Write never returns.
+var goexiters = map[string]func(dst io.Writer) (*lolhtml.Writer, error){
+	// A streaming insertion is registered first, so the handle a pending
+	// insertion holds is part of what the exit must not leave behind.
+	"element handler": func(dst io.Writer) (*lolhtml.Writer, error) {
+		return lolhtml.NewWriter(dst, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+			if err := e.StreamAppend(func(s *lolhtml.Sink) error {
+				return s.WriteString("x", lolhtml.Text)
+			}); err != nil {
+				return err
+			}
+			runtime.Goexit()
+			return nil
+		}))
+	},
+	"streaming sink": func(dst io.Writer) (*lolhtml.Writer, error) {
+		return lolhtml.NewWriter(dst, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+			return e.StreamAppend(func(*lolhtml.Sink) error {
+				runtime.Goexit()
+				return nil
+			})
+		}))
+	},
+	"destination": func(io.Writer) (*lolhtml.Writer, error) {
+		return lolhtml.NewWriter(goexitOnWrite{}, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+			return e.StreamAppend(func(s *lolhtml.Sink) error {
+				return s.WriteString("x", lolhtml.Text)
+			})
+		}))
+	},
+}
+
+// goexitOnWrite is a destination whose Write ends the goroutine.
+type goexitOnWrite struct{}
+
+func (goexitOnWrite) Write([]byte) (int, error) { runtime.Goexit(); return 0, nil }
+
+// TestGoexitPoisonsTheWriterAndLeaksNoHandles. Goexit runs the deferred calls
+// on its way out, and Write's own deferred call used to see nothing wrong - no
+// panic to recover - and leave the Writer looking healthy. The caller's
+// deferred Close then ran lol-html's end on a rewriter abandoned in the middle
+// of a write, and reported nil for a truncated document. Now the deferred call
+// notices that the C call never returned, and poisons and releases the
+// rewriter before the exit continues: Close answers ErrPoisoned without
+// touching lol-html, and the handle count is back where it started.
+//
+// Each case runs on its own goroutine, because the exit takes the goroutine
+// with it, and the deferred Close inside that goroutine records what it saw.
+func TestGoexitPoisonsTheWriterAndLeaksNoHandles(t *testing.T) {
+	for name, newWriter := range goexiters {
+		t.Run(name, func(t *testing.T) {
+			before := settledHandles()
+
+			// Held outside the goroutine and kept alive past the count, for
+			// the same reason as in TestPanicOnAManualWriterIsIdempotentToClose.
+			var w *lolhtml.Writer
+			var newErr, closeErr error
+			returned := false
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				w, newErr = newWriter(io.Discard)
+				if newErr != nil {
+					return
+				}
+				defer func() { closeErr = w.Close() }()
+				_, _ = w.Write([]byte(panicDoc))
+				returned = true
+			}()
+			<-done
+
+			if newErr != nil {
+				t.Fatal(newErr)
+			}
+			if returned {
+				t.Fatal("Write returned; the handler did not leave through Goexit")
+			}
+			if closeErr == nil {
+				t.Fatal("Close after an abandoned Write reported nil")
+			}
+			if !errors.Is(closeErr, lolhtml.ErrPoisoned) {
+				t.Errorf("Close after an abandoned Write = %v, want ErrPoisoned", closeErr)
+			}
+			requireNoHandleLeak(t, before)
+			runtime.KeepAlive(w)
+		})
+	}
+}
+
+// TestGoexitThroughRewriteLeaksNoHandles is the same exit under Rewrite, whose
+// own deferred Close is the one that runs. Rewrite never returns, so the only
+// observable is the handle count afterwards.
+func TestGoexitThroughRewriteLeaksNoHandles(t *testing.T) {
+	const rounds = 30
+	before := settledHandles()
+
+	for i := 0; i < rounds; i++ {
+		returned := false
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = lolhtml.RewriteString(panicDoc, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+				if err := e.StreamAppend(func(s *lolhtml.Sink) error {
+					return s.WriteString("x", lolhtml.Text)
+				}); err != nil {
+					return err
+				}
+				runtime.Goexit()
+				return nil
+			}))
+			returned = true
+		}()
+		<-done
+		if returned {
+			t.Fatalf("round %d: Rewrite returned", i)
+		}
+	}
+
+	requireNoHandleLeak(t, before)
 }

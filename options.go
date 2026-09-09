@@ -264,7 +264,10 @@ func defaultConfig() config {
 
 func (c *config) validate() error {
 	if c.encoding == "" {
-		return errors.New("lolhtml: encoding is empty")
+		// The same shape as every other unusable label, so a caller that
+		// branches on EncodingError - the documented way to detect a charset
+		// the rewriter cannot use - sees the empty one too.
+		return &EncodingError{Label: "", Message: "encoding label is empty"}
 	}
 	if c.mem.PreallocatedParsingBuffer < 0 {
 		return errors.New("lolhtml: PreallocatedParsingBuffer is negative")
@@ -395,6 +398,9 @@ func handleOf(cr *core, v any) C.uintptr_t {
 }
 
 func parseSelector(sel string) (*C.lol_html_selector_t, error) {
+	if msg := selectorTooDeep(sel); msg != "" {
+		return nil, &SelectorError{Selector: sel, Message: msg}
+	}
 	p, n := strPtr(sel)
 	var cerr C.lol_html_str_t
 	s := C.golol_selector_parse(p, n, &cerr)
@@ -419,6 +425,82 @@ func (e *SelectorError) Error() string {
 		msg += " " + h
 	}
 	return msg
+}
+
+// Depth beyond which a selector is refused before it reaches lol-html.
+//
+// lol-html's selector parser and matcher builder are recursive, on the nesting
+// of :not() and its siblings and on the number of combinators, and the vendored
+// archives are built with panic = "abort": a selector nested deeply enough
+// overflows the native stack and takes the whole process down with a SIGSEGV
+// that no Go recover can see. Measured on linux/amd64 with an 8 MB stack, about
+// 3,100 nested ":not(" or 14,000 " > " combinators do it; a musl thread stack
+// is 128 KB, which lowers both figures by sixty times. No real selector comes
+// within a hundredfold of these limits, so the refusal costs nothing a caller
+// would notice and turns an abort into the [SelectorError] every other unusable
+// selector already gets. Pinned in selector_test.go.
+const (
+	maxSelectorNesting     = 32
+	maxSelectorCombinators = 128
+)
+
+// selectorTooDeep reports why sel exceeds the depth limits, or "" if it does
+// not. It counts parentheses and combinators outside brackets and quoted
+// strings, where they are part of a value rather than of the structure.
+func selectorTooDeep(sel string) string {
+	depth, maxDepth, combinators := 0, 0, 0
+	inBracket := false
+	var quote byte
+	for i := 0; i < len(sel); i++ {
+		c := sel[i]
+		switch {
+		case quote != 0:
+			if c == '\\' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case inBracket:
+			if c == ']' {
+				inBracket = false
+			}
+		case c == '[':
+			inBracket = true
+		case c == '(':
+			depth++
+			maxDepth = max(maxDepth, depth)
+		case c == ')':
+			depth--
+		case c == '>' || c == '+' || c == '~':
+			combinators++
+		case c == ' ' || c == '\t' || c == '\n':
+			// A descendant combinator is whitespace between two compound
+			// selectors. Whitespace beside an explicit combinator, a comma or a
+			// paren is not one, and a run of it counts once.
+			if i > 0 && i+1 < len(sel) && !isCombinatorSpace(sel[i-1]) && !isCombinatorSpace(sel[i+1]) {
+				combinators++
+			}
+		}
+	}
+	if maxDepth > maxSelectorNesting {
+		return fmt.Sprintf("selector nests %d levels deep; the limit is %d", maxDepth, maxSelectorNesting)
+	}
+	if combinators > maxSelectorCombinators {
+		return fmt.Sprintf("selector has %d combinators; the limit is %d", combinators, maxSelectorCombinators)
+	}
+	return ""
+}
+
+// isCombinatorSpace reports whether whitespace next to c cannot be a descendant
+// combinator: c is an explicit combinator, a comma, a paren, or whitespace.
+func isCombinatorSpace(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '>', '+', '~', ',', '(', ')':
+		return true
+	}
+	return false
 }
 
 // selectorHint adds what lol-html's parser cannot say, because it reports the
@@ -644,10 +726,15 @@ func OnComment(selector string, fn func(*Comment) error) Option {
 // io.Discard and the question does not arise. Measured in readonlytext_test.go
 // and as a property in properties/.
 //
-// The last chunk of a node is its own call and carries no bytes, in every shape
-// measured - see [TextChunk.IsLastInTextNode] - so this handler runs at least
-// twice per text node and about half its calls on a document of prose are handed
-// nothing. Work that costs anything belongs behind a length check.
+// The last chunk of a node is usually its own call carrying no bytes, so this
+// handler runs about twice per text node and about half its calls on a document
+// of prose are handed nothing. Work that costs anything belongs behind a length
+// check - but not the read itself: the final chunk is not always empty. When
+// the node ends with bytes the document's encoding cannot decode, the flagged
+// chunk carries the replacement character produced for them, and a node that is
+// nothing but a truncated multi-byte sequence is one call rather than two. A
+// handler that acts on the flag without reading the chunk's text drops that
+// character. See [TextChunk.IsLastInTextNode].
 //
 // A text node is not the same thing as an element's text, and the difference is
 // where this gets people. <a>click <b>here</b></a> has two text nodes, so this

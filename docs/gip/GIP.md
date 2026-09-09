@@ -109,8 +109,12 @@ Then check what is already known:
 - `docs/gip/known-behaviours.md`: behaviours that are already measured, listed
   and accepted, each with the test that pins it. Do not file them again.
   *Closing* a row is a first-rate GIP;
-- `CHANGELOG.md`, and specifically its "Behaviour worth knowing" section: the
-  same list written for users.
+- `CHANGELOG.md`. Its `v0.1.0` entry has a "Behaviour worth knowing" section
+  that was the same list written for users; treat `known-behaviours.md` as the
+  authority where the two differ, because two of that section's claims have
+  since been retracted - that a getter on a retained unit returns `ErrDetached`
+  (only mutators do, B108) and that writing a byte at a time is quadratic (it is
+  not, B5).
 
 If your finding is already an open issue, a wontfix ruling, or a listed
 behaviour, it is not yours to file. Find something else.
@@ -264,13 +268,6 @@ double frees, overruns, including on the Rust heap, because lol-html uses the
 system allocator and ASan interposes `malloc` globally. If either leg SKIPs or
 refuses to start, that is a missing dependency, not a green light: say so in
 the PR and let CI run it.
-
-Note also that `ci.yml`'s test matrix runs `go test -count=1 .`, the root
-package only, so tests under `examples/` are compiled by `go build ./...` and
-never executed. The first GIP that ships an app should widen that to `./...`
-and pay for it: seven platform rows now run your tests, so they must not touch
-the network and must not take minutes. `-fuzz` still refuses more than one
-package, so the fuzz steps stay on `.`.
 
 If along the way you conclude the app cannot be completed because of a defect
 or a gap in golol-html, STOP and go to Phase 3 anyway. That is a better outcome
@@ -587,8 +584,8 @@ really diverged.
 | `scripts/check-platforms.sh` | that all seven rows select their link file and none falls through to a guard | whether the archive then links or runs |
 | `scripts/check-workflows.sh` | a workflow file git accepts and GitHub rejects | whether the workflow does the right thing |
 | `scripts/check-modules.sh` | a module CI does not vet or test; `go vet ./...` stops at a module boundary | whether the vet and test it finds are the right ones |
-| the benchmarks | allocations and bytes per operation, on six shapes | any shape not among the six |
-| `make verify` | that the host archive reproduces from the pinned upstream | the other six archives; and it is a diff to read, not an assertion, because Rust builds are not bit-identical |
+| the benchmarks | allocations and bytes per operation, on ten benchmarks - seven page shapes and three selector loads | any shape not among the ten |
+| `make verify` | that the host archive reproduces bit-for-bit from the pinned upstream; it fails on a mismatch, and `verify-native.yml` runs it for `linux_amd64` on every tag and weekly | the other six archives; and it only passes on the runner path, because rustc records the build directory in the archive - a laptop mismatch is the path, not the contents, see `docs/provenance.md` |
 | `minimum-go` | that the declared Go floor is true | that the floor is the right one |
 | `consume` | that a dependent module builds with cargo stripped from `PATH` | anything past `go run` |
 
@@ -618,9 +615,9 @@ Nothing gates the following. This is the shopping list.
 - **The README.** Its prose is still unchecked. Its code is not: `readme_test.go`
   checks that every name it claims exists, that the handful a caller cannot safely
   do without are mentioned, and that the sentence known to have gone stale has not
-  come back; `readme_snippets_test.go` holds all eight Go blocks verbatim, so the
-  test binary compiles them and four tests check the outputs their comments
-  claim. One of the eight did not compile as written.
+  come back; `readme_snippets_test.go` holds all nine Go blocks verbatim, so the
+  test binary compiles them and five tests check the outputs their comments
+  claim. One of the original eight did not compile as written.
 - **Documentation accuracy.** Partly gated now: `example_test.go` holds sixteen
   runnable transcriptions of the claims the documentation makes in code, so those
   cannot rot without `go test` failing. The prose is still unchecked, and so are

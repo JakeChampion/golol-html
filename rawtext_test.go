@@ -586,3 +586,93 @@ func TestIsRawTextAnswersTheQuestionRemoveAndKeepContentAsks(t *testing.T) {
 		t.Errorf("guarded on IsRawText the noembed should have gone entirely, got %q", guarded)
 	}
 }
+
+// TestTheGuardFoldsASCIIOnly pins the case rule the guard applies, which is
+// the tokenizer's: ASCII letters fold, nothing else does. The earlier guard
+// lowered the whole content with strings.ToLower, and that is a Unicode fold -
+// U+0130 maps to "i", so "</scrİpt>" was refused although no parser ends a
+// script there.
+func TestTheGuardFoldsASCIIOnly(t *testing.T) {
+	const doc = `<script>a</scrİpt><img src=x></script>`
+
+	// The tokenizer's answer first, so the guard is measured against it: the
+	// only element in that document is the script.
+	var tags []string
+	if _, err := lolhtml.RewriteString(doc,
+		lolhtml.OnElement("*", func(e *lolhtml.Element) error {
+			tags = append(tags, e.TagName())
+			return nil
+		})); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(tags, ",") != "script" {
+		t.Fatalf("the parser saw %v in %q; this test assumes </scrİpt> does not end a script", tags, doc)
+	}
+
+	if err := lolhtml.CheckRawText("script", "</scrİpt>x"); err != nil {
+		t.Errorf("CheckRawText refused %q, which the tokenizer does not close on: %v", "</scrİpt>x", err)
+	}
+
+	// ASCII case still folds, in the tag and in the content.
+	if err := lolhtml.CheckRawText("Script", "</SCRIPT >"); !errors.Is(err, lolhtml.ErrRawTextBreakout) {
+		t.Errorf("CheckRawText(\"Script\", %q) = %v, want ErrRawTextBreakout", "</SCRIPT >", err)
+	}
+
+	// And the exported predicates apply the same rule: an ASCII-cased name is
+	// the element, a Unicode-cased one is some other element.
+	if lolhtml.IsRawText("scrİpt") {
+		t.Error("IsRawText(\"scrİpt\") = true; that is not a script to the tokenizer")
+	}
+	if !lolhtml.IsRawText("SCRIPT") {
+		t.Error("IsRawText(\"SCRIPT\") = false")
+	}
+	// TİTLE is not a title, so it is markup and decodes. (A title decodes too,
+	// so this alone cannot tell the folds apart; SCRİPT can, because a script
+	// does not decode and an unknown element does.)
+	if !lolhtml.DecodesCharacterReferences("TİTLE") {
+		t.Error("DecodesCharacterReferences(\"TİTLE\") = false")
+	}
+	if !lolhtml.DecodesCharacterReferences("SCRİPT") {
+		t.Error("DecodesCharacterReferences(\"SCRİPT\") = false; a Unicode fold made it a script")
+	}
+}
+
+// TestTheReportedOffsetIsIntoTheContent, not into a lowered copy of it. The
+// earlier guard searched strings.ToLower(content), and ToLower is not
+// length-preserving: U+023A is two bytes and its lower-case form three, so ten
+// of them shift the match by ten bytes in the copy. The guard then sliced the
+// original content at that offset, past its end, and panicked - out of the
+// caller's Rewrite, from a check that was meant to return an error.
+func TestTheReportedOffsetIsIntoTheContent(t *testing.T) {
+	content := strings.Repeat("Ⱥ", 10) + "</script>"
+	if len(strings.Repeat("Ⱥ", 10)) != 20 || len(strings.ToLower(strings.Repeat("Ⱥ", 10))) == 20 {
+		t.Fatal("U+023A no longer grows under ToLower; this test measures nothing")
+	}
+
+	err := lolhtml.CheckRawText("script", content)
+	if !errors.Is(err, lolhtml.ErrRawTextBreakout) {
+		t.Fatalf("CheckRawText = %v, want ErrRawTextBreakout", err)
+	}
+	if !strings.Contains(err.Error(), "at byte 20") {
+		t.Errorf("the error reports the wrong offset: %v", err)
+	}
+	if !strings.Contains(err.Error(), `"</script>"`) {
+		t.Errorf("the error does not quote the closing tag: %v", err)
+	}
+
+	// The same content through the element path is refused from the handler,
+	// which is what the caller sees, rather than being a panic out of Rewrite.
+	var out string
+	v := recovered(func() {
+		out, err = lolhtml.RewriteString(`<script>a</script>`,
+			lolhtml.OnElement("script", func(e *lolhtml.Element) error {
+				return e.Append(content, lolhtml.HTML)
+			}))
+	})
+	if v != nil {
+		t.Fatalf("Append panicked out of RewriteString: %v", v)
+	}
+	if !errors.Is(err, lolhtml.ErrRawTextBreakout) {
+		t.Errorf("Append = %v (output %q), want ErrRawTextBreakout", err, out)
+	}
+}

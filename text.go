@@ -201,7 +201,7 @@ func (t *TextChunk) content(content string, ct ContentType, op string, fn conten
 	if err != nil {
 		return err
 	}
-	return withContent(p, content, ct.isHTML(), op, fn)
+	return withContent(p, t.c.nt.cerr, content, ct.isHTML(), op, fn)
 }
 
 // Remove removes the chunk from the output.

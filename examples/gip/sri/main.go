@@ -118,9 +118,17 @@ func validHash(h string) error {
 
 // integritySelectors are the elements that honour an integrity attribute. A
 // preload or a modulepreload needs one too, or the fetch it primes is unchecked.
+//
+// rel is a space-separated token list, so the match is ~= (has the token) and
+// not = (is exactly the value): rel="stylesheet preload" is a stylesheet as much
+// as rel="stylesheet" is. With = the multi-token form matched nothing, so it got
+// no integrity and - because uncovered is only appended from inside a matched
+// handler - was not reported either, which is the one silence this program
+// exists to prevent. rel is compared case-insensitively by the parser already;
+// the i flag says so where the selector is read.
 var integritySelectors = []struct{ selector, attr string }{
 	{"script[src]", "src"},
-	{`link[rel="stylesheet"][href], link[rel="preload"][href], link[rel="modulepreload"][href]`, "href"},
+	{`link[rel~="stylesheet" i][href], link[rel~="preload" i][href], link[rel~="modulepreload" i][href]`, "href"},
 }
 
 type adder struct {
@@ -242,8 +250,11 @@ func (a *adder) options() []lolhtml.Option {
 
 		// A document that names a subresource inside a comment is a common way
 		// to leave a half-disabled tag behind, and a rewriter cannot reach it.
+		// Tag names are case-insensitive, so <SCRIPT> in a comment is looked for
+		// on a lower-cased copy.
 		lolhtml.OnDocumentComment(func(c *lolhtml.Comment) error {
-			if strings.Contains(c.Text(), "<script") || strings.Contains(c.Text(), "<link") {
+			text := strings.ToLower(c.Text())
+			if strings.Contains(text, "<script") || strings.Contains(text, "<link") {
 				a.uncovered = append(a.uncovered, "(in a comment) "+truncate(c.Text()))
 			}
 			return nil

@@ -80,6 +80,16 @@ type run struct {
 	p       *prog
 	escaped []escapee
 	failed  bool // a handler returned errProgram
+
+	// panicked is set by the program itself, on the line before it panics,
+	// so it records a panic that was actually raised rather than one that was
+	// merely scheduled. The distinction matters for the StreamFunc opcode: a
+	// StreamFunc runs only when lol-html flushes the insertion, and an element
+	// removed afterwards, a handler that then fails, or a memory bail-out can
+	// all mean it never does. The fuzz body compares this against what came
+	// out of Rewrite, so "the program panicked and the library swallowed it"
+	// is a failure rather than a pass.
+	panicked bool
 }
 
 // opsPerHandler bounds the work one invocation can do, so a pathological
@@ -154,6 +164,7 @@ func (r *run) element(e *lolhtml.Element) error {
 			r.failed = true
 			return errProgram
 		case 19:
+			r.panicked = true
 			panic(panicProgram)
 		case 20:
 			// Panic from inside a StreamFunc rather than from the handler.
@@ -163,7 +174,10 @@ func (r *run) element(e *lolhtml.Element) error {
 			// the streaming handle. The handle counter asserted on every
 			// iteration is what catches that, but only if something reaches
 			// this path - nothing did.
-			_ = e.StreamAppend(func(*lolhtml.Sink) error { panic(panicProgram) })
+			_ = e.StreamAppend(func(*lolhtml.Sink) error {
+				r.panicked = true
+				panic(panicProgram)
+			})
 		case 21:
 			// Every streaming insertion is its own registration in the shim, so
 			// a lifetime bug in one is invisible from the others - which is why
@@ -389,13 +403,17 @@ var fuzzEncodings = []string{"utf-8", "windows-1252", "shift_jis", "koi8-r", "bi
 //
 // The memory limit is generous and rare. A tight one bails out before the
 // program runs, which wastes the iteration rather than testing anything.
-func fuzzSettings(program []byte) []lolhtml.Option {
+//
+// The second result says whether a limit was set, because that is the one
+// setting under which the rewrite may fail with a *NativeError the fuzz body
+// cannot otherwise account for.
+func fuzzSettings(program []byte) (opts []lolhtml.Option, limited bool) {
 	if len(program) < 2 {
-		return nil
+		return nil, false
 	}
 	b := program[len(program)-1]
 
-	opts := []lolhtml.Option{
+	opts = []lolhtml.Option{
 		lolhtml.WithEncoding(fuzzEncodings[int(b)%len(fuzzEncodings)]),
 		lolhtml.WithStrict(b&0x08 == 0),
 	}
@@ -409,8 +427,39 @@ func fuzzSettings(program []byte) []lolhtml.Option {
 			MaxMemory:       4096 + int(b)*64,
 			GracefulBailOut: b&0x01 == 0,
 		}))
+		limited = true
 	}
-	return opts
+	return opts, limited
+}
+
+// explainedFailure reports whether err is a way a rewrite driven by one of
+// these programs is allowed to fail when no handler asked it to.
+//
+// The programs discard the error from every one-shot mutator, so a refused
+// SetAttribute or a raw-text breakout from Append never reaches Rewrite. What
+// does reach it is what a handler returns, and the tables return only three
+// things: errProgram, which the fuzz body checks separately; a StreamFunc's
+// result, which is the Sink refusing fuzzer bytes - a *NativeError matching
+// ErrInvalidUTF8 from WriteString, WriteChunk or AsWriter, or ErrIncompleteRune
+// when a WriteChunk ends mid-sequence; and DocumentEnd.Append's result, which
+// is the same ErrInvalidUTF8 for the same reason. Beyond the handlers, the
+// rewriter itself stops for ErrAmbiguousTag under strict mode - on by default
+// and by half the settings - and for ErrMemoryLimitExceeded under a limit.
+//
+// expectedFailure covers all of those and lists two the programs cannot
+// provoke (the breakouts), for the reason fuzz_test.go gives: they are refusals
+// with a sentinel, and the point is to refuse anything without one. The only
+// unexplained *NativeError tolerated is under a memory limit, where lol-html's
+// wording is matched exactly and a change to it should not read as a fuzz
+// finding. ErrDetached and ErrReentrant are deliberately absent: neither can
+// come out of a program that only uses units inside their handlers, so either
+// arriving would be the bug this oracle exists to find.
+func explainedFailure(err error, limited bool) bool {
+	if expectedFailure(err) {
+		return true
+	}
+	var ne *lolhtml.NativeError
+	return limited && errors.As(err, &ne)
 }
 
 func FuzzOperations(f *testing.F) {
@@ -438,6 +487,13 @@ func FuzzOperations(f *testing.F) {
 		// this element's turn and leave the streaming opcode after them for the
 		// text or end-tag handler that follows.
 		{11, 17, 17, 17, 17, 17, 8, 2, 'e', 'f', 0},
+		// The two panic opcodes, each on its own so that a plain go test - the
+		// seed corpus - raises a panic from a handler and from a StreamFunc
+		// rather than leaving both to the engine. The first byte is also the
+		// selector: 19 picks "div > p" and 20 picks "[id]", both of which the
+		// first corpus document matches.
+		{19},
+		{20},
 	}
 	for _, d := range docs {
 		for _, p := range programs {
@@ -453,7 +509,7 @@ func FuzzOperations(f *testing.F) {
 		handlesBefore := lolhtml.LiveHandles()
 		r := &run{p: &prog{b: program}}
 		sel := fuzzSelectors[int(program[0])%len(fuzzSelectors)]
-		settings := fuzzSettings(program)
+		settings, limited := fuzzSettings(program)
 
 		panicked := func() (panicked bool) {
 			defer func() {
@@ -492,9 +548,27 @@ func FuzzOperations(f *testing.F) {
 						"native one from the settings", err)
 				}
 			}
+			// The other direction, which used to go unexamined: a program that
+			// asked for no failure must get a rewrite that works, or one that
+			// fails for a reason the library explains with a sentinel. Without
+			// this, a Close that failed every successful document passed all
+			// sixty seeds - FuzzRewrite caught it and this target did not.
+			if !r.failed && err != nil && !explainedFailure(err, limited) {
+				t.Fatalf("no handler asked for failure but the rewrite failed with %v "+
+					"(doc %q, program %v)", err, doc, program)
+			}
 			return false
 		}()
-		_ = panicked
+
+		// A panic the program raised must come back out of Rewrite, and only
+		// then. The recover above already re-raises a panic that is not the
+		// program's; this is the other half - the library parking a handler
+		// panic and never re-raising it would otherwise look like a rewrite
+		// that simply worked.
+		if panicked != r.panicked {
+			t.Fatalf("the program panicked = %v but Rewrite panicked = %v (doc %q, program %v)",
+				r.panicked, panicked, doc, program)
+		}
 
 		// Units retained past their handler must refuse to work, not fault.
 		for _, e := range r.escaped {

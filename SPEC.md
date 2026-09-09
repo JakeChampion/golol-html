@@ -48,9 +48,11 @@ nothing but `rustup target add`. Measured on darwin/arm64:
 | gzipped (approximates git/proxy cost)  | 5.97 MB      | 0.83 MB                              |
 | added to a linked Go binary           | ~2.0 MB      | ~1.06 MB                             |
 
-Final CI-built sizes, stripped, with this recipe: darwin/arm64 2.73 MB, linux/amd64 4.22 MB,
-linux/arm64 4.24 MB - about 11.2 MB of vendored archives in total, against roughly 52 MB before
-the crate-type change. On linux/amd64 the change alone is 18.31 MB against 8.98 MB unstripped. Restricting the crate type
+Committed sizes, stripped, with this recipe (`ls -l internal/lib/*/liblolhtml.a`): darwin/amd64
+2.95 MB, darwin/arm64 2.93 MB, linux/amd64 4.05 MB, linux/amd64 musl 4.07 MB, linux/arm64 4.06 MB,
+linux/arm64 musl 4.11 MB, windows/amd64 2.33 MB - seven archives, 24.5 MB (23.4 MiB) in total,
+against roughly 52 MB for three before the crate-type change. On linux/amd64 the change alone is
+18.31 MB against 8.98 MB unstripped. Restricting the crate type
 is strictly better on every axis measured, and the smaller archive links a smaller binary
 (3.44 MB against a 2.37 MB pure-Go baseline) because the pruning happens before the Go linker
 sees it. If that becomes a complaint, split each platform into its own Go module
@@ -58,7 +60,10 @@ under `lib/` - build constraints prune un-imported modules from a `go build`, th
 `go mod download`. Git LFS is NOT an option: the module proxy would serve LFS pointer files.
 
 Trust mitigation: archives are built in CI from the pinned upstream commit, `SHA256SUMS` is
-committed alongside, and `make verify` reproduces and diffs them locally.
+committed alongside, and the archives reproduce bit-for-bit from the pin. `make verify` asserts
+that - it fails on a mismatch - and `verify-native.yml` runs the same assertion for `linux_amd64`
+on every `v*` tag and weekly. The build is path-sensitive, so a local `make verify` mismatches
+for the build directory rather than the contents; `docs/provenance.md` has the measurement.
 
 ### D2. Platforms
 
@@ -178,8 +183,10 @@ int golol_write(lol_html_rewriter_t *rw, const char *chunk, size_t len, lol_html
 
 The header warns pointers "should never be leaked outside of handlers". Go wrapper values
 (`*Element`, `*Comment`, ...) are therefore invalidated when the callback returns: every method
-checks a validity flag and returns `ErrDetached` if the value escaped. Wrappers are pooled and
-reused to keep allocation off the hot path.
+checks a validity flag, and if the value escaped a mutator returns `ErrDetached` while a getter,
+having nowhere to put an error, answers with a zero value (`HasAttribute` is the one getter with
+room for an error, and reports it). `Detached()` asks directly. A wrapper is allocated per
+callback - one allocation per unit, gated in `alloc_test.go` - rather than pooled.
 
 ### C3. cgo callback signatures must come from `_cgo_export.h`
 
@@ -256,7 +263,7 @@ musl.go nocgo.go unsupported.go   the build-constraint guards
 internal/include/lol_html.h
 internal/lib/<goos>_<goarch>/liblolhtml.a
 scripts/{build-native,changelog,check-*}.sh
-.github/workflows/{ci.yml,fuzz.yml,native.yml}
+.github/workflows/{ci.yml,fuzz.yml,native.yml,release.yml,verify-native.yml}
 changelog.d/        changelog fragments, folded at release time
 docs/gip/           the GIP process, known behaviours, settled rulings
 ```
@@ -438,12 +445,17 @@ throughput tracks handler invocation count rather than document size.
 - Bail-out handlers (`Settings::append_bail_out_handler`) - Rust-only upstream, no C API yet.
 - `graceful_bail_out_on_content_handler_error` - Rust-only upstream.
 
-**A workflow-created pull request gets no checks.** GitHub does not start workflow runs for events
-triggered by the default `GITHUB_TOKEN`, so the pull request `native.yml` opens shows "no checks
-reported". The archives are not unvalidated - the `smoke` matrix links and tests each one on the
-platform it targets before `collect` runs, which is broader than what `ci.yml` did at the time -
-and merging triggers `ci.yml` on `main` as a normal push. Using a PAT or GitHub App token in
-`create-pull-request` would restore checks on the PR itself, at the cost of a credential to manage.
+**A workflow-created pull request gets checks only with a token of its own.** GitHub does not
+start workflow runs for events triggered by the default `GITHUB_TOKEN`, so a pull request opened
+with it shows "no checks reported". Both workflows that open one carry an optional secret for
+exactly this: `native.yml` uses `NATIVE_PR_TOKEN || github.token` and `release.yml` uses
+`RELEASE_PR_TOKEN || github.token`, each a fine-grained token with `contents:write` and
+`pull-requests:write`, and each followed by a step that says in the run summary what did not
+happen when the secret was absent. Without them the pull request is still opened and the archives
+are not unvalidated - the `smoke` matrix links and tests each one on the platform it targets
+before `collect` runs - and merging triggers `ci.yml` on `main` as a normal push; what is lost is
+the check on the branch itself before it lands. `docs/releasing.md` and `docs/provenance.md` say
+what each secret does and does not gate.
 
 ## Repository visibility
 
@@ -557,9 +569,12 @@ they land, and is worth doing rather than pushing archives straight to `main`.
 The action reuses and force-updates `native/rebuild`, so the branch is expected to linger between
 runs; it is not litter to clean up.
 
-Rust builds are not bit-reproducible here: two `native` runs of the same commit produced darwin
-archives differing by about 1 KB. So re-running the workflow to test something will generally
-produce a real diff and therefore a real PR, rather than a no-op.
+The builds are bit-reproducible on the runner: every archive rebuilds identically from the pin
+when the build runs at the path the committed ones were built at, which a runner's workspace is
+(`docs/provenance.md`, check 5). So re-running the workflow on the same pin should produce no
+diff and no pull request. Two early `native` runs of the same commit once produced darwin
+archives differing by about 1 KB, which was recorded as B12; since then all seven have been
+rebuilt identically, so a re-run that does produce a diff is a finding rather than noise.
 
 ## Notes
 
@@ -572,6 +587,8 @@ produce a real diff and therefore a real PR, rather than a no-op.
 - A one-off `ld: warning: ... malformed LC_DYSYMTAB` was observed once during development and
   traced to a stale build cache after swapping archives underneath it, not to `strip`. Three
   clean-cache race links of each variant produced zero warnings. Stripping is kept.
-- `make verify` rebuilds the host archive and diffs it. Rust builds are not bit-identical across
-  toolchain patch versions, so a mismatch needs the same `RUST_TOOLCHAIN` before it means
-  anything.
+- `make verify` rebuilds the host archive and compares it with the committed one, and fails on a
+  mismatch: the archives reproduce bit-for-bit from the pin. What breaks it locally is the build
+  path, not the toolchain - rustc records the absolute path of the source tree and of `CARGO_HOME`
+  in the archive - so a laptop mismatch is expected and a runner match is the assertion;
+  `docs/provenance.md` has the measurement and the path to rebuild in.

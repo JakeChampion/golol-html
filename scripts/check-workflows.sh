@@ -35,7 +35,9 @@ for f in "${files[@]}"; do
     fi
 
     # Tabs are not valid YAML indentation and are easy to introduce by hand.
-    if grep -qP '^\t' "$f" 2>/dev/null; then
+    # Not `grep -P`: BSD grep has no -P, and with stderr discarded the test
+    # silently passed on every macOS `make lint`.
+    if grep -q "^$(printf '\t')" "$f"; then
         echo "FAIL ${f}: contains a tab-indented line"
         fail=1
         continue

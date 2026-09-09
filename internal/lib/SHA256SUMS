@@ -5,3 +5,4 @@ fdf976429dd73191aa2fa344e7a6c80eba4043af3bf98668dc7f71cbede135ec  ./darwin_arm64
 3ccbbf61f30f5c44f7e9ff6bb7d54274e598c3c9df809ed891a9902f9baf057b  ./linux_arm64/liblolhtml.a
 b8fc601ef7defd898b60a25e1c86bdf1b4823b506d538b724db9903bfcf50fb8  ./linux_arm64_musl/liblolhtml.a
 426a468b34ba3d2fdb131b07baca5aaea7299d4510d06c7bc182b392d8cc406e  ./windows_amd64/liblolhtml.a
+7fe574ddaad36931ee4d72a43c0cf375e3b697b94ab4c137fe58d8643c402293  ../include/lol_html.h

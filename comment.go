@@ -118,7 +118,7 @@ func (c *Comment) SetText(text string) error {
 	if err != nil {
 		return err
 	}
-	return withName(p, text, "comment_text_set", cfCommentTextSet)
+	return withName(p, c.c.nt.cerr, text, "comment_text_set", cfCommentTextSet)
 }
 
 // SourceLocation returns the byte range the comment occupied in the input.
@@ -153,7 +153,7 @@ func (c *Comment) content(content string, ct ContentType, op string, fn contentO
 	if err != nil {
 		return err
 	}
-	return withContent(p, content, ct.isHTML(), op, fn)
+	return withContent(p, c.c.nt.cerr, content, ct.isHTML(), op, fn)
 }
 
 // Remove removes the comment from the output.

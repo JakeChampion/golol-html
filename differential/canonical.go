@@ -36,8 +36,21 @@ func writeCanonical(sb *strings.Builder, n *html.Node) {
 		}
 
 	case html.DoctypeNode:
+		// x/net/html keeps a doctype's PUBLIC and SYSTEM identifiers as
+		// attributes keyed "public" and "system" rather than in Data, so
+		// writing Data alone made <!DOCTYPE html> and a strict HTML 4.01
+		// doctype canonicalise identically - any tree comparison over a
+		// legacy doctype would have accepted the identifiers being dropped
+		// or rewritten. They are written the way an element's attributes are,
+		// sorted, so the comparison sees them.
 		sb.WriteString("<!DOCTYPE ")
 		sb.WriteString(n.Data)
+		for _, a := range sortedAttrs(n.Attr) {
+			sb.WriteString(" ")
+			sb.WriteString(a.Key)
+			sb.WriteString("=")
+			sb.WriteString(strconv.Quote(a.Val))
+		}
 		sb.WriteString(">")
 
 	case html.ElementNode:

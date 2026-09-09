@@ -107,9 +107,10 @@ verify:
 # private repositories), have nothing to verify and will fail.
 #
 # The header is checked with them: it is the ABI contract the cgo calls compile
-# against, and the same workflow run replaces both. It joins the attestation
-# subject and SHA256SUMS at the next rebuild, so until the native workflow has
-# run once since that change there is nothing to verify for it either.
+# against, and the same workflow run replaces both. It is in SHA256SUMS already
+# (a sum needs no rebuild), but it joins the attestation subject only at the
+# next rebuild, so until the native workflow has run once since that change
+# there is nothing to verify for it here.
 attest-verify:
 	@for f in internal/lib/*/liblolhtml.a internal/include/lol_html.h; do \
 		printf '==> %s\n' "$$f"; \

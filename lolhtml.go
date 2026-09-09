@@ -27,8 +27,11 @@
 //	return w.Close()
 //
 // Close finishes the document and flushes the tail of the output; skipping it
-// truncates the result. Chunk boundaries never affect handler behaviour, so
-// input may arrive however the network delivers it.
+// truncates the result. Chunk boundaries never change the output or which
+// element, comment and doctype handlers run, so input may arrive however the
+// network delivers it. Text is the exception: it arrives in chunks that follow
+// the writes, so a text handler's call count and the range each call covers
+// move with the write pattern - see [OnText] and [TextChunk.IsLastInTextNode].
 //
 // For a document already in memory, [Rewrite] and [RewriteString] wrap the same
 // machinery.
@@ -341,8 +344,11 @@
 //
 // The value passed to a handler is valid only until that handler returns.
 // lol-html reuses the underlying storage, so golol-html detaches the wrapper on
-// the way out and every later method call returns [ErrDetached]. Copy out what
-// you need rather than retaining the unit:
+// the way out: every later mutator returns [ErrDetached], and every getter
+// answers with a zero value and no error - [Element.HasAttribute], which has
+// room for an error, is the one that reports it - so a retained unit gives
+// plausible answers rather than loud ones. Detached() asks directly. Copy out
+// what you need rather than retaining the unit:
 //
 //	lolhtml.OnElement("img", func(e *lolhtml.Element) error {
 //		src, _ := e.Attribute("src")   // fine: a Go string
@@ -534,7 +540,17 @@
 // asciicase_test.go.
 //
 // An unsupported selector is rejected by [NewWriter], not silently ignored, with
-// a [SelectorError] naming it and saying which part it could not use.
+// a [SelectorError] naming it and saying which part it could not use. So is one
+// that is too deep: more than 32 nested levels of parentheses, or more than 128
+// combinators. lol-html's selector parser and matcher builder recurse on both,
+// and the vendored archives are built with panic = "abort", so a selector far
+// enough past those limits overflows the native stack and takes the process
+// down with a SIGSEGV that no recover sees - measured at about 3,100 nested
+// :not( or 14,000 combinators on an 8 MB stack, and a musl thread stack is 128
+// KB. The limits sit a hundredfold under anything a real selector does, and a
+// selector built from configuration fails at NewWriter like a malformed one.
+// Structure inside brackets and quotes is a value, not depth. Measured in
+// selector_test.go.
 //
 // # A colon, a dot or a leading digit in a name has to be escaped
 //
@@ -1484,14 +1500,22 @@
 // Per invocation, measured and gated by alloc_test.go:
 //
 //	the unit wrapper                      1 allocation
-//	each string read or written           1 more
+//	each string read                      1 more
+//	each string written                   none
 //	[Element.SourceLocation]              free, it is two ints
-//	[Element.AttributeList], Attributes   4 per attribute
+//	[Element.AttributeList]               4 per attribute
+//	[Element.Attributes]                  3 per attribute
 //
-// So a handler that reads one attribute costs two allocations per match, one
-// that reads the same attribute twice costs three - nothing is cached - and one
-// that lists every attribute to find a single one costs four times the number of
-// attributes on the element.
+// A write costs nothing beyond the wrapper because the strings are lent to
+// lol-html for the call rather than copied, and a failure is reported through
+// the Writer's own error slot rather than one allocated per call. An insertion
+// with HTML content - [Element.Append], Prepend, SetInnerContent - is one too:
+// the raw-text check borrows the tag name for the comparison instead of reading
+// it. So a handler that sets an attribute costs one allocation per match, one
+// that reads an attribute costs two, one that reads the same attribute twice
+// costs three - nothing is cached - and one that lists every attribute to find a
+// single one costs four times the number of attributes on the element, or three
+// times through Attributes, which does not fetch each name's source spelling.
 //
 // How much that costs depends on the shape of the document and not much on its
 // size, and the spread is wide. Held at 200 KB with two element selectors and the
@@ -1670,7 +1694,12 @@
 // from the [Writer.Write] or [Writer.Close] that was running at the time,
 // wrapped in a [HandlerError] you can unwrap. A handler that panics does not
 // unwind through Rust: the panic is caught at the boundary and re-raised on the
-// goroutine that called Write or Close.
+// goroutine that called Write or Close. The destination writer is user code on
+// the same stack, and a panic from it is contained the same way. Either way the
+// re-raised panic's trace starts at Write or Close rather than in the handler,
+// because the original frames are gone by the time it is re-raised; a handler
+// that wants its location in the trace should recover and re-panic with one, or
+// return an error.
 //
 // A value from outside the program can fail an insertion on its own: every path
 // that takes content or a name refuses bytes that are not valid UTF-8, and that
@@ -1787,7 +1816,9 @@ import "C"
 
 import (
 	"bytes"
+	"io"
 	"strconv"
+	"strings"
 	"unsafe"
 )
 
@@ -1929,10 +1960,31 @@ func sourceLocation(c C.lol_html_source_location_bytes_t) SourceLocation {
 func Rewrite(html []byte, opts ...Option) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.Grow(len(html) + len(html)/8)
-
-	w, err := NewWriter(&buf, opts...)
-	if err != nil {
+	if err := rewriteTo(&buf, html, opts); err != nil {
 		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// RewriteString is [Rewrite] for strings.
+//
+// It writes into a strings.Builder rather than converting Rewrite's bytes,
+// because that conversion copied the whole output a second time: measured on a
+// 220 KB document, B/op halved when the builder handed its buffer over instead.
+func RewriteString(html string, opts ...Option) (string, error) {
+	var sb strings.Builder
+	sb.Grow(len(html) + len(html)/8)
+	if err := rewriteTo(&sb, unsafe.Slice(unsafe.StringData(html), len(html)), opts); err != nil {
+		return "", err
+	}
+	return sb.String(), nil
+}
+
+// rewriteTo runs one whole document through a Writer on dst.
+func rewriteTo(dst io.Writer, html []byte, opts []Option) error {
+	w, err := NewWriter(dst, opts...)
+	if err != nil {
+		return err
 	}
 	// Deferred rather than only called on the error paths: a handler that
 	// panics is re-raised by Write, and without this the native resources
@@ -1941,18 +1993,9 @@ func Rewrite(html []byte, opts ...Option) ([]byte, error) {
 	defer w.Close()
 
 	if _, err := w.Write(html); err != nil {
-		return nil, err
+		return err
 	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// RewriteString is [Rewrite] for strings.
-func RewriteString(html string, opts ...Option) (string, error) {
-	out, err := Rewrite(unsafe.Slice(unsafe.StringData(html), len(html)), opts...)
-	return string(out), err
+	return w.Close()
 }
 
 // Helpers --------------------------------------------------------------------

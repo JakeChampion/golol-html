@@ -20,7 +20,7 @@ it. Check what the proxy is actually serving rather than assuming:
 
 ```
 $ curl -s https://proxy.golang.org/github.com/!jake!champion/golol-html/@latest
-{"Version":"v0.2.0", ...,"Ref":"refs/tags/v0.2.0"}
+{"Version":"v0.2.1", ...,"Ref":"refs/tags/v0.2.1"}
 ```
 
 If that version is behind `main`, everyone installing the documented way is on
@@ -33,15 +33,20 @@ old code, and no amount of green CI on `main` says otherwise.
    `major`, `minor` or `patch`.
 
 2. **Merge to `main`.** `release.yml` opens a **Release vX.Y.Z** pull request
-   with the fold. It reopens on every later push, so a change that lands after
-   it was opened is picked up rather than missed.
+   with the fold, on the one branch `release/next`. It is refreshed on every
+   later push - title, body and fold - so a change that lands after it was
+   opened is picked up rather than missed, and a change that moves the bump
+   level renames the same pull request rather than opening a second one.
 
 3. **Read the `CHANGELOG.md` diff.** That is the release notes, and the only
    place they exist. Push a correction onto the release branch if it reads
    badly.
 
-4. **Merge the release pull request.** The next run tags it, with the section
-   body as the tag message, and CI and `verify-native` run on the tag.
+4. **Merge the release pull request.** The next run rebuilds the `linux/amd64`
+   archive from the pin and compares it with the committed one, then tags the
+   fold commit - not whatever `main` has moved on to - with the section body as
+   the tag message, verbatim. `ci` runs on that commit as a push to `main`; a
+   run named for the tag itself needs `RELEASE_PR_TOKEN`.
 
 5. **Confirm the proxy caught up** with the `@latest` query above. It takes a
    few minutes, and it is the only check that speaks for the thing users get.
@@ -64,23 +69,30 @@ against what `v0.1.1` actually published, it is a different API.
 
 ## What is still by hand
 
-- **Tags are unsigned.** `v0.1.0`, `v0.1.1` and `v0.2.0` are annotated but not
-  signed, and a tag `release.yml` creates will be too - a GitHub Actions token
-  cannot sign.
+- **Tags are unsigned.** `v0.1.0`, `v0.1.1`, `v0.2.0` and `v0.2.1` are annotated
+  but not signed, and every tag `release.yml` creates will be too - a GitHub
+  Actions token cannot sign. `v0.2.1` is the first it made.
 - **`RELEASE_PR_TOKEN` decides whether the release is checked.** A pull request
   opened, or a tag pushed, with the default `GITHUB_TOKEN` starts no workflows,
   so without that secret neither the release pull request nor the tag gets CI.
   `release.yml` still does the work and warns in the run summary saying exactly
   what did not happen, but a release nothing ran on is the one worth noticing.
+  Two things run without it: `ci` on the merged commit, because that is a push
+  to `main`, and the rebuild of the `linux/amd64` archive that `release.yml`
+  does itself before it pushes the tag.
 - **The archives are tied to the pin by one job on one platform.**
-  `verify-native.yml` rebuilds `linux_amd64` from the pinned revision and diffs
-  it against `SHA256SUMS`, on every `v*` tag, on a pull request touching the pin
-  or `internal/`, and weekly. That closes the hole where a pin bumped and tagged
-  before the `native` rebuild landed would ship old binaries under a new claimed
-  revision with every check green. The other six are cross-built from the same
-  source in the same run of `native.yml`, so one is strong evidence for all
-  seven - but it is evidence, not proof, and a tag run that is red means do not
-  release whatever else is green.
+  `verify-native.yml` rebuilds `linux_amd64` from the pinned revision and
+  compares it against the committed archive, byte for byte, on every `v*` tag,
+  on a pull request touching the pin or `internal/`, and weekly. The tag and
+  pull-request runs close the hole where a pin bumped and tagged before the
+  `native` rebuild landed would ship old binaries under a new claimed revision
+  with every check green. The weekly run is for drift of a different kind: the
+  pin is a commit SHA, so upstream cannot move it, but the runner image or the
+  toolchain it installs can change underneath the rebuild, and a week is how
+  long that goes unnoticed. The other six are cross-built from the same source
+  in the same run of `native.yml`, so one is strong evidence for all seven - but
+  it is evidence, not proof, and a tag run that is red means do not release
+  whatever else is green.
 - **`git describe` does not work on `main`** and will not until the pre-`v0.2.0`
   tags are irrelevant, because they sit on the abandoned history. Nothing
   depends on it; it is worth knowing before reaching for it in a script.

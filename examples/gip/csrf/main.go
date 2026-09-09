@@ -22,7 +22,10 @@
 // will send it, and the site receiving it now has a valid token for a user's
 // session. So a cross-origin action is a refusal, and so is a cross-origin
 // formaction on any submitter - which is, again, evidence that arrives after the
-// start tag.
+// start tag. The URL is judged as a browser reads it, not as it is spelled:
+// character references decoded and backslashes read as slashes, so that
+// "&#104;ttps://evil.example" and "\\evil.example" are the cross-origin posts
+// they resolve to and not the relative paths their source text looks like.
 //
 // Whether the field would end up in the form at all. This is the one that has to be
 // measured rather than reasoned about: an insertion goes where the markup says, and
@@ -48,6 +51,7 @@ package main
 
 import (
 	"fmt"
+	stdhtml "html"
 	"io"
 	"net/url"
 	"os"
@@ -290,8 +294,19 @@ func (s *scanner) sameOrigin(f *form) bool {
 	return true
 }
 
+// ours decides on the URL a browser would post to, not on the attribute's source
+// text. Element.Attribute returns raw source with character references left
+// encoded, and a browser decodes those before it resolves the URL: to url.Parse
+// "&#104;ttps://evil.example/x" is a relative path, and to a browser it is
+// https://evil.example/x. The same goes for the spellings the WHATWG parser
+// accepts and Go's does not - a backslash is a slash in an http(s) URL, so
+// "\\evil.example/x" and "/\evil.example/x" are the network-path reference
+// "//evil.example/x", and leading control characters and tabs and newlines
+// anywhere are dropped. So the value is decoded and normalised first, and only
+// then judged; anything that still does not parse is not ours. The check was once
+// made on the raw source, and every one of those forms got a token.
 func (s *scanner) ours(action string) bool {
-	action = strings.TrimSpace(action)
+	action = normalise(action)
 	if action == "" {
 		return true // the form posts to the document's own URL
 	}
@@ -315,6 +330,17 @@ func (s *scanner) ours(action string) bool {
 		return strings.EqualFold(u.Host, mine.Host)
 	}
 	return strings.EqualFold(u.Scheme, mine.Scheme) && strings.EqualFold(u.Host, mine.Host)
+}
+
+// normalise turns an attribute's source text into the string the WHATWG URL
+// parser would see: character references decoded, leading and trailing C0
+// controls and spaces stripped, tabs and newlines removed, and backslashes read
+// as slashes (which they are, for the special schemes a form can post to).
+func normalise(raw string) string {
+	v := stdhtml.UnescapeString(raw)
+	v = strings.TrimFunc(v, func(r rune) bool { return r <= ' ' })
+	v = strings.NewReplacer("\t", "", "\n", "", "\r", "", `\`, "/").Replace(v)
+	return v
 }
 
 func main() {

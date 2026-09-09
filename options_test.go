@@ -156,3 +156,22 @@ func TestHandlerErrorUnwrapsToTheHandlersOwnError(t *testing.T) {
 		t.Errorf("HandlerError says kind=%q selector=%q", he.Kind, he.Selector)
 	}
 }
+
+// TestAnEmptyEncodingIsAnEncodingError. WithEncoding("") is the label a caller
+// gets from a Content-Type header with no charset, and it used to fail with a
+// bare error while every other unusable label failed with an *EncodingError -
+// so the branch a caller writes for "this charset cannot be used" did not see
+// the one label they are most likely to pass.
+func TestAnEmptyEncodingIsAnEncodingError(t *testing.T) {
+	_, err := lolhtml.NewWriter(&bytes.Buffer{}, lolhtml.WithEncoding(""))
+	if err == nil {
+		t.Fatal("an empty encoding was accepted")
+	}
+	var ee *lolhtml.EncodingError
+	if !errors.As(err, &ee) {
+		t.Fatalf("NewWriter with an empty encoding returned %T (%v), want *EncodingError", err, err)
+	}
+	if ee.Label != "" {
+		t.Errorf("EncodingError.Label = %q, want the empty label that was passed", ee.Label)
+	}
+}

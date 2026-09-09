@@ -57,3 +57,30 @@ func requireNoHandleLeak(t *testing.T, before int64) {
 		t.Errorf("%d handles leaked (%d before, %d after)", after-before, before, after)
 	}
 }
+
+// TestARefusedEndTagHandlerHoldsNoHandle. OnEndTag on a void element is
+// refused - there is no end tag for the handler to run on - and the refusal
+// used to keep the handle it had already made, for the life of the rewriter:
+// nothing could ever fire it, and a broad selector over a page of images paid
+// one per refusal. The count is read inside the handler, on either side of the
+// call, so the assertion is about this call and not about the rewrite.
+func TestARefusedEndTagHandlerHoldsNoHandle(t *testing.T) {
+	var before, after int64
+	var refused error
+	_, err := lolhtml.RewriteString(`<br>`, lolhtml.OnElement("br", func(e *lolhtml.Element) error {
+		before = lolhtml.LiveHandles()
+		refused = e.OnEndTag(func(*lolhtml.EndTag) error { return nil })
+		after = lolhtml.LiveHandles()
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refused == nil {
+		t.Fatal("OnEndTag on a void element was accepted")
+	}
+	if after != before {
+		t.Errorf("a refused OnEndTag left %d handle(s) behind (%d before, %d after)",
+			after-before, before, after)
+	}
+}

@@ -5,6 +5,8 @@ package lolhtml
 */
 import "C"
 
+import "unicode/utf8"
+
 // An EndTag is a closing tag, delivered to a handler registered with
 // [Element.OnEndTag]. It is the hook for acting on an element once its content
 // has been seen.
@@ -20,6 +22,11 @@ type EndTag struct {
 	// selector is the selector of the element handler that registered this
 	// end-tag handler; see the same field on Element.
 	selector string
+
+	// parsedName is the name the tag arrived with, captured by the first SetName
+	// so that the raw-text check in Before keeps keying on the element the
+	// content was tokenised inside. Empty until a rename.
+	parsedName string
 }
 
 // Name returns the tag name, lowercased.
@@ -48,12 +55,50 @@ func (t *EndTag) NamePreserveCase() string {
 
 // SetName renames the end tag. Renaming only this tag, and not the matching
 // start tag, produces mismatched markup.
+//
+// The name is checked the way [Element.SetTagName] checks one: it must not be
+// empty, must start with an ASCII letter, and must not contain a character
+// that ends a tag name - whitespace, "/" or ">". lol-html checks a start tag's
+// name and not an end tag's, and the difference was a way to write arbitrary
+// bytes between "</" and ">": a name of `a>b` produced `</a>b>`, which a
+// parser reads as an end tag followed by text, and one carrying a "<" opened a
+// new element. Refused here with the same messages, so a name that is wrong
+// is wrong in both places for the same reason.
 func (t *EndTag) SetName(name string) error {
 	p, err := t.live()
 	if err != nil {
 		return err
 	}
-	return withName(p, name, "end_tag_name_set", cfEndTagNameSet)
+	if err := checkTagName("end_tag_name_set", name); err != nil {
+		return err
+	}
+	if t.parsedName == "" {
+		t.parsedName = t.Name()
+	}
+	return withName(p, t.c.nt.cerr, name, "end_tag_name_set", cfEndTagNameSet)
+}
+
+// checkTagName applies lol-html's own start-tag name rules to a name, with its
+// own messages, so that the two renames refuse the same names the same way.
+// Invalid UTF-8 is left to lol-html, which checks it first and reports it as
+// ErrInvalidUTF8; the rules here are only meaningful for a string that is text.
+func checkTagName(op, name string) error {
+	if !utf8.ValidString(name) {
+		return nil
+	}
+	if name == "" {
+		return &NativeError{Op: op, Message: "Tag name can't be empty."}
+	}
+	if c := name[0]; !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z') {
+		return &NativeError{Op: op, Message: "The first character of the tag name should be an ASCII alphabetical character."}
+	}
+	for i := 0; i < len(name); i++ {
+		switch c := name[i]; c {
+		case ' ', '\t', '\n', '\f', '\r', '/', '>':
+			return &NativeError{Op: op, Message: "`" + string(c) + "` character is forbidden in the tag name"}
+		}
+	}
+	return nil
 }
 
 // SourceLocation returns the byte range the end tag occupied in the input.
@@ -92,13 +137,20 @@ func (t *EndTag) content(content string, ct ContentType, op string, fn contentOp
 	if err != nil {
 		return err
 	}
-	// Before an end tag is inside the element; After is outside it.
+	// Before an end tag is inside the element; After is outside it. The check
+	// keys on the name the tag was parsed with: the content in front of it was
+	// tokenised as raw text under that name and stays raw text whatever the tag
+	// is renamed to, so a rename to "div" must not switch the check off.
 	if ct.isHTML() && op == "end_tag_before" {
-		if err := checkRawText(t.Name(), content); err != nil {
+		name := t.parsedName
+		if name == "" {
+			name = t.Name()
+		}
+		if err := checkRawText(name, content); err != nil {
 			return err
 		}
 	}
-	return withContent(p, content, ct.isHTML(), op, fn)
+	return withContent(p, t.c.nt.cerr, content, ct.isHTML(), op, fn)
 }
 
 // Remove removes the end tag, leaving the element's content in place.

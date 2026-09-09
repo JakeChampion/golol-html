@@ -3,7 +3,6 @@ package lolhtml_test
 import (
 	"bytes"
 	"errors"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -375,10 +374,20 @@ func rewrite(f *testing.F, handlers func(*int, *bytes.Buffer) []lolhtml.Option) 
 }
 
 // TestUnclosedWriterIsReclaimed exercises the runtime.AddCleanup backstop for a
-// Writer the caller drops without closing. It cannot assert that C memory was
-// freed - there is nothing to observe - but it does prove the cleanup path runs
-// without faulting, which is the failure that would matter.
+// Writer the caller drops without closing. C memory is not observable from
+// here, but the cgo handles the element handler pins are: each unclosed Writer
+// holds two of them until its cleanup runs, so 200 abandoned Writers put 400
+// handles on the process-wide counter, and only the backstop can take them
+// off again. Removing the runtime.AddCleanup registration used to pass this
+// test, because it asserted nothing after the collections; now it leaves the
+// counter 400 above where it started, which is a failure.
+//
+// The handlers must not capture w. A Writer reachable from its own handler is
+// a cycle the cleanup can never observe (see the NewWriter documentation), and
+// the test would then be measuring that mistake rather than the backstop.
 func TestUnclosedWriterIsReclaimed(t *testing.T) {
+	before := settledHandles()
+
 	for range 200 {
 		w, err := lolhtml.NewWriter(&bytes.Buffer{},
 			lolhtml.OnElement("a", func(e *lolhtml.Element) error {
@@ -394,9 +403,25 @@ func TestUnclosedWriterIsReclaimed(t *testing.T) {
 		_ = w
 	}
 
-	// Two cycles: the first queues the cleanups, the second lets them finish.
-	for range 2 {
-		runtime.GC()
+	// A count that fell is not a leak and can happen here (handles_test.go
+	// explains why), so the assertion is one-sided: settledHandles runs the
+	// collections that queue and drain the cleanups, and afterwards the
+	// counter must be no higher than it was before the Writers were made.
+	//
+	// Cleanups run on the runtime's own goroutine after the collection that
+	// queued them, and under the race detector that goroutine falls behind
+	// three cycles: measured, 212 of 400 handles were still queued. So this
+	// keeps collecting until the count has come down, and only a count that
+	// never does is the leak. Without the backstop it never does - 400 handles
+	// stay live however many cycles run - which is what makes the test able
+	// to fail.
+	after := settledHandles()
+	for round := 0; after > before && round < 100; round++ {
+		after = settledHandles()
+	}
+	if after > before {
+		t.Fatalf("unclosed Writers were not reclaimed: %d handles leaked (%d before, %d after)",
+			after-before, before, after)
 	}
 }
 
