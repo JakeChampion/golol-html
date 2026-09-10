@@ -338,6 +338,35 @@ func TestPanicFromTheDestinationIsIdempotentToClose(t *testing.T) {
 	runtime.KeepAlive(w)
 }
 
+// requireGoexitThroughNativeFrames skips a test whose goroutine leaves through
+// lol-html's frames by runtime.Goexit when the binary is built with -asan.
+//
+// Goexit runs the deferred calls and then abandons the frames below them,
+// the C and Rust ones included, and two things about a sanitized build are
+// left behind with them. The cgo export stub for each callback is compiled
+// with ASan instrumentation, so its frame carries stack redzones that its
+// epilogue would have cleared: skipped, the poison stays in the shadow of the
+// thread's stack, and the next call into lol-html on that thread is reported
+// as a stack-buffer-underflow the moment Rust's memcpy lands on it - a report
+// ASan itself labels a likely false positive from a custom unwinder, and
+// which on arm64 aborts inside its own frame walker before it is printed. And
+// the Rust frames owned heap memory their destructors would have freed, so
+// LeakSanitizer reports them at exit, about 240 bytes for every exit. Neither
+// is something this package can clean up: nothing can run a destructor the
+// unwinder did not, which is the rule these tests exist to document, and the
+// poison is the runtime's to lift when it unwinds through C.
+//
+// The exit's own properties - the Writer poisoned, the handles reclaimed,
+// Close answering ErrPoisoned - are asserted in every other leg of the suite.
+// What -asan is there for is memory errors across the boundary on calls that
+// return, which it still checks with these two skipped.
+func requireGoexitThroughNativeFrames(t *testing.T) {
+	t.Helper()
+	if asanEnabled {
+		t.Skip("Goexit through lol-html's frames leaves the sanitizer's own stack poison and the Rust frames' heap behind")
+	}
+}
+
 // goexiters is the third way out of user code, which the panickers table
 // cannot hold: runtime.Goexit is not a panic, so nothing recovers it, and the
 // goroutine leaves through lol-html's frames the way a panic would have. The
@@ -391,6 +420,8 @@ func (goexitOnWrite) Write([]byte) (int, error) { runtime.Goexit(); return 0, ni
 // Each case runs on its own goroutine, because the exit takes the goroutine
 // with it, and the deferred Close inside that goroutine records what it saw.
 func TestGoexitPoisonsTheWriterAndLeaksNoHandles(t *testing.T) {
+	requireGoexitThroughNativeFrames(t)
+
 	for name, newWriter := range goexiters {
 		t.Run(name, func(t *testing.T) {
 			before := settledHandles()
@@ -435,6 +466,8 @@ func TestGoexitPoisonsTheWriterAndLeaksNoHandles(t *testing.T) {
 // own deferred Close is the one that runs. Rewrite never returns, so the only
 // observable is the handle count afterwards.
 func TestGoexitThroughRewriteLeaksNoHandles(t *testing.T) {
+	requireGoexitThroughNativeFrames(t)
+
 	const rounds = 30
 	before := settledHandles()
 

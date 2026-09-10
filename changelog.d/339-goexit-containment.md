@@ -14,5 +14,8 @@
   `ErrPoisoned`, and the handles are reclaimed when the Writer is released,
   which the cleanup does even for a Writer nobody closes. The Rust frames that
   were skipped are still skipped - nothing can run a destructor the unwinder
-  did not - so the rule stands: leave a handler by returning an error.
-  Measured in panic_test.go, on every callback that runs user code.
+  did not, and LeakSanitizer puts what they owned at about 240 bytes an exit -
+  so the rule stands: leave a handler by returning an error. Measured in
+  panic_test.go, on every callback that runs user code, in every build but
+  -asan, where the frames the exit skips leave the sanitizer's own stack
+  poison behind and every later report is suspect.
