@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/url"
@@ -109,11 +110,18 @@ func (u *upgrader) options() []lolhtml.Option {
 			if !ok {
 				return nil
 			}
-			got, n := u.upgradeURL(raw)
+			// The attribute arrives as source text, references and all, and
+			// a browser decodes it before it looks at the scheme: "http&#58;//"
+			// is a plain http URL to the browser and was nothing to this
+			// program, which left it mixed content in silence. Decode first,
+			// and re-escape the "&" on the way back so the source stays
+			// source. Only the attribute paths decode; a stylesheet body is
+			// raw text, where references are not references.
+			got, n := u.upgradeURL(html.UnescapeString(raw))
 			if n == 0 {
 				return nil
 			}
-			return e.SetAttribute(sa.attr, got)
+			return e.SetAttribute(sa.attr, reescape(got))
 		}))
 	}
 
@@ -192,7 +200,7 @@ func (u *upgrader) options() []lolhtml.Option {
 
 		// Navigations are counted, not changed.
 		lolhtml.OnElement("a[href], area[href]", func(e *lolhtml.Element) error {
-			if href, ok := e.Attribute("href"); ok && isHTTP(href) {
+			if href, ok := e.Attribute("href"); ok && isHTTP(html.UnescapeString(href)) {
 				u.navigations++
 			}
 			return nil
@@ -306,6 +314,14 @@ func (u *upgrader) upgradeQuoted(inner string) (string, int) {
 
 	got, n := u.upgradeURL(body)
 	return lead + quote + got + quote + tail, n
+}
+
+// reescape turns a decoded attribute value back into source text. SetAttribute
+// escapes the double quote itself, so the ampersand is the one character that
+// has to go back to being a reference: without this, "?a=1&amp;b=2" would come
+// out of the decode as "?a=1&b=2" and be written back as the reference "&b".
+func reescape(v string) string {
+	return strings.ReplaceAll(v, "&", "&amp;")
 }
 
 func isHTTP(s string) bool {

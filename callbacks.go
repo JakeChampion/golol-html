@@ -8,6 +8,7 @@ import "C"
 import (
 	"io"
 	"runtime/cgo"
+	"runtime/debug"
 )
 
 // This file holds the Go functions that Rust calls back into. Its cgo preamble
@@ -96,8 +97,11 @@ func runHandler[U any](st *state, kind, selector string, u U, fn func(U) error) 
 	defer func() {
 		if r := recover(); r != nil {
 			// Unwinding into Rust would abort the process. Park the panic and
-			// re-raise it from Write or Close, on the caller's goroutine.
+			// re-raise it from Write or Close, on the caller's goroutine. The
+			// stack goes with it: this deferred call still runs above the
+			// handler's frames, and it is the last place they can be seen.
 			st.panicVal = r
+			st.panicStack = debug.Stack()
 			d = C.LOL_HTML_STOP
 		}
 	}()
@@ -199,6 +203,7 @@ func writeSink(st *state, b []byte) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			st.panicVal = r
+			st.panicStack = debug.Stack()
 		}
 	}()
 

@@ -274,3 +274,22 @@ func mustParse(t *testing.T, s string) *url.URL {
 	}
 	return u
 }
+
+// TestAThirdPartySpelledWithReferencesOrBackslashesIsStillOne: the attribute is
+// source text, and a browser decodes it and reads a backslash as a slash before
+// it decides where to send the request. Classified on the source, both of these
+// were the page's own origin.
+func TestAThirdPartySpelledWithReferencesOrBackslashesIsStillOne(t *testing.T) {
+	const doc = `<script src="&#104;ttps://evil.example/t.js"></script>` +
+		`<img src="\\evil2.example/x.png">` +
+		`<img src="/\evil3.example/y.png">`
+	rep := report(t, doc, Options{Page: page})
+	for _, name := range []string{"https://evil.example", "https://evil2.example", "https://evil3.example"} {
+		if find(rep, name) == nil {
+			t.Errorf("%s is missing from %v", name, rep.Origins)
+		}
+	}
+	if third := rep.ThirdParty(); len(third) != 3 {
+		t.Errorf("third parties are %v, want all three", third)
+	}
+}

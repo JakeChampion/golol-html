@@ -565,20 +565,27 @@ func isJavaScriptURL(v string) bool {
 	return strings.HasPrefix(trimmed, "javascript:")
 }
 
-// absolutise resolves v against base, and says whether it changed.
-func absolutise(v string, base *url.URL) (string, bool) {
+// absolutise resolves raw against base, and says whether it changed.
+//
+// raw is attribute source text, which a mail client decodes before resolving,
+// so it is decoded here first: "&#47;&#47;other.example/x" is protocol-relative
+// to the client and was a path under the base to this program. What goes back
+// is source again, with its ampersands as references - SetAttribute escapes the
+// quote and nothing else - and an unchanged value goes back byte for byte.
+func absolutise(raw string, base *url.URL) (string, bool) {
+	v := stdhtml.UnescapeString(raw)
 	if base == nil || v == "" || strings.HasPrefix(v, "#") {
-		return v, false
+		return raw, false
 	}
 	ref, err := url.Parse(v)
 	if err != nil {
-		return v, false
+		return raw, false
 	}
 	if ref.IsAbs() {
-		return v, false
+		return raw, false
 	}
-	abs := base.ResolveReference(ref).String()
-	return abs, abs != v
+	abs := strings.ReplaceAll(base.ResolveReference(ref).String(), "&", "&amp;")
+	return abs, abs != raw
 }
 
 func main() {

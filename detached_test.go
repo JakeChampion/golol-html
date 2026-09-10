@@ -295,6 +295,10 @@ func TestARetainedSinkRefusesEveryMethod(t *testing.T) {
 	if err := kept.Err(); !errors.Is(err, lolhtml.ErrDetached) {
 		t.Errorf("Err = %v, want ErrDetached", err)
 	}
+	// And the question itself, which is the way to ask without an error.
+	if !kept.Detached() {
+		t.Error("Detached() = false for a Sink retained past its StreamFunc")
+	}
 	// And nothing it was told to write reached the output.
 	if strings.Contains(out, "late") {
 		t.Errorf("a write through the retained sink reached the output: %q", out)

@@ -271,3 +271,29 @@ func TestIdempotent(t *testing.T) {
 		}
 	}
 }
+
+// TestAnEncodedSchemeIsStillAnHTTPURL: the attribute is source text, and a
+// browser decodes it before it looks at the scheme, so "http&#58;//" is an http
+// URL to fetch and was invisible to the upgrade. The decoded value is written
+// back as source: the ampersand that was a reference is one again.
+func TestAnEncodedSchemeIsStillAnHTTPURL(t *testing.T) {
+	for _, tt := range []struct{ in, want string }{
+		{`<img src="http&#58;//cdn.example/a">`, `<img src="https://cdn.example/a">`},
+		{`<img src="&#104;ttp://cdn.example/a?q=1&amp;r=2">`, `<img src="https://cdn.example/a?q=1&amp;r=2">`},
+		// A bare "&" in source is the same character to a browser and comes
+		// back as the reference: the same URL, spelled as source.
+		{`<img src="http://cdn.example/a?q=1&r=2">`, `<img src="https://cdn.example/a?q=1&amp;r=2">`},
+		{`<a href="http&#58;//other.example/">x</a>`, `<a href="http&#58;//other.example/">x</a>`},
+	} {
+		got, u, err := upgradeString(tt.in)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.in, err)
+		}
+		if got != tt.want {
+			t.Errorf("\n got: %s\nwant: %s", got, tt.want)
+		}
+		if strings.HasPrefix(tt.in, "<a ") && u.navigations != 1 {
+			t.Errorf("%s: navigations = %d, want 1 (counted, not changed)", tt.in, u.navigations)
+		}
+	}
+}

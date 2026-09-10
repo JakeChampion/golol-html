@@ -462,3 +462,57 @@ func TestGoexitThroughRewriteLeaksNoHandles(t *testing.T) {
 
 	requireNoHandleLeak(t, before)
 }
+
+// TestPanicStackNamesTheHandler: the trace the runtime prints for a re-raised
+// panic begins at the Write or Close that raised it, because the handler's
+// frames were unwound at the boundary where the panic was caught. PanicStack is
+// the record taken there, before they were, and it has to name the function that
+// panicked - which is the one thing a caller with several handlers needs.
+func TestPanicStackNamesTheHandler(t *testing.T) {
+	var w *lolhtml.Writer
+	var buf bytes.Buffer
+	w, err := lolhtml.NewWriter(&buf,
+		lolhtml.OnElement("p", func(*lolhtml.Element) error { return handlerThatPanicsForTheStackTest() }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.PanicStack() != nil {
+		t.Fatal("a Writer that has not caught a panic reports a stack")
+	}
+
+	v := recovered(func() { w.Write([]byte(`<p>x</p>`)) })
+	if v != "stack test" {
+		t.Fatalf("re-raised %v, want the handler's value", v)
+	}
+	stack := string(w.PanicStack())
+	if !strings.Contains(stack, "handlerThatPanicsForTheStackTest") {
+		t.Errorf("PanicStack does not name the handler:\n%s", stack)
+	}
+	// The record survives the Close a caller's defer makes.
+	_ = w.Close()
+	if string(w.PanicStack()) != stack {
+		t.Error("PanicStack changed across Close")
+	}
+}
+
+// handlerThatPanicsForTheStackTest is a named function rather than a closure so
+// the assertion has a name to look for in the trace.
+func handlerThatPanicsForTheStackTest() error { panic("stack test") }
+
+// TestAPanicFromTheDestinationHasAStackToo: the destination writer is the other
+// place user code is caught at the boundary, and it keeps its stack the same way.
+func TestAPanicFromTheDestinationHasAStackToo(t *testing.T) {
+	w, err := lolhtml.NewWriter(destinationThatPanicsForTheStackTest{},
+		lolhtml.OnElement("p", func(*lolhtml.Element) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered(func() { w.Write([]byte(`<p>x</p>`)) })
+	if !strings.Contains(string(w.PanicStack()), "destinationThatPanicsForTheStackTest") {
+		t.Errorf("PanicStack does not name the destination:\n%s", w.PanicStack())
+	}
+}
+
+type destinationThatPanicsForTheStackTest struct{}
+
+func (destinationThatPanicsForTheStackTest) Write([]byte) (int, error) { panic("destination") }

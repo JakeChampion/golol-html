@@ -4,6 +4,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	lolhtml "github.com/JakeChampion/golol-html"
 )
@@ -112,6 +113,18 @@ func TestTheWriteSizeDoesNotChangeTheAllocationCount(t *testing.T) {
 // reason to avoid small writes. Small writes are still worth avoiding, for the
 // per-write cost of crossing into C, which is a constant a caller can pay
 // knowingly rather than a curve they have to design around.
+//
+// Two gates, because the claim has two halves and one instrument cannot see
+// both. Allocations per byte say the Go side of a write does not grow with what
+// is pending - but a rescan happens in lol-html's tokenizer, which allocates
+// nothing Go can count, so that gate passed whether or not anything rescanned.
+// The second gate is time, measured as a ratio inside one process: the same
+// shape at four times the bytes must take well under four times four times as
+// long. A flat cost per byte gives a ratio near 4 (measured, 3.9 to 4.2 for
+// every shape); a rescan of the pending buffer gives one near 16, and the bound
+// is set where nothing but a change of complexity class can reach it. Fastest
+// of several runs, so that a busy host makes the ratio noisier rather than
+// larger, and a documented-slow build (the race detector) moves both sides.
 func TestWritingAByteAtATimeCostsLinearly(t *testing.T) {
 	requireRealAllocationCounts(t)
 
@@ -134,8 +147,42 @@ func TestWritingAByteAtATimeCostsLinearly(t *testing.T) {
 						len(in), per, first, sizes[0])
 				}
 			}
+
+			// The half allocations cannot see. Time for 4x the bytes against
+			// time for 1x: linear is about 4, quadratic about 16, and 8 is the
+			// line between them with the noise of a fastest-of-five on either
+			// side of it.
+			small := []byte(shape.gen(4 << 10))
+			large := []byte(shape.gen(16 << 10))
+			ratio := float64(fastestByteAtATime(t, large)) / float64(fastestByteAtATime(t, small))
+			if ratio > 8 {
+				t.Errorf("four times the bytes took %.1f times as long, written a byte "+
+					"at a time: something rescans what is pending", ratio)
+			}
 		})
 	}
+}
+
+// fastestByteAtATime is the shortest of five byte-at-a-time rewrites of in.
+func fastestByteAtATime(t *testing.T, in []byte) time.Duration {
+	t.Helper()
+	best := time.Duration(1<<63 - 1)
+	for range 5 {
+		w, err := lolhtml.NewWriter(io.Discard,
+			lolhtml.OnElement("p", func(*lolhtml.Element) error { return nil }))
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		for i := range in {
+			if _, err := w.Write(in[i : i+1]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_ = w.Close()
+		best = min(best, time.Since(start))
+	}
+	return best
 }
 
 // TestAPendingTagIsNotTheExpensiveCase - the document that was supposed to be

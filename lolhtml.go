@@ -1697,9 +1697,11 @@
 // goroutine that called Write or Close. The destination writer is user code on
 // the same stack, and a panic from it is contained the same way. Either way the
 // re-raised panic's trace starts at Write or Close rather than in the handler,
-// because the original frames are gone by the time it is re-raised; a handler
-// that wants its location in the trace should recover and re-panic with one, or
-// return an error.
+// because the original frames are gone by the time it is re-raised. The frames
+// are recorded before they go: [Writer.PanicStack] is the stack at the moment
+// the panic was caught, and a caller who recovers around Write or Close can log
+// it next to the value. Through [Rewrite] and [RewriteString] only the value
+// survives.
 //
 // A value from outside the program can fail an insertion on its own: every path
 // that takes content or a name refuses bytes that are not valid UTF-8, and that

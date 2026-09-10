@@ -52,6 +52,14 @@ func TestHandlerErrorPropagates(t *testing.T) {
 	if he.Kind != "element" || he.Selector != "p" {
 		t.Errorf("HandlerError{Kind: %q, Selector: %q}, want {element, p}", he.Kind, he.Selector)
 	}
+	// The field is the handler's own error, unwrapped, and the message names
+	// the kind so a log line without errors.As still says which handler.
+	if he.Err != sentinel {
+		t.Errorf("HandlerError.Err = %v, want the sentinel itself", he.Err)
+	}
+	if msg := he.Error(); !strings.Contains(msg, "element") || !strings.Contains(msg, sentinel.Error()) {
+		t.Errorf("HandlerError.Error() = %q: does not name the kind and the cause", msg)
+	}
 }
 
 func TestHandlerPanicIsRepanickedOnCaller(t *testing.T) {
@@ -414,6 +422,9 @@ func TestEncoding(t *testing.T) {
 			}
 			if ee.Message == "" {
 				t.Error("Message is empty, so the reason is lost")
+			}
+			if !strings.Contains(ee.Error(), tt.label) {
+				t.Errorf("EncodingError.Error() = %q does not name the label", ee.Error())
 			}
 			if !strings.Contains(err.Error(), tt.label) {
 				t.Errorf("error text does not name the label: %v", err)

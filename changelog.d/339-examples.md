@@ -16,3 +16,12 @@
   the response charset before registering a text handler, which otherwise
   turns every non-UTF-8 title into U+FFFD. `examples/gip/consentgate`'s usage
   names the flag the program defines.
+
+- Five more examples decided what a URL was from the attribute's raw source,
+  before decoding it as a browser does. `upgrade` left `http&#58;//` as mixed
+  content; `origins` credited `&#104;ttps://evil.example` and `\\evil.example`
+  to the page's own origin; `absolutise` and `email` resolved `&#47;&#47;host/x`
+  as a path under the base; `imgcdn` refused any reference it had not been
+  taught rather than reading it. Each decodes first now and writes the result
+  back as source, ampersands as references again, so `?a=1&amp;b=2` comes out
+  as it went in.

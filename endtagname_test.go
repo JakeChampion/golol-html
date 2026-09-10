@@ -157,3 +157,26 @@ func TestARenamedEndTagStillGuardsTheRawText(t *testing.T) {
 		}
 	}
 }
+
+// TestANativeErrorAnswersIsDirectly: errors.Is reaches the classification
+// through NativeError.Is, and a caller holding the *NativeError can ask it
+// without going back through the sentinel.
+func TestANativeErrorAnswersIsDirectly(t *testing.T) {
+	var got error
+	_, _ = lolhtml.RewriteString("<p>x</p>", lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+		return e.OnEndTag(func(et *lolhtml.EndTag) error {
+			got = et.SetName("a\xff")
+			return nil
+		})
+	}))
+	var ne *lolhtml.NativeError
+	if !errors.As(got, &ne) {
+		t.Fatalf("SetName gave %T, want *NativeError", got)
+	}
+	if !ne.Is(lolhtml.ErrInvalidUTF8) {
+		t.Errorf("NativeError.Is(ErrInvalidUTF8) = false for %v", ne)
+	}
+	if ne.Is(lolhtml.ErrMemoryLimitExceeded) {
+		t.Errorf("NativeError.Is(ErrMemoryLimitExceeded) = true for %v", ne)
+	}
+}

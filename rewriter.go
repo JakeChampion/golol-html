@@ -62,6 +62,11 @@ type state struct {
 	handlerErr error // first error returned by a user handler
 	sinkErr    error // first error returned by the destination writer
 	panicVal   any   // first panic recovered at the C boundary
+	// panicStack is the goroutine's stack at the point panicVal was recovered,
+	// which is the only record of where the panic happened: by the time it is
+	// re-raised from Write or Close the handler's frames are gone. Kept after
+	// the value is taken, for Writer.PanicStack.
+	panicStack []byte
 
 	// inSink is set while a Sink write is on the stack. The destination writer
 	// runs synchronously inside that write, so a destination that can reach the
@@ -204,7 +209,8 @@ func NewWriter(dst io.Writer, opts ...Option) (*Writer, error) {
 // asked for. A panic from a handler or from the destination writer is contained
 // the same way - parked at the boundary and re-raised from here, on the calling
 // goroutine, with the native resources released first - so the trace starts at
-// Write rather than in the code that panicked.
+// Write rather than in the code that panicked. [Writer.PanicStack] keeps the
+// trace that was lost.
 //
 // Write is not reentrant. Called from inside a handler, or from the destination
 // writer that this Write is running, it returns [ErrReentrant] without touching
@@ -277,10 +283,14 @@ func (w *Writer) Write(p []byte) (int, error) {
 	cerr := w.c.nt.cerr
 	w.inCall = true
 	rc := C.golol_rewriter_write(w.c.nt.rw, (*C.char)(bytePtr(p)), C.size_t(len(p)), cerr)
-	w.inCall = false
 	runtime.KeepAlive(p)
 
-	if err := w.c.st.takeDeferred(nativeErrIf(rc != 0, "write", *cerr)); err != nil {
+	// inCall stays set through takeDeferred, which is what re-raises a parked
+	// panic: endCall reads it to tell a call that came back from one that did
+	// not. No user code can run in between, so nothing can be refused by it.
+	err := w.c.st.takeDeferred(nativeErrIf(rc != 0, "write", *cerr))
+	w.inCall = false
+	if err != nil {
 		w.poison(err)
 		return 0, err
 	}
@@ -352,12 +362,40 @@ func (w *Writer) Close() error {
 	var cerr C.lol_html_str_t
 	w.inCall = true
 	rc := C.golol_rewriter_end(w.c.nt.rw, &cerr)
+	err := w.c.st.takeDeferred(nativeErrIf(rc != 0, "end", cerr))
 	w.inCall = false
-	if err := w.c.st.takeDeferred(nativeErrIf(rc != 0, "end", cerr)); err != nil {
+	if err != nil {
 		w.poison(err)
 		return err
 	}
 	return nil
+}
+
+// PanicStack returns the stack of the goroutine at the moment the most recent
+// panic from a handler, a [StreamFunc] or the destination writer was caught at
+// the cgo boundary - the frames of the code that panicked, which are the ones
+// the re-raised panic no longer has. It is nil while no panic has been caught.
+//
+// A panic cannot unwind through lol-html's frames, so it is recovered at the
+// boundary, parked, and raised again from the Write or Close that was running.
+// The value is the same one, unwrapped, but the trace the runtime prints for
+// it begins at that Write or Close: with several handlers registered nothing
+// in it says which one failed. This is the record that does. It is taken with
+// [runtime/debug.Stack] at the recover site, so it costs nothing until a panic
+// happens and it survives the re-raise. A caller who recovers around Write or
+// Close can log it next to the value:
+//
+//	defer func() {
+//		if v := recover(); v != nil {
+//			log.Printf("handler panicked: %v\n%s", v, w.PanicStack())
+//		}
+//	}()
+//
+// [Rewrite] and [RewriteString] own their Writer, so a panic through them
+// keeps the value and loses the stack; build the Writer yourself where the
+// location matters. Measured in panic_test.go.
+func (w *Writer) PanicStack() []byte {
+	return w.c.st.panicStack
 }
 
 // poison marks the Writer unusable and remembers why. takeDeferred hands each
@@ -441,35 +479,31 @@ func (n *native) newHandle(v any) cgo.Handle {
 	return h
 }
 
-// endCall closes out one call into lol-html: the stack is back on the caller's
-// side, so nothing can re-enter, and if a handler panic is on its way out the
-// native resources are freed before it continues.
+// endCall closes out one call into lol-html. inCall is cleared on the line
+// after each call comes back - after takeDeferred, which is what re-raises a
+// parked panic - so finding it still set here means the call never returned:
+// the goroutine is leaving through a panic, or through runtime.Goexit, which
+// is what t.Fatal in a handler does. Either way the Rust frames under the
+// call were skipped rather than unwound and the rewriter is unusable, so it
+// is poisoned and released before the exit continues.
+//
+// Nothing is recovered here. A panic is recovered once, at the callback that
+// caught it, and raised once, by takeDeferred; recovering it a second time to
+// do this cleanup printed the trace twice, "[recovered]" and all. Goexit
+// could never be recovered anyway, which is how it went unnoticed: the Writer
+// looked healthy, and the caller's deferred Close then ran lol-html's end on
+// a rewriter abandoned mid-write and reported nil for a truncated document.
 //
 // Close stays safe afterwards: it returns ErrPoisoned before touching the
 // rewriter, and release is guarded by a sync.Once, so neither the caller's
 // deferred Close nor the cleanup can double-free.
 func (w *Writer) endCall() {
-	// inCall is cleared on the line after each C call returns, so finding it
-	// still set here means the call never returned: the goroutine is leaving
-	// through a panic or through runtime.Goexit - t.Fatal in a handler is the
-	// usual spelling - and the Rust frames under it were skipped, not unwound.
-	// A panic is parked at the callback and re-raised by takeDeferred, so it
-	// arrives here through recover. Goexit is not a panic and recovers as nil,
-	// which used to leave the Writer looking healthy: the caller's deferred
-	// Close then ran lol-html's end on a rewriter abandoned mid-write and
-	// reported nil for a truncated document. Either way out, the rewriter is
-	// unusable; poison it and release it before the exit continues.
-	abandoned := w.inCall
+	if !w.inCall {
+		return
+	}
 	w.inCall = false
-	if r := recover(); r != nil {
-		w.poisoned = true
-		w.c.nt.release()
-		panic(r)
-	}
-	if abandoned {
-		w.poisoned = true
-		w.c.nt.release()
-	}
+	w.poisoned = true
+	w.c.nt.release()
 }
 
 func nativeErrIf(failed bool, op string, cerr C.lol_html_str_t) error {
