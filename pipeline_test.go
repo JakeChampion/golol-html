@@ -93,11 +93,17 @@ func TestAWriterIsAnIOWriterSoStagesCompose(t *testing.T) {
 
 // TestAPipelineDoesNotHoldTheDocument, which is the difference from the buffered kind of second
 // pass and the reason to reach for it.
+//
+// What it measures is live heap: each sample forces a collection first, so what remains is
+// what the pipeline is keeping, not what the collector has not got round to. The high-water
+// mark of allocation with the collector left to its own pacing is a different number - the
+// garbage a rewrite produces between collections, which grows with GOGC and with whatever else
+// the test binary has live, and which -asan moves enough to fail a ratio between two sizes.
+// A pipeline that held the document would show it here as live memory the size of the input.
 func TestAPipelineDoesNotHoldTheDocument(t *testing.T) {
 	unit := `<a href="/x">link</a>`
 	chunk := []byte(strings.Repeat(unit, 4096/len(unit)+1))
 
-	peaks := map[int]uint64{}
 	for _, mb := range []int{1, 4} {
 		size := mb << 20
 
@@ -114,6 +120,13 @@ func TestAPipelineDoesNotHoldTheDocument(t *testing.T) {
 			})})
 
 		var peak uint64
+		sample := func() {
+			runtime.GC()
+			runtime.ReadMemStats(&now)
+			if now.HeapAlloc > base.HeapAlloc && now.HeapAlloc-base.HeapAlloc > peak {
+				peak = now.HeapAlloc - base.HeapAlloc
+			}
+		}
 		for written, writes := 0, 0; written < size; writes++ {
 			n := min(4096, size-written)
 			if _, err := pipe[0].Write(chunk[:n]); err != nil {
@@ -121,24 +134,23 @@ func TestAPipelineDoesNotHoldTheDocument(t *testing.T) {
 			}
 			written += n
 			if writes%64 == 0 {
-				runtime.ReadMemStats(&now)
-				if now.HeapAlloc > base.HeapAlloc && now.HeapAlloc-base.HeapAlloc > peak {
-					peak = now.HeapAlloc - base.HeapAlloc
-				}
+				sample()
 			}
 		}
+		// The whole document has been written and none of it has been closed out: if a
+		// stage were holding it, this is where all of it would be live.
+		sample()
 		if err := closePipe(pipe); err != nil {
 			t.Fatal(err)
 		}
-		peaks[mb] = peak
-	}
 
-	// Four times the document, the same working set. The tolerance is generous because a
-	// heap high-water mark is a sampled number; what would fail this is holding the
-	// document, which is four megabytes rather than a fraction of one.
-	if peaks[4] > peaks[1]*2 {
-		t.Errorf("piping 1 MB peaked at %.2f MB above the baseline and 4 MB at %.2f MB",
-			float64(peaks[1])/(1<<20), float64(peaks[4])/(1<<20))
+		// A quarter of the document is generous for two rewriters and a chunk; holding the
+		// document costs the whole of it.
+		t.Logf("piping %d MB kept at most %.2f MB live above the baseline", mb, float64(peak)/(1<<20))
+		if peak > uint64(size)/4 {
+			t.Errorf("piping %d MB kept %.2f MB live above the baseline, which is holding the document",
+				mb, float64(peak)/(1<<20))
+		}
 	}
 }
 

@@ -62,10 +62,12 @@ const importPath = "github.com/JakeChampion/golol-html"
 // and the source import is the expensive part - and only these two results
 // are kept. The type checker's own world (the package, every test and
 // example type-checked against it, the importers' caches) is tens of
-// megabytes, and keeping it live for the rest of the run moved the heap goal
-// enough to fail TestAPipelineDoesNotHoldTheDocument, which measures a
-// high-water mark above a baseline: with more live heap the collector lets
-// more garbage pile up before it runs, and the mark rose with the input.
+// megabytes, and keeping it live for the rest of the run once failed
+// TestAPipelineDoesNotHoldTheDocument, back when it measured a high-water
+// mark of allocation: with more live heap the collector let more garbage
+// pile up before it ran, and the mark rose with the input. That test reads
+// live heap now, but tens of megabytes kept for nothing is still a cost every
+// later test pays in collector work.
 var loadedSurface struct {
 	once      sync.Once
 	err       error
