@@ -62,7 +62,7 @@ jobs:
       propose_version: ${{ steps.plan.outputs.propose_version }}
       bump: ${{ steps.plan.outputs.bump }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Tags are needed to work out the next version, and the history to
           # find the commit that folded a section.
@@ -156,7 +156,7 @@ jobs:
       # remote URL. RELEASE_PR_TOKEN is a fine-grained PAT with contents:write
       # and pull-requests:write; the step that needs it says what is lost when
       # it is absent.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
           fetch-depth: 0
@@ -238,7 +238,7 @@ jobs:
       SHA: ${{ needs.plan.outputs.tag_sha }}
       HAS_TOKEN: ${{ secrets.RELEASE_PR_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
           fetch-depth: 0
