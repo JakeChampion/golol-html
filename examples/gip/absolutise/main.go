@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"net/url"
 	"os"
@@ -232,8 +233,14 @@ func (r *report) options() []lolhtml.Option {
 // resolveOne absolutises a single URL, reporting whether it could be parsed at
 // all. An already-absolute URL is returned unchanged rather than round-tripped
 // through url.String, which would normalise it.
+//
+// The value is source text, references and all. A browser decodes it before
+// it resolves, so "&#47;&#47;host/x" is a protocol-relative URL to the browser
+// and was a path under the base to this program. The decoded value is what is
+// resolved, and the result goes back as source, with its ampersands as
+// references again - SetAttribute escapes the quote and nothing else.
 func (r *report) resolveOne(raw string) (string, bool) {
-	ref := strings.TrimSpace(raw)
+	ref := strings.TrimSpace(html.UnescapeString(raw))
 	u, err := url.Parse(ref)
 	if err != nil {
 		return raw, false
@@ -243,7 +250,12 @@ func (r *report) resolveOne(raw string) (string, bool) {
 		return raw, true
 	}
 	r.Rewritten++
-	return r.base.ResolveReference(u).String(), true
+	return reescape(r.base.ResolveReference(u).String()), true
+}
+
+// reescape turns a decoded value back into attribute source text.
+func reescape(v string) string {
+	return strings.ReplaceAll(v, "&", "&amp;")
 }
 
 // resolveSrcset absolutises each candidate of a srcset, keeping its descriptor.

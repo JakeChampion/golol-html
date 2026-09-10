@@ -243,12 +243,13 @@ Two limits worth knowing before relying on it:
 - Archives built before the attestation step existed, or in a private fork, have
   nothing to verify. GitHub does not support attestations for user-owned private
   repositories, and `native.yml` skips the step with a notice rather than failing.
-- The header only joined the attestation subject and `SHA256SUMS` recently. The
-  committed `internal/lib/SHA256SUMS` still has seven lines - the archives only -
-  so `internal/include/lol_html.h` is not covered by the checksum file that is in
-  the tree today. It will be at the next rebuild; `make attest-verify`'s comment
-  says the same. Until then the header's integrity rests on check 2 above, which
-  is a direct comparison against upstream and is stronger anyway.
+- The header only joined the attestation subject recently. It is in
+  `internal/lib/SHA256SUMS` - eight lines, seven archives and
+  `../include/lol_html.h` - so the checksum step covers it, and
+  `build-native.sh --verify` compares it against upstream at the pin. But it
+  joins the attestation subject only at the next rebuild; `make attest-verify`'s
+  comment says the same. Until then the header's provenance rests on check 2
+  above, which is a direct comparison against upstream and is stronger anyway.
 
 ## What is not verifiable from the repository alone
 
@@ -261,13 +262,25 @@ Two limits worth knowing before relying on it:
   cross-built from the same source in the same run, so the one that is checked
   stands for them - which is an argument, not a measurement, and the way to
   settle it for a particular archive is the procedure above.
-- **Nothing gates a tag.** `ci.yml` triggers on `push: branches: [main]` and
-  `pull_request`; a tag ref matches neither, and there is no release workflow.
-  Tagging is a local act, so the binaries a tag ships are whatever was in the
-  tree at that commit. `v0.1.0` and `v0.1.1` are annotated but unsigned, and
-  carry the same seven archive blobs as `main` does today - checked with
-  `git ls-tree -r <tag> -- internal/lib`, which is the check to repeat for any
-  future tag.
+- **What gates a tag is three jobs, and one secret decides how many run
+  early.** Until `v0.2.0` nothing did: `ci.yml` ran on `main` and on pull
+  requests, a tag matched neither, and tagging was a local act. Now `ci.yml`
+  and `verify-native.yml` both trigger on `v*` tags, and `release.yml` - which
+  is what creates the tag - reproduces the `linux/amd64` archive from the pin
+  before it pushes the tag, so a tag cannot exist on a commit whose archive
+  does not rebuild. What is still by hand is the token. `RELEASE_PR_TOKEN` is
+  optional, and what it decides is whether `ci` runs on the release pull
+  request before it is merged: a pull request opened with the default
+  `GITHUB_TOKEN` gets no checks, and a tag pushed with it starts no tag-event
+  runs either. The commit the tag points at is a push to `main`, which `ci.yml`
+  runs on regardless, and the reproduction runs inside `release.yml` either
+  way - but without the secret, nobody has looked at the release pull request
+  before it lands, and the run summary says so. `v0.1.0` and `v0.1.1` are
+  annotated but unsigned and sit on the abandoned history; `v0.2.0` and
+  `v0.2.1` are annotated, unsigned, and on the current one, `v0.2.1` being the
+  first that `release.yml` made. Whether a tag carries the same seven archive
+  blobs as `main` is checked with `git ls-tree -r <tag> -- internal/lib`,
+  which is the check to repeat for any future tag.
 - **The string fingerprints cannot resolve `v3.0.0` from `v3.0.1`.** The
   non-test string literals, the header and the dependency lockfile are all
   identical across those two releases. Only the bit-for-bit reproduction

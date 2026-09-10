@@ -20,6 +20,7 @@ var corpus = []string{
 	`<link rel="preload" href="/js/app.js" as="script">`,
 	`<link rel="modulepreload" href="/js/app.js">`,
 	`<link rel="icon" href="/favicon.ico">`,
+	`<link rel="stylesheet preload" href="/css/site.css" as="style">`,
 	`<script src="/js/unknown.js"></script>`,
 	`<script src="https://cdn.example/lib.js" crossorigin="use-credentials"></script>`,
 	`<script src="/js/app.js" integrity="sha384-` + strings.Repeat("A", 64) + `"></script>`,
@@ -28,6 +29,7 @@ var corpus = []string{
 	`<script src=""></script><script src="  "></script>`,
 	`<!DOCTYPE html><html><head><script src="/js/app.js"></script></head><body>b</body></html>`,
 	`<!-- <script src="/js/disabled.js"></script> -->`,
+	`<!-- <SCRIPT src="/js/disabled.js"></SCRIPT> -->`,
 	`<head></head>`,
 	``,
 }
@@ -166,6 +168,68 @@ func TestOnlyIntegrityHonouringLinksAreTouched(t *testing.T) {
 		}
 		if has := strings.Contains(got, "integrity="); has != tt.wants {
 			t.Errorf("%s -> %s (integrity present = %v, want %v)", tt.in, got, has, tt.wants)
+		}
+	}
+}
+
+// TestARelWithMoreThanOneTokenIsStillThatKindOfLink. rel is a token list, and
+// rel="stylesheet preload" is both a stylesheet and a preload. Matched by exact
+// value it was neither: no integrity, and - since only a matched link can be
+// reported - no report either, so a page with an unhashed subresource exited 0
+// claiming full coverage.
+func TestARelWithMoreThanOneTokenIsStillThatKindOfLink(t *testing.T) {
+	for _, in := range []string{
+		`<link rel="stylesheet preload" href="/css/site.css" as="style">`,
+		`<link rel="preload modulepreload" href="/js/app.js">`,
+		`<link rel="alternate stylesheet" href="/css/site.css" title="other">`,
+		`<link rel="Stylesheet Preload" href="/css/site.css" as="style">`,
+	} {
+		got, a, err := addString(in, manifest, false)
+		if err != nil {
+			t.Fatalf("%s: %v", in, err)
+		}
+		if !strings.Contains(got, "integrity=") || a.added != 1 {
+			t.Errorf("%s -> %s: no integrity added (added=%d)", in, got, a.added)
+		}
+	}
+
+	// Uncovered, and so reported: the silence is the defect.
+	in := `<link rel="stylesheet preload" href="/css/nope.css" as="style">`
+	got, a, err := addString(in, manifest, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != in {
+		t.Errorf("changed an uncovered subresource:\n got: %s\nwant: %s", got, in)
+	}
+	if len(a.uncovered) != 1 || a.uncovered[0] != "/css/nope.css" {
+		t.Errorf("uncovered = %v, want [/css/nope.css]", a.uncovered)
+	}
+
+	// A token list that has none of the three is still not touched.
+	got, a, err = addString(`<link rel="icon alternate" href="/css/site.css">`, manifest, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "integrity=") || len(a.uncovered) != 0 {
+		t.Errorf("an unrelated rel was touched: %s (uncovered=%v)", got, a.uncovered)
+	}
+}
+
+// TestACommentedOutSubresourceIsReportedWhateverItsCase. Tag names are
+// case-insensitive, and a lowercase-only scan let <SCRIPT> through.
+func TestACommentedOutSubresourceIsReportedWhateverItsCase(t *testing.T) {
+	for _, in := range []string{
+		`<!-- <script src="/x.js"></script> -->`,
+		`<!-- <SCRIPT src=/x.js> -->`,
+		`<!-- <Link rel="stylesheet" href="/x.css"> -->`,
+	} {
+		_, a, err := addString(in, manifest, false)
+		if err != nil {
+			t.Fatalf("%s: %v", in, err)
+		}
+		if len(a.uncovered) != 1 || !strings.HasPrefix(a.uncovered[0], "(in a comment) ") {
+			t.Errorf("%s: uncovered = %v, want the comment reported", in, a.uncovered)
 		}
 	}
 }

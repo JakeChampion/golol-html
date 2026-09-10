@@ -38,6 +38,10 @@ var corpus = map[string]string{
 	"mixed case tags":      `<DIV CLASS="x"><SPAN>y</SPAN></DIV>`,
 	"deep text":            `<p>a<b>b<i>c<u>d</u>c</i>b</b>a</p>`,
 	"head and body split":  `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><h1>T</h1></body></html>`,
+	// A doctype with identifiers, which canonical() has to carry or the tree
+	// comparison cannot tell it from <!DOCTYPE html>.
+	"legacy doctype": `<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">` +
+		`<html><head><title>t</title></head><body><p>hi</p></body></html>`,
 }
 
 // TestPassthroughPreservesMeaning is the core property: with no handlers, the

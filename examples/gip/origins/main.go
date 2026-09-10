@@ -47,6 +47,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"net/url"
 	"os"
@@ -221,6 +222,12 @@ func (r *reporter) note(rawURL, trigger string, kind Kind) {
 // not have one. A relative URL with a known base is first-party; without one it is
 // reported as relative rather than guessed at.
 func (r *reporter) originOf(raw string) string {
+	// The attribute is source text. A browser decodes its references before
+	// it reads the scheme, and treats a backslash as a slash in the special
+	// schemes, so "&#104;ttps://evil.example/x" and "\\evil.example/x" are
+	// both a request to evil.example - and were the page's own origin here,
+	// which is the one answer a report on third parties must not get wrong.
+	raw = strings.ReplaceAll(html.UnescapeString(strings.TrimSpace(raw)), `\`, "/")
 	lower := strings.ToLower(raw)
 	switch {
 	case strings.HasPrefix(lower, "data:"):
@@ -234,7 +241,7 @@ func (r *reporter) originOf(raw string) string {
 	case strings.HasPrefix(lower, "about:"):
 		return "(about)"
 	}
-	u, err := url.Parse(strings.ReplaceAll(raw, "&amp;", "&"))
+	u, err := url.Parse(raw)
 	if err != nil {
 		return "(unparsed)"
 	}

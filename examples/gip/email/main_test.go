@@ -181,6 +181,11 @@ func TestURLsAreMadeAbsolute(t *testing.T) {
 		{"#anchor", "#anchor", false},
 		{"", "", false},
 		{"mailto:a@b", "mailto:a@b", false},
+		// Source text: decoded before resolving, re-escaped on the way back.
+		{"&#47;&#47;other.example/x", "https://other.example/x", true},
+		{"/x?a=1&amp;b=2", "https://example.com/x?a=1&amp;b=2", true},
+		{"/x?a=1&b=2", "https://example.com/x?a=1&amp;b=2", true},
+		{"&#35;anchor", "&#35;anchor", false},
 	} {
 		got, changed := absolutise(tt.in, u)
 		if got != tt.want || changed != tt.changed {

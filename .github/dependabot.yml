@@ -1,0 +1,14 @@
+# Every action in .github/workflows is pinned to a commit SHA, with the release
+# in a trailing comment (ci.yml says why). A pin that nothing moves is a pin
+# that rots, so this is the mechanism: one pull request a week at most, with
+# the SHA and the comment moved together. Only the actions - the two docker
+# images the workflows run are pinned by digest inline and are not something
+# dependabot's docker ecosystem reads out of a `run:` line, so those move by
+# hand (fetch the manifest list's docker-content-digest and update the tag in
+# the comment with it).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

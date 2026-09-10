@@ -111,6 +111,50 @@ func TestACrossOriginFormIsRefused(t *testing.T) {
 	}
 }
 
+// TestACrossOriginActionIsRefusedHoweverItIsSpelled. Element.Attribute returns
+// the source text with character references left encoded, and a browser decodes
+// them before it resolves the URL - so "&#104;ttps://evil.example/steal" posts to
+// evil.example. A backslash is a slash to a browser's URL parser too, so
+// "\\evil.example/x" is the network-path reference "//evil.example/x". Judged on
+// the raw source, every row here was a relative path and got a token.
+func TestACrossOriginActionIsRefusedHoweverItIsSpelled(t *testing.T) {
+	mine := Options{Origin: "https://shop.example"}
+	for _, doc := range []string{
+		`<form method="post" action="&#104;ttps://evil.example/steal">a</form>`,
+		`<form method="post" action="&#x68;ttps://evil.example/steal">a</form>`,
+		`<form method="post" action="https&#58;//evil.example/x">a</form>`,
+		`<form method="post" action="&#47;&#47;evil.example/steal">a</form>`,
+		`<form method="post" action="\\evil.example/x">a</form>`,
+		`<form method="post" action="/\evil.example/x">a</form>`,
+		`<form method="post" action="\/evil.example/x">a</form>`,
+		`<form method="post" action="h&Tab;ttps://evil.example/x">a</form>`,
+		`<form method="post" action="` + " \t\n" + `https://evil.example/x">a</form>`,
+		// A formaction spelled the same way sends the token elsewhere just as well.
+		`<form method="post" action="/buy"><button formaction="&#104;ttps://evil.example/x">go</button></form>`,
+		`<form method="post" action="/buy"><input type="submit" formaction="\\evil.example/x"></form>`,
+	} {
+		got, res := insert(t, doc, mine)
+		if n := tokens(got); n != 0 {
+			t.Errorf("%q -> %q: %d tokens, want none", doc, got, n)
+		}
+		if res.Refused[CrossOrigin] != 1 || res.OK() {
+			t.Errorf("%q: %v, want the cross-origin refusal counted and OK() false", doc, res)
+		}
+	}
+	// The decoded form of a same-origin action is still ours: a reference in a
+	// query string is how an ampersand is spelled in HTML.
+	for _, doc := range []string{
+		`<form method="post" action="/buy?a=1&amp;b=2">a</form>`,
+		`<form method="post" action="https://shop.example/buy?a=1&amp;b=2">a</form>`,
+		`<form method="post" action="/buy\\here">a</form>`,
+	} {
+		got, res := insert(t, doc, mine)
+		if n := tokens(got); n != 1 {
+			t.Errorf("%q -> %q: %d tokens, want 1 (%v)", doc, got, n, res)
+		}
+	}
+}
+
 // TestAFormWhereTheFieldWouldNotBeInTheFormIsRefused. This is the one measured
 // rather than reasoned about: the markup would look right and the field would not be
 // submitted.

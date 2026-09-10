@@ -17,7 +17,9 @@
 # someone makes at the end, from a diff they have to reconstruct, and becomes the
 # sum of what each change said about itself when the author still remembered.
 # --bump prints the highest of them and --next-version applies it to the newest
-# v* tag, which is what release.yml uses to name a release without being told.
+# version that exists - the newest v* tag or the newest `## vX.Y.Z` heading in
+# CHANGELOG.md, whichever is higher - which is what release.yml uses to name a
+# release without being told.
 #
 # An HTML comment rather than the `---` frontmatter changesets uses: it cannot be
 # mistaken for a horizontal rule, and a fragment that somehow reached CHANGELOG.md
@@ -112,7 +114,17 @@ if [[ ${mode} == next || ${mode} == release ]]; then
     # The newest v* tag by version order, not by date: a patch cut after a minor
     # is still the older number. Tags on an abandoned history sort with the rest,
     # which is right - they are still versions someone can `go get`.
-    latest=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -1)
+    #
+    # And the newest `## vX.Y.Z` heading in CHANGELOG.md, because a release fold
+    # that has merged and not yet been tagged is also a version that exists: it
+    # has a section, a number, and a tag on its way. Counting tags alone here
+    # made the next fold on top of it recompute the same number and refuse to
+    # write a section that was already there, so every push to main after that
+    # failed until someone tagged by hand. The higher of the two is the base.
+    latest_tag=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -1)
+    latest_heading=$(grep -oE '^## v[0-9]+\.[0-9]+\.[0-9]+$' CHANGELOG.md \
+        | awk '{print $2}' | sort -V | tail -1 || true)
+    latest=$(printf '%s\n' "${latest_tag}" "${latest_heading}" | grep . | sort -V | tail -1 || true)
     latest=${latest:-v0.0.0}
     IFS=. read -r major minor patch <<<"${latest#v}"
     case ${highest} in
@@ -121,6 +133,23 @@ if [[ ${mode} == next || ${mode} == release ]]; then
         patch) patch=$((patch + 1)) ;;
     esac
     version="v${major}.${minor}.${patch}"
+
+    # Past v1, a major bump is not just a number. Go resolves v2+ only through a
+    # module path ending in /vN, so a v2.0.0 tag on a path without it is a
+    # release `go get` cannot fetch - and, being the highest semver tag, one
+    # that hides every release before it from `@latest`. Refuse it unless
+    # go.mod already carries the suffix, which is the change that has to land
+    # with (or before) the bump.
+    if [[ ${highest} == major && ${major} -ge 2 ]]; then
+        module=$(awk '$1 == "module" {print $2; exit}' go.mod)
+        if [[ ${module} != */v${major} ]]; then
+            echo "FAIL a major bump would make ${version}, but go.mod's module path is ${module}" >&2
+            echo "     Go serves v${major}.x.y only from a module path ending in /v${major};" >&2
+            echo "     change the path in go.mod first, or declare the bump minor." >&2
+            exit 1
+        fi
+    fi
+
     if [[ ${mode} == next ]]; then
         echo "${version}"
         exit 0

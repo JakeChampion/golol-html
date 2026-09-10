@@ -82,7 +82,9 @@ for f in ${fragments[@]+"${fragments[@]}"}; do
         continue
     fi
 
-    if grep -qP '\t' "${f}" 2>/dev/null; then
+    # Not `grep -P '\t'`: BSD grep has no -P, and with stderr discarded the
+    # test silently took the false branch on every macOS `make lint`.
+    if grep -q "$(printf '\t')" "${f}"; then
         echo "FAIL ${f}: contains a tab"
         fail=1
         continue
@@ -95,13 +97,29 @@ if [[ -n ${base} ]]; then
     # An added bullet is the thing to catch, not any edit: correcting a typo in
     # a released section conflicts with nobody, while adding an entry to the
     # Unreleased list is what every branch does at the same line.
-    added=$(git diff -U0 "${base}" HEAD -- CHANGELOG.md | grep -c '^+- ' || true)
-    if [[ ${added} -gt 0 ]]; then
+    #
+    # An added version heading is the other thing. release.yml tags whatever
+    # untagged `## vX.Y.Z` it finds on main, so a heading that arrived without
+    # a fold - no bullets needed - would be tagged at whatever commit merged
+    # it, and `go get` follows the highest tag. That turns "can get a change
+    # merged" into "can cut a release", which is a different permission.
+    diff=$(git diff -U0 "${base}" HEAD -- CHANGELOG.md)
+    added=$(printf '%s\n' "${diff}" | grep -c '^+- ' || true)
+    headings=$(printf '%s\n' "${diff}" | grep -c '^+## v[0-9]' || true)
+    if [[ ${added} -gt 0 || ${headings} -gt 0 ]]; then
         # A release fold deletes the fragments it consumed in the same commit,
         # and is the one change that is supposed to add entries here.
         if git diff --diff-filter=D --name-only "${base}" HEAD |
             grep -qE '^changelog\.d/.*\.md$'; then
             echo "ok   CHANGELOG.md edited by a release fold"
+        elif [[ ${headings} -gt 0 ]]; then
+            echo "FAIL CHANGELOG.md gained a version heading without a release fold."
+            echo "     A heading is only ever written by scripts/changelog.sh --release," \
+                "which deletes"
+            echo "     the fragments it folded in the same commit; release.yml tags" \
+                "any heading it"
+            echo "     finds untagged, so one added by hand is a release nobody decided on."
+            fail=1
         else
             echo "FAIL CHANGELOG.md gained an entry directly."
             echo "     Put it in changelog.d/<pr>-<slug>.md instead - see" \

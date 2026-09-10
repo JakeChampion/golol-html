@@ -12,18 +12,38 @@ name: verify-native
 # every other check green.
 #
 # It is a separate workflow rather than a job in ci.yml because it builds
-# lol-html from source: minutes, not seconds. So it runs where it pays - on a
-# tag, which is the thing a consumer installs; on a pull request that touches
-# the pin or the archives; and weekly, to catch an upstream tag that has been
-# moved under us.
+# lol-html from source: minutes, not seconds. So it runs where it pays - from
+# release.yml, at the commit about to be tagged, before the tag exists; on a
+# tag pushed by hand; on a pull request that touches the pin, the archives or
+# the changelog (the release pull request touches only the changelog); and
+# weekly, to catch the runner image or a toolchain download drifting under a
+# build that is supposed to be bit-for-bit. Not a moved upstream tag: the pin
+# is a commit fetched by its hash, and a tag moving cannot change what is
+# built.
 
 on:
+  # The release gate. release.yml calls this with the commit it is about to
+  # tag, and does not tag unless it passes. It needs no token: a called
+  # workflow runs as part of the caller's run.
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Commit to verify (default: the ref this run is for)'
+        type: string
+        required: false
+        default: ''
   push:
     tags: ['v*']
   pull_request:
+    # CHANGELOG.md is here for the release pull request, whose only change is
+    # the fold. Not a `branches: [release/next]` filter: branches and paths are
+    # both applied, so that would still have needed a path the release branch
+    # touches. The release pull request is the one merge that becomes a tag,
+    # and this is the check that says whether the tag should exist.
     paths:
       - 'scripts/build-native.sh'
       - 'internal/**'
+      - 'CHANGELOG.md'
       - '.github/workflows/verify-native.yml'
   schedule:
     # 04:23, off the hour for the reason fuzz.yml gives.
@@ -33,6 +53,9 @@ on:
 permissions:
   contents: read
 
+# When called from release.yml the github context is the caller's, so this
+# group reads `release-refs/heads/main` there: distinct from release.yml's own
+# `release` group, and never cancelled, because a push is not a pull request.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -44,6 +67,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # The commit release.yml is about to tag, when called from there;
+          # empty otherwise, which checkout treats as the event's own ref.
+          ref: ${{ inputs.ref }}
 
       # rustc records the absolute path of the source tree and of CARGO_HOME in
       # panic metadata that survives stripping, so the same revision built with
@@ -81,7 +108,16 @@ jobs:
       - name: Install llvm-strip
         # GNU binutils cannot read these archives at all: LTO leaves bitcode in
         # the members, and strip reports success having done nothing.
-        run: sudo apt-get update && sudo apt-get install -y llvm
+        #
+        # llvm-18 by name, not the `llvm` meta-package: llvm-strip decides the
+        # bytes of the archive, and the meta-package points at whatever LLVM
+        # the distribution favours on the day. It has to match the version
+        # native.yml stripped with, or the diff below fails for a reason the
+        # script's own message would attribute to paths. The versioned package
+        # installs no unversioned names, hence the PATH entry.
+        run: |
+          sudo apt-get update && sudo apt-get install -y llvm-18
+          echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
 
       - name: Rebuild the host archive and diff it
         # --verify restores the committed files on its way out, including on

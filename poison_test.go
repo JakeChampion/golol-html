@@ -176,3 +176,50 @@ func TestAPoisonedWriterStillReleases(t *testing.T) {
 	}
 	requireNoHandleLeak(t, before)
 }
+
+// TestPoisonOutlivesClose. A Writer that failed and was then closed is both
+// poisoned and closed, and Write used to answer for the second state first:
+// bare ErrClosed, which says nothing about why. ErrPoisoned promises the cause
+// however late it is asked for, so poisoned wins. ErrClosed is still the
+// answer for a Writer that finished cleanly, which is the state it names.
+func TestPoisonOutlivesClose(t *testing.T) {
+	var out strings.Builder
+	w, err := lolhtml.NewWriter(&out, lolhtml.OnElement("p", func(*lolhtml.Element) error {
+		return errHandler
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(`<p>a</p>`)); !errors.Is(err, errHandler) {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Close(); !errors.Is(err, errHandler) {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, err = w.Write([]byte(`<p>b</p>`))
+	if !errors.Is(err, lolhtml.ErrPoisoned) {
+		t.Errorf("Write after a poisoned Close does not report ErrPoisoned: %v", err)
+	}
+	if !errors.Is(err, errHandler) {
+		t.Errorf("Write after a poisoned Close lost the cause: %v", err)
+	}
+	if errors.Is(err, lolhtml.ErrClosed) {
+		t.Errorf("Write after a poisoned Close answered for the closed state: %v", err)
+	}
+
+	// The clean case is unchanged.
+	clean, err := lolhtml.NewWriter(&out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := clean.Write([]byte(`<p>a</p>`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := clean.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := clean.Write([]byte(`<p>b</p>`)); !errors.Is(err, lolhtml.ErrClosed) {
+		t.Errorf("Write after a clean Close = %v, want ErrClosed", err)
+	}
+}

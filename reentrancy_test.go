@@ -225,3 +225,63 @@ func TestReentrantErrorNamesTheProblem(t *testing.T) {
 		t.Errorf("ErrReentrant = %q, want it to say what happened", got)
 	}
 }
+
+// sinkReacher is a destination that can see the live Sink a StreamFunc is
+// writing through. A sink write reaches the destination synchronously, so the
+// destination's Write runs underneath the sink write that produced it, with
+// the Sink still live - and a destination that writes into the Sink again from
+// there hands lol-html the same sink twice on one stack. Refused like the other
+// two doors, with ErrReentrant.
+type sinkReacher struct {
+	buf   bytes.Buffer
+	sink  *lolhtml.Sink // set by the StreamFunc before its first write
+	inner error         // what the nested WriteString returned
+	tried bool
+}
+
+func (r *sinkReacher) Write(p []byte) (int, error) {
+	if r.sink != nil && !r.tried {
+		r.tried = true
+		r.inner = r.sink.WriteString("<b>nested</b>", lolhtml.HTML)
+	}
+	return r.buf.Write(p)
+}
+
+func TestReentrantSinkWriteFromTheDestinationIsRefused(t *testing.T) {
+	before := settledHandles()
+
+	dst := &sinkReacher{}
+	var outer error
+	w, err := lolhtml.NewWriter(dst, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+		return e.StreamAppend(func(s *lolhtml.Sink) error {
+			dst.sink = s
+			outer = s.WriteString("<i>streamed</i>", lolhtml.HTML)
+			dst.sink = nil
+			return outer
+		})
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(reentrantDoc)); err != nil {
+		t.Fatalf("the outer Write failed: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if !dst.tried {
+		t.Fatal("the destination never saw the sink's write, so nothing was re-entered")
+	}
+	if !errors.Is(dst.inner, lolhtml.ErrReentrant) {
+		t.Errorf("the nested WriteString returned %v, want ErrReentrant", dst.inner)
+	}
+	if outer != nil {
+		t.Errorf("the outer WriteString failed because of the refused nested one: %v", outer)
+	}
+	want := `<!DOCTYPE html><p>text<!--c--><i>streamed</i></p>`
+	if got := dst.buf.String(); got != want {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+	requireNoHandleLeak(t, before)
+}

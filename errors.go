@@ -72,7 +72,13 @@ var ErrClosed = errors.New("lolhtml: writer is closed")
 // an "early stop" handler, which is where the reflex to call Close from inside a
 // handler comes from: stop by returning an error from the handler instead, which
 // [Writer.Write] reports and which leaves the Writer poisoned rather than
-// half-freed. See [OnElement] on stopping early. Measured in reentrancy_test.go.
+// half-freed. See "Stopping early" in the package documentation. Measured in
+// reentrancy_test.go.
+//
+// [Sink.WriteString] and [Sink.WriteChunk] return it for the same reason when
+// called from inside the destination writer that a sink write is running: the
+// destination runs synchronously inside that write, so a destination holding
+// the Sink could write into it from underneath the write already using it.
 //
 // It is not a poison. The interrupted call carries on and reports whatever it
 // was going to, so a caller who ignores a reentrant Close still gets the real
@@ -249,13 +255,22 @@ func nativeErr(op string, cerr C.lol_html_str_t) error {
 }
 
 // nativeErrFor is nativeErr for a call that was given content or a name: on
-// failure the argument is checked, so errors.Is can answer ErrInvalidUTF8 without
-// anyone parsing lol-html's wording. Only the failure path pays for the scan.
-func nativeErrFor(op string, cerr C.lol_html_str_t, content string) error {
+// failure each argument is checked, so errors.Is can answer ErrInvalidUTF8
+// without anyone parsing lol-html's wording. Only the failure path pays for the
+// scan. Each argument is checked on its own, because lol-html checks them on its
+// own: a name ending in a lead byte and a value starting with its continuation
+// are two invalid strings, not one valid one.
+func nativeErrFor(op string, cerr C.lol_html_str_t, contents ...string) error {
+	invalid := false
+	for _, c := range contents {
+		if !utf8.ValidString(c) {
+			invalid = true
+		}
+	}
 	return &NativeError{
 		Op:          op,
 		Message:     takeStr(cerr),
-		invalidUTF8: !utf8.ValidString(content),
+		invalidUTF8: invalid,
 	}
 }
 
@@ -275,12 +290,18 @@ func nativeErrForChunk(op string, cerr C.lol_html_str_t, tail, b []byte) error {
 
 // withoutTrailingPartial drops a final sequence that has not arrived in full,
 // which is the one thing WriteChunk is allowed to end with.
+//
+// "Not arrived in full" means a prefix some later bytes could complete. A lead
+// byte no sequence starts with (0xC0, 0xF5 and up) or a surrogate prefix
+// (0xED 0xA0) can never be completed, and utf8.FullRune says so: it treats an
+// invalid encoding as a full one-byte error rune. Those stay, so that lol-html
+// refusing them reads as ErrInvalidUTF8 rather than as a partial.
 func withoutTrailingPartial(b []byte) []byte {
 	for i := len(b) - 1; i >= 0 && i >= len(b)-4; i-- {
 		if b[i]&0xC0 == 0x80 {
 			continue // a continuation byte; keep walking back to the lead
 		}
-		if have, want := len(b)-i, runeLen(b[i]); have < want {
+		if !utf8.FullRune(b[i:]) {
 			return b[:i]
 		}
 		return b

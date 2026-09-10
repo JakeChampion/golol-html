@@ -16,6 +16,7 @@ package lolhtml_test
 import (
 	"bytes"
 	"errors"
+	"io"
 	"runtime"
 	"strings"
 	"testing"
@@ -336,3 +337,215 @@ func TestPanicFromTheDestinationIsIdempotentToClose(t *testing.T) {
 	requireNoHandleLeak(t, before)
 	runtime.KeepAlive(w)
 }
+
+// requireGoexitThroughNativeFrames skips a test whose goroutine leaves through
+// lol-html's frames by runtime.Goexit when the binary is built with -asan.
+//
+// Goexit runs the deferred calls and then abandons the frames below them,
+// the C and Rust ones included, and two things about a sanitized build are
+// left behind with them. The cgo export stub for each callback is compiled
+// with ASan instrumentation, so its frame carries stack redzones that its
+// epilogue would have cleared: skipped, the poison stays in the shadow of the
+// thread's stack, and the next call into lol-html on that thread is reported
+// as a stack-buffer-underflow the moment Rust's memcpy lands on it - a report
+// ASan itself labels a likely false positive from a custom unwinder, and
+// which on arm64 aborts inside its own frame walker before it is printed. And
+// the Rust frames owned heap memory their destructors would have freed, so
+// LeakSanitizer reports them at exit, about 240 bytes for every exit. Neither
+// is something this package can clean up: nothing can run a destructor the
+// unwinder did not, which is the rule these tests exist to document, and the
+// poison is the runtime's to lift when it unwinds through C.
+//
+// The exit's own properties - the Writer poisoned, the handles reclaimed,
+// Close answering ErrPoisoned - are asserted in every other leg of the suite.
+// What -asan is there for is memory errors across the boundary on calls that
+// return, which it still checks with these two skipped.
+func requireGoexitThroughNativeFrames(t *testing.T) {
+	t.Helper()
+	if asanEnabled {
+		t.Skip("Goexit through lol-html's frames leaves the sanitizer's own stack poison and the Rust frames' heap behind")
+	}
+}
+
+// goexiters is the third way out of user code, which the panickers table
+// cannot hold: runtime.Goexit is not a panic, so nothing recovers it, and the
+// goroutine leaves through lol-html's frames the way a panic would have. The
+// usual spelling is t.Fatal or t.Skip inside a handler. Each entry builds a
+// Writer on dst whose first Write never returns.
+var goexiters = map[string]func(dst io.Writer) (*lolhtml.Writer, error){
+	// A streaming insertion is registered first, so the handle a pending
+	// insertion holds is part of what the exit must not leave behind.
+	"element handler": func(dst io.Writer) (*lolhtml.Writer, error) {
+		return lolhtml.NewWriter(dst, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+			if err := e.StreamAppend(func(s *lolhtml.Sink) error {
+				return s.WriteString("x", lolhtml.Text)
+			}); err != nil {
+				return err
+			}
+			runtime.Goexit()
+			return nil
+		}))
+	},
+	"streaming sink": func(dst io.Writer) (*lolhtml.Writer, error) {
+		return lolhtml.NewWriter(dst, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+			return e.StreamAppend(func(*lolhtml.Sink) error {
+				runtime.Goexit()
+				return nil
+			})
+		}))
+	},
+	"destination": func(io.Writer) (*lolhtml.Writer, error) {
+		return lolhtml.NewWriter(goexitOnWrite{}, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+			return e.StreamAppend(func(s *lolhtml.Sink) error {
+				return s.WriteString("x", lolhtml.Text)
+			})
+		}))
+	},
+}
+
+// goexitOnWrite is a destination whose Write ends the goroutine.
+type goexitOnWrite struct{}
+
+func (goexitOnWrite) Write([]byte) (int, error) { runtime.Goexit(); return 0, nil }
+
+// TestGoexitPoisonsTheWriterAndLeaksNoHandles. Goexit runs the deferred calls
+// on its way out, and Write's own deferred call used to see nothing wrong - no
+// panic to recover - and leave the Writer looking healthy. The caller's
+// deferred Close then ran lol-html's end on a rewriter abandoned in the middle
+// of a write, and reported nil for a truncated document. Now the deferred call
+// notices that the C call never returned, and poisons and releases the
+// rewriter before the exit continues: Close answers ErrPoisoned without
+// touching lol-html, and the handle count is back where it started.
+//
+// Each case runs on its own goroutine, because the exit takes the goroutine
+// with it, and the deferred Close inside that goroutine records what it saw.
+func TestGoexitPoisonsTheWriterAndLeaksNoHandles(t *testing.T) {
+	requireGoexitThroughNativeFrames(t)
+
+	for name, newWriter := range goexiters {
+		t.Run(name, func(t *testing.T) {
+			before := settledHandles()
+
+			// Held outside the goroutine and kept alive past the count, for
+			// the same reason as in TestPanicOnAManualWriterIsIdempotentToClose.
+			var w *lolhtml.Writer
+			var newErr, closeErr error
+			returned := false
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				w, newErr = newWriter(io.Discard)
+				if newErr != nil {
+					return
+				}
+				defer func() { closeErr = w.Close() }()
+				_, _ = w.Write([]byte(panicDoc))
+				returned = true
+			}()
+			<-done
+
+			if newErr != nil {
+				t.Fatal(newErr)
+			}
+			if returned {
+				t.Fatal("Write returned; the handler did not leave through Goexit")
+			}
+			if closeErr == nil {
+				t.Fatal("Close after an abandoned Write reported nil")
+			}
+			if !errors.Is(closeErr, lolhtml.ErrPoisoned) {
+				t.Errorf("Close after an abandoned Write = %v, want ErrPoisoned", closeErr)
+			}
+			requireNoHandleLeak(t, before)
+			runtime.KeepAlive(w)
+		})
+	}
+}
+
+// TestGoexitThroughRewriteLeaksNoHandles is the same exit under Rewrite, whose
+// own deferred Close is the one that runs. Rewrite never returns, so the only
+// observable is the handle count afterwards.
+func TestGoexitThroughRewriteLeaksNoHandles(t *testing.T) {
+	requireGoexitThroughNativeFrames(t)
+
+	const rounds = 30
+	before := settledHandles()
+
+	for i := 0; i < rounds; i++ {
+		returned := false
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = lolhtml.RewriteString(panicDoc, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+				if err := e.StreamAppend(func(s *lolhtml.Sink) error {
+					return s.WriteString("x", lolhtml.Text)
+				}); err != nil {
+					return err
+				}
+				runtime.Goexit()
+				return nil
+			}))
+			returned = true
+		}()
+		<-done
+		if returned {
+			t.Fatalf("round %d: Rewrite returned", i)
+		}
+	}
+
+	requireNoHandleLeak(t, before)
+}
+
+// TestPanicStackNamesTheHandler: the trace the runtime prints for a re-raised
+// panic begins at the Write or Close that raised it, because the handler's
+// frames were unwound at the boundary where the panic was caught. PanicStack is
+// the record taken there, before they were, and it has to name the function that
+// panicked - which is the one thing a caller with several handlers needs.
+func TestPanicStackNamesTheHandler(t *testing.T) {
+	var w *lolhtml.Writer
+	var buf bytes.Buffer
+	w, err := lolhtml.NewWriter(&buf,
+		lolhtml.OnElement("p", func(*lolhtml.Element) error { return handlerThatPanicsForTheStackTest() }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.PanicStack() != nil {
+		t.Fatal("a Writer that has not caught a panic reports a stack")
+	}
+
+	v := recovered(func() { w.Write([]byte(`<p>x</p>`)) })
+	if v != "stack test" {
+		t.Fatalf("re-raised %v, want the handler's value", v)
+	}
+	stack := string(w.PanicStack())
+	if !strings.Contains(stack, "handlerThatPanicsForTheStackTest") {
+		t.Errorf("PanicStack does not name the handler:\n%s", stack)
+	}
+	// The record survives the Close a caller's defer makes.
+	_ = w.Close()
+	if string(w.PanicStack()) != stack {
+		t.Error("PanicStack changed across Close")
+	}
+}
+
+// handlerThatPanicsForTheStackTest is a named function rather than a closure so
+// the assertion has a name to look for in the trace.
+func handlerThatPanicsForTheStackTest() error { panic("stack test") }
+
+// TestAPanicFromTheDestinationHasAStackToo: the destination writer is the other
+// place user code is caught at the boundary, and it keeps its stack the same way.
+func TestAPanicFromTheDestinationHasAStackToo(t *testing.T) {
+	w, err := lolhtml.NewWriter(destinationThatPanicsForTheStackTest{},
+		lolhtml.OnElement("p", func(*lolhtml.Element) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered(func() { w.Write([]byte(`<p>x</p>`)) })
+	if !strings.Contains(string(w.PanicStack()), "destinationThatPanicsForTheStackTest") {
+		t.Errorf("PanicStack does not name the destination:\n%s", w.PanicStack())
+	}
+}
+
+type destinationThatPanicsForTheStackTest struct{}
+
+func (destinationThatPanicsForTheStackTest) Write([]byte) (int, error) { panic("destination") }

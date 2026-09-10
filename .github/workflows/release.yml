@@ -3,11 +3,13 @@ name: release
 # Versioning and releasing from the fragments, in the shape changesets uses.
 #
 # Every change adds a file to changelog.d/ saying what it did and how far it
-# moves the version. This workflow is the other end: on a push to main it either
-# opens a release pull request holding the fold, or - if that pull request has
-# just merged - tags what it produced. The version number is then the sum of
-# what each change declared about itself, rather than a judgement someone makes
-# at the end from a diff they have to reconstruct.
+# moves the version. This workflow is the other end: on a push to main it
+# opens or refreshes a release pull request holding the fold, and - if such a
+# pull request has merged and the section it wrote has no tag yet - rebuilds
+# the archive from the pin at that commit and, if it reproduces, tags it. The
+# version number is then the sum of what each change declared about itself,
+# rather than a judgement someone makes at the end from a diff they have to
+# reconstruct.
 #
 # Not @changesets/cli itself. That is npm tooling, and this repository has no
 # JavaScript, a root go.mod with no requires, and a scripts/ directory that is
@@ -15,6 +17,13 @@ name: release
 # the fragment-declares-its-bump discipline and the two-phase release, and both
 # are a few lines of shell. Publishing - the part that would have justified the
 # dependency - is `git push origin <tag>` here.
+#
+# One release branch, release/next, whatever the version. The branch used to be
+# named for the version, and a fragment with a bigger bump landing while the
+# pull request was open computed a different version and so opened a second
+# pull request under a second branch, leaving the first open, mergeable and
+# stale; merging that one produced a section with no tag behind it. With one
+# branch the same change refreshes the one pull request, title and all.
 
 on:
   push:
@@ -24,12 +33,119 @@ on:
 permissions:
   contents: read
 
+# Runs are serialised and never dropped. Two runs tagging or refreshing the
+# branch at once is what the group prevents; `queue: max` is what stops the
+# group from doing worse than that. Its default, `queue: single`, keeps at
+# most one run pending and cancels it when another queues - so with a run in
+# progress, the run for the commit that merged a release fold was the one
+# cancelled when the next push arrived, and whichever run survived did the
+# work at its own HEAD. The tag step below also finds the fold commit rather
+# than assuming HEAD is it, so a later run tags the right commit anyway; the
+# queue just makes sure a run for it happens at all.
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
-  release:
+  # Read-only. Works out both halves independently - a section to tag, and
+  # fragments to propose - because they are independent: a fold that merged
+  # while more fragments were pending is still a release owed a tag, and the
+  # pending fragments are still a release to propose on top of it. Checking
+  # fragments first, and stopping there, was how a folded section came to sit
+  # untagged for good.
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag_version: ${{ steps.plan.outputs.tag_version }}
+      tag_sha: ${{ steps.plan.outputs.tag_sha }}
+      propose_version: ${{ steps.plan.outputs.propose_version }}
+      bump: ${{ steps.plan.outputs.bump }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Tags are needed to work out the next version, and the history to
+          # find the commit that folded a section.
+          fetch-depth: 0
+
+      - name: Work out what to do
+        id: plan
+        run: |
+          # --- A section to tag? ---------------------------------------------
+          #
+          # Headings newest first, stopping at the first one that has a tag.
+          # Everything above it is folded and untagged. The OLDEST of those is
+          # the one to tag this run, so that releases go out in order and a
+          # section whose rebuild is red blocks the ones after it rather than
+          # being skipped over by them.
+          untagged=()
+          while IFS= read -r v; do
+            [ -z "${v}" ] && continue
+            if git rev-parse -q --verify "refs/tags/${v}" >/dev/null; then
+              break
+            fi
+            untagged+=("${v}")
+          done < <(grep -oE '^## v[0-9]+\.[0-9]+\.[0-9]+$' CHANGELOG.md | awk '{print $2}' || true)
+
+          if [ "${#untagged[@]}" -eq 0 ]; then
+            echo "No untagged version heading in CHANGELOG.md."
+          else
+            version=${untagged[$((${#untagged[@]} - 1))]}
+            # The commit to tag is the one that folded the section, not HEAD.
+            # They differ whenever a push lands between the fold merging and
+            # this run happening - the queue above makes that a wait rather
+            # than a cancellation, but it is still a later commit, and a tag
+            # on it would ship a change the section does not mention. So:
+            # the newest commit on main's first-parent line whose diff added
+            # the heading. First-parent, so that a merge commit is diffed
+            # against main and found as itself, rather than the history being
+            # simplified down to the fold commit on the branch side.
+            pattern="^## ${version//./\\.}\$"
+            sha=$(git log --first-parent -1 --format=%H -G"${pattern}" -- CHANGELOG.md || true)
+            if [ -z "${sha}" ]; then
+              # Only if the heading cannot be traced to any commit on main -
+              # a rewritten history, or a CHANGELOG.md older than the first
+              # commit of it. HEAD is then the only commit there is to say
+              # anything about, and the fold check below still applies to it.
+              sha=$(git rev-parse HEAD)
+              echo "::warning::No commit on main added '## ${version}'; falling back to HEAD ${sha}."
+            fi
+            # Only a fold gets tagged. A fold deletes the fragments it
+            # consumed in the same commit; a heading that arrived any other
+            # way is a version nobody derived, and tagging it would let
+            # anyone who can merge a CHANGELOG.md edit cut a release under
+            # this workflow's identity. check-changelog.sh --base refuses
+            # such an edit on the pull request; this is the same rule at the
+            # point where it would do harm.
+            if ! git diff --name-only --diff-filter=D "${sha}^" "${sha}" -- 'changelog.d/*.md' | grep -q .; then
+              echo "::error::'## ${version}' is untagged, but the commit that added it," \
+                   "${sha}, folded no changelog.d/ fragments. Not tagging a heading that" \
+                   "did not come from scripts/changelog.sh --release; remove it or" \
+                   "release by hand (docs/releasing.md)."
+              exit 1
+            fi
+            echo "tag_version=${version}" >> "$GITHUB_OUTPUT"
+            echo "tag_sha=${sha}" >> "$GITHUB_OUTPUT"
+            echo "${version} is folded but untagged: tagging ${sha} once it reproduces."
+            if [ "${#untagged[@]}" -gt 1 ]; then
+              echo "::notice::${#untagged[@]} untagged sections; ${version} first, the next push tags the next."
+            fi
+          fi
+
+          # --- Fragments to propose? -----------------------------------------
+          bump=$(scripts/changelog.sh --bump)
+          echo "bump=${bump}" >> "$GITHUB_OUTPUT"
+          if [ "${bump}" != "none" ]; then
+            version=$(scripts/changelog.sh --next-version)
+            echo "propose_version=${version}" >> "$GITHUB_OUTPUT"
+            echo "Fragments are pending: proposing ${version} (${bump})."
+          else
+            echo "No fragments pending."
+          fi
+
+  propose:
+    needs: plan
+    if: needs.plan.outputs.propose_version != ''
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -38,116 +154,130 @@ jobs:
       # The token is set here rather than on the push, so the credential is
       # handled by the action that is built to handle it and never appears in a
       # remote URL. RELEASE_PR_TOKEN is a fine-grained PAT with contents:write
-      # and pull-requests:write; the two steps that need it say what is lost
-      # when it is absent.
+      # and pull-requests:write; the step that needs it says what is lost when
+      # it is absent.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           token: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
-          # Tags are needed to work out the next version, and the history to
-          # tell a release fold from an ordinary push.
           fetch-depth: 0
 
-      - name: Work out what to do
-        id: plan
-        run: |
-          bump=$(scripts/changelog.sh --bump)
-          echo "bump=${bump}" >> "$GITHUB_OUTPUT"
-          if [ "${bump}" != "none" ]; then
-            version=$(scripts/changelog.sh --next-version)
-            echo "action=propose" >> "$GITHUB_OUTPUT"
-            echo "version=${version}" >> "$GITHUB_OUTPUT"
-            echo "Fragments are pending: proposing ${version} (${bump})."
-            exit 0
-          fi
-          # No fragments. Either nothing is pending, or a release pull request
-          # has just merged and the section it wrote has no tag yet. The heading
-          # is the record of what was released, so ask it rather than the diff.
-          version=$(grep -m1 -oE '^## v[0-9]+\.[0-9]+\.[0-9]+$' CHANGELOG.md | awk '{print $2}' || true)
-          if [ -z "${version}" ]; then
-            echo "action=none" >> "$GITHUB_OUTPUT"
-            echo "No fragments and no version heading. Nothing to do."
-          elif git rev-parse -q --verify "refs/tags/${version}" >/dev/null; then
-            echo "action=none" >> "$GITHUB_OUTPUT"
-            echo "${version} is already tagged. Nothing to do."
-          else
-            echo "action=tag" >> "$GITHUB_OUTPUT"
-            echo "version=${version}" >> "$GITHUB_OUTPUT"
-            echo "${version} is folded but untagged: tagging it."
-          fi
-
       - name: Fold the changelog
-        if: steps.plan.outputs.action == 'propose'
         run: scripts/changelog.sh --release
 
       # The same token question as native.yml: a pull request opened with the
       # default GITHUB_TOKEN gets no checks, and a release pull request is the
-      # one that least deserves to go without them.
-      - name: Open the release pull request
+      # one that least deserves to go without them. (The tag itself no longer
+      # depends on this: the reproduce job below gates it in-process.)
+      - name: Open or refresh the release pull request
         id: pr
-        if: steps.plan.outputs.action == 'propose'
         uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
         with:
           token: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
-          branch: release/${{ steps.plan.outputs.version }}
-          title: 'Release ${{ steps.plan.outputs.version }}'
+          branch: release/next
+          title: 'Release ${{ needs.plan.outputs.propose_version }}'
           commit-message: |
-            Release ${{ steps.plan.outputs.version }}
+            Release ${{ needs.plan.outputs.propose_version }}
 
             Folded from changelog.d/ by scripts/changelog.sh --release. The
             version is the highest bump the fragments declared
-            (${{ steps.plan.outputs.bump }}), applied to the newest v* tag.
+            (${{ needs.plan.outputs.bump }}), applied to the newest version
+            that exists - the newest v* tag or CHANGELOG.md heading.
           body: |
             Folded from `changelog.d/` by `scripts/changelog.sh --release`.
 
             The version is the highest bump the fragments declared
-            (**${{ steps.plan.outputs.bump }}**), applied to the newest `v*` tag.
-            Merging this tags `${{ steps.plan.outputs.version }}`; closing it
-            leaves the fragments where they are, and the next push to `main`
-            opens it again.
+            (**${{ needs.plan.outputs.bump }}**), applied to the newest version
+            that exists - the newest `v*` tag or `CHANGELOG.md` heading.
+            Merging this tags `${{ needs.plan.outputs.propose_version }}` once
+            the vendored archive reproduces from the pin at the merged commit;
+            closing it leaves the fragments where they are, and the next push
+            to `main` opens it again. A fragment landing while this is open
+            refreshes this pull request - title, number and all - rather than
+            opening another.
 
             Read the `CHANGELOG.md` diff as the release notes, because that is
             what they are.
 
       - name: Say whether the release pull request will get checks
-        if: steps.plan.outputs.action == 'propose'
         env:
           HAS_TOKEN: ${{ secrets.RELEASE_PR_TOKEN != '' }}
           PR: ${{ steps.pr.outputs.pull-request-url }}
         run: |
           if [ "${HAS_TOKEN}" = "true" ]; then
-            echo "::notice::Opened ${PR} with RELEASE_PR_TOKEN, so ci runs on it."
+            echo "::notice::Opened ${PR} with RELEASE_PR_TOKEN, so ci and verify-native run on it."
           else
             echo "::warning::Opened ${PR} with the default token, so no checks" \
                  "will run on it. Close and reopen it by hand, or configure a" \
                  "RELEASE_PR_TOKEN secret (contents:write, pull-requests:write)."
           fi
 
-      # A tag pushed with the default GITHUB_TOKEN starts no workflows, so
-      # ci.yml and verify-native.yml would not run on the one commit they exist
-      # to gate. With the PAT they do. Without it the tag is still created - a
-      # release that exists unverified beats a release that does not exist - and
-      # the warning says exactly what did not happen.
+  # The gate, in-process. verify-native.yml rebuilds the host archive from the
+  # pinned lol-html revision and diffs it against the committed one; here it
+  # does that at the fold commit, before the tag exists, and the tag job will
+  # not run unless it passes. It used to be a workflow the tag push triggered,
+  # which meant it ran after the tag was already there for `go get` to find -
+  # and, with the default token, did not run at all, because a tag pushed with
+  # GITHUB_TOKEN starts no workflows. A called workflow needs no token to run.
+  reproduce:
+    needs: plan
+    if: needs.plan.outputs.tag_version != ''
+    permissions:
+      contents: read
+    uses: ./.github/workflows/verify-native.yml
+    with:
+      ref: ${{ needs.plan.outputs.tag_sha }}
+
+  tag:
+    needs: [plan, reproduce]
+    if: needs.plan.outputs.tag_version != '' && needs.reproduce.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.tag_version }}
+      SHA: ${{ needs.plan.outputs.tag_sha }}
+      HAS_TOKEN: ${{ secrets.RELEASE_PR_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          token: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
+          fetch-depth: 0
+
+      # ci.yml runs on every tag push, but a tag pushed with the default
+      # GITHUB_TOKEN starts no workflows. That no longer decides whether the
+      # release was checked: the commit is on main, so ci ran on it as a push,
+      # and the reproduce job above ran on it in this very run. What the PAT
+      # still buys is a ci run filed under the tag's own name.
       - name: Tag it
-        if: steps.plan.outputs.action == 'tag'
-        env:
-          VERSION: ${{ steps.plan.outputs.version }}
-          HAS_TOKEN: ${{ secrets.RELEASE_PR_TOKEN != '' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git merge-base --is-ancestor "${SHA}" HEAD; then
+            echo "::error::${SHA} is not on main any more; not tagging it."
+            exit 1
+          fi
+          if [ "${SHA}" != "$(git rev-parse HEAD)" ]; then
+            echo "Tagging the fold commit ${SHA}, not HEAD $(git rev-parse HEAD): a push landed after the fold merged."
+          fi
           # The section body is the release notes; there is no second place to
-          # write them and no way for the two to disagree.
+          # write them. --cleanup=verbatim is what keeps the two identical:
+          # git's default for a tag message strips every line beginning with
+          # '#', which is the '### Fixed' subheadings the older sections use
+          # and any '#' comment inside a fenced shell block.
           notes=$(awk -v v="## ${VERSION}" '
             $0 == v {found=1; next}
             found && /^## / {exit}
             found {print}' CHANGELOG.md)
-          printf '%s\n\n%s\n' "${VERSION}" "${notes}" | git tag -a "${VERSION}" -F -
+          printf '%s\n\n%s\n' "${VERSION}" "${notes}" | git tag -a "${VERSION}" --cleanup=verbatim -F - "${SHA}"
           git push origin "refs/tags/${VERSION}:refs/tags/${VERSION}"
           echo "### Released ${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tagged \`${SHA}\` after the vendored archive reproduced from the pin at that commit." >> "$GITHUB_STEP_SUMMARY"
           if [ "${HAS_TOKEN}" != "true" ]; then
-            echo "::warning::${VERSION} was tagged with the default token, so" \
-                 "ci and verify-native did NOT run on it. Check them by hand," \
-                 "or configure RELEASE_PR_TOKEN."
+            echo "::warning::${VERSION} was tagged with the default token, so ci did not" \
+                 "get a run filed under the tag. ci ran on ${SHA} as a push to main, and" \
+                 "verify-native ran on it in this workflow; check ci's main run for that" \
+                 "commit, or configure RELEASE_PR_TOKEN."
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "Tagged with the default token, so **no workflows ran on this tag**." >> "$GITHUB_STEP_SUMMARY"
+            echo "Tagged with the default token, so **ci has no run under the tag's name**; see its run for the commit on \`main\`." >> "$GITHUB_STEP_SUMMARY"
           fi

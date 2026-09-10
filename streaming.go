@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"runtime/cgo"
 )
 
 // A StreamFunc produces inserted content on demand, writing it into the sink
@@ -84,9 +85,18 @@ type StreamFunc func(*Sink) error
 // is not safe is stopping in the middle of one, and that is checked when the
 // StreamFunc returns; see [ErrIncompleteRune].
 //
-// It is valid only for the duration of that call. The rewriter may run it on a
-// different goroutine than the one that called Write, though never on more than
-// one at a time, so a StreamFunc must not depend on goroutine-local state.
+// It is valid only for the duration of that call, and only on the goroutine
+// that is making it: a StreamFunc always runs on the goroutine that called Write
+// or Close, and lol-html's rule is that the sink is used from the StreamFunc's
+// own goroutine and nowhere else. Handing it to another goroutine - a producer
+// writing into it while the StreamFunc waits - is a data race on the rewriter,
+// not a supported pattern; produce on the other goroutine and write from this
+// one.
+//
+// Its writes reach the destination synchronously: the destination writer runs
+// inside WriteString and WriteChunk. So a destination that can reach the Sink
+// must not write into it from there, and both refuse with [ErrReentrant] if it
+// does.
 type Sink struct {
 	unit[*C.lol_html_streaming_sink_t]
 
@@ -99,13 +109,14 @@ type Sink struct {
 
 // Err reports the error that has already stopped this rewrite, if any.
 //
-// It exists because the sink's own methods cannot tell you. They write into
-// lol-html's buffer, not to the destination, so a nil from WriteString,
-// WriteChunk or a writer from AsWriter means the content was accepted - not that
-// it arrived. A destination that fails is recorded and reported from the Write or
-// Close that was running, and until then the sink goes on accepting everything:
-// measured, fifty writes after a failing destination were all accepted and none
-// reported anything.
+// It exists because the sink's own methods cannot tell you. The destination
+// writer runs inside WriteString and WriteChunk, but what it reports does not
+// come back out of them: a nil from either, or from a writer from AsWriter,
+// means lol-html accepted the content - not that the destination did. A
+// destination that fails is recorded and reported from the Write or Close that
+// was running, later chunks are dropped rather than delivered, and until then
+// the sink goes on accepting everything: measured, fifty writes after a failing
+// destination were all accepted and none reported anything.
 //
 // For short content that costs nothing. For the case a StreamFunc is for - large
 // or incrementally produced content, the io.Copy of a big template the
@@ -171,14 +182,19 @@ func (s *Sink) WriteString(str string, ct ContentType) error {
 			"WriteChunk are still waiting to be completed; finish the sequence "+
 			"with WriteChunk first", ErrIncompleteRune, s.tailLen, s.tail[:s.tailLen])
 	}
+	if s.c.st.inSink {
+		return ErrReentrant
+	}
 	sp, sl := strPtr(str)
-	var cerr C.lol_html_str_t
-	rc := C.golol_sink_write_str(p, sp, sl, C.bool(ct.isHTML()), &cerr)
+	cerr := s.c.nt.cerr
+	s.c.st.inSink = true
+	rc := C.golol_sink_write_str(p, sp, sl, C.bool(ct.isHTML()), cerr)
+	s.c.st.inSink = false
 	runtime.KeepAlive(str)
 	if rc != 0 {
-		return nativeErrFor("streaming_sink_write_str", cerr, str)
+		return nativeErrFor("streaming_sink_write_str", *cerr, str)
 	}
-	s.trackTail(str)
+	s.trackTail(str[len(str)-min(len(str), 4):])
 	return nil
 }
 
@@ -198,14 +214,23 @@ func (s *Sink) WriteChunk(b []byte, ct ContentType) error {
 	if err != nil {
 		return err
 	}
-	var cerr C.lol_html_str_t
+	if s.c.st.inSink {
+		return ErrReentrant
+	}
+	cerr := s.c.nt.cerr
+	s.c.st.inSink = true
 	rc := C.golol_sink_write_utf8_chunk(p, (*C.char)(bytePtr(b)), C.size_t(len(b)),
-		C.bool(ct.isHTML()), &cerr)
+		C.bool(ct.isHTML()), cerr)
+	s.c.st.inSink = false
 	runtime.KeepAlive(b)
 	if rc != 0 {
-		return nativeErrForChunk("streaming_sink_write_utf8_chunk", cerr, s.tail[:s.tailLen], b)
+		return nativeErrForChunk("streaming_sink_write_utf8_chunk", *cerr, s.tail[:s.tailLen], b)
 	}
-	s.trackTail(string(b))
+	// Only the last four bytes matter, and a string conversion of the whole
+	// chunk copied it: io.Copy through AsWriter allocated the size of the
+	// stream, in pieces, on the API whose purpose is not to assemble content.
+	// Pinned in alloc_test.go.
+	s.trackTail(string(b[len(b)-min(len(b), 4):]))
 	return nil
 }
 
@@ -262,16 +287,19 @@ func (s *Sink) trackTail(w string) {
 }
 
 // runeLen is the length in bytes of the sequence a lead byte begins, or 1 for
-// anything that does not begin one.
+// anything that does not begin one - including the lead-shaped bytes 0xC0, 0xC1
+// and 0xF5 to 0xFF, which no valid sequence starts with. Treating those as the
+// start of a sequence that might still arrive made lol-html's refusal of them
+// read as a trailing partial rather than as ErrInvalidUTF8.
 func runeLen(b byte) int {
 	switch {
 	case b&0x80 == 0:
 		return 1
-	case b&0xE0 == 0xC0:
+	case b >= 0xC2 && b <= 0xDF:
 		return 2
 	case b&0xF0 == 0xE0:
 		return 3
-	case b&0xF8 == 0xF0:
+	case b >= 0xF0 && b <= 0xF4:
 		return 4
 	}
 	return 1
@@ -305,10 +333,10 @@ func (s *Sink) checkComplete() error {
 // fall anywhere in a UTF-8 sequence.
 //
 // A nil error from the returned writer means the content was accepted, not that
-// it was delivered: the sink writes into lol-html's buffer and a destination
-// failure surfaces from Write or Close instead. So io.Copy will happily copy a
-// whole template into a rewrite that has already failed. Check [Sink.Err]
-// between chunks if that matters, which for anything large it does.
+// it was delivered: the destination runs inside the sink write, but its failure
+// is recorded and surfaces from Write or Close instead of here. So io.Copy will
+// happily copy a whole template into a rewrite that has already failed. Check
+// [Sink.Err] between chunks if that matters, which for anything large it does.
 func (s *Sink) AsWriter(ct ContentType) io.Writer {
 	return sinkWriter{sink: s, ct: ct}
 }
@@ -351,12 +379,21 @@ func withStream[P comparable](u *unit[P], selector string, fn StreamFunc, op str
 	// Released by golol_streaming_drop_cb, which lol-html calls exactly once
 	// after the last use of the handler.
 	h := newHandle(&streamingCB{c: u.c, selector: selector, fn: fn})
+	if u.c.nt.streaming == nil {
+		u.c.nt.streaming = make(map[cgo.Handle]struct{})
+	}
+	u.c.nt.streaming[h] = struct{}{}
 
-	var cerr C.lol_html_str_t
-	if call(p, C.uintptr_t(h), &cerr) != 0 {
-		// lol-html rejected the handler, so it will never call drop.
+	cerr := u.c.nt.cerr
+	if call(p, C.uintptr_t(h), cerr) != 0 {
+		// lol-html rejected the handler, so it will never call drop. That is a
+		// property of this shim rather than of lol-html: the c-api's own
+		// rejection of a handler struct with no write callback boxes the struct
+		// first and does run drop, which would make this a double delete. The
+		// shim always fills every field, so that path cannot be reached.
+		delete(u.c.nt.streaming, h)
 		deleteHandle(h)
-		return nativeErr(op, cerr)
+		return nativeErr(op, *cerr)
 	}
 	return nil
 }

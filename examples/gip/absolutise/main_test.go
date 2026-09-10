@@ -223,3 +223,25 @@ func TestBadBaseIsReported(t *testing.T) {
 		}
 	}
 }
+
+// TestAReferenceInTheURLResolvesAsTheBrowserWould: the attribute is source
+// text, and a browser decodes it before resolving, so a slash spelled "&#47;"
+// is a slash. Resolved on the source, "&#47;&#47;host/x" was a path under the
+// base - a different resource from the one a browser fetches - and a bare "&"
+// in a query string comes back as the reference it is in source.
+func TestAReferenceInTheURLResolvesAsTheBrowserWould(t *testing.T) {
+	for _, tt := range []struct{ in, want string }{
+		{`<a href="&#47;&#47;other.example/x">t</a>`, `<a href="https://other.example/x">t</a>`},
+		{`<a href="&#47;a">t</a>`, `<a href="https://example.com/a">t</a>`},
+		{`<a href="/a?x=1&y=2">t</a>`, `<a href="https://example.com/a?x=1&amp;y=2">t</a>`},
+		{`<img srcset="&#47;a.png 1x, /b.png 2x">`, `<img srcset="https://example.com/a.png 1x, https://example.com/b.png 2x">`},
+	} {
+		got, _, err := rewriteString(tt.in, base, true, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != tt.want {
+			t.Errorf("\n got: %s\nwant: %s", got, tt.want)
+		}
+	}
+}

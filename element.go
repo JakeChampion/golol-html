@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"iter"
 	"runtime"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -161,7 +162,7 @@ func (e *Element) SetTagName(name string) error {
 	if err != nil {
 		return err
 	}
-	return withName(p, name, "element_tag_name_set", cfElementTagNameSet)
+	return withName(p, e.c.nt.cerr, name, "element_tag_name_set", cfElementTagNameSet)
 }
 
 // IsSelfClosing reports whether the tag was *written* self-closing, as in
@@ -420,6 +421,14 @@ func (e *Element) Attribute(name string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	// lol-html answers a name that is not valid UTF-8 with NULL - the same
+	// answer as absent - and leaves the reason in its thread-local error slot,
+	// which this getter has no way to report and every other call here drains
+	// in the same cgo call. Refuse it on this side so the slot stays clean and
+	// the answer is the documented one.
+	if !utf8.ValidString(name) {
+		return "", false
+	}
 	np, nl := strPtr(name)
 	s := C.lol_html_element_get_attribute(p, np, nl)
 	runtime.KeepAlive(name)
@@ -433,11 +442,11 @@ func (e *Element) HasAttribute(name string) (bool, error) {
 		return false, err
 	}
 	np, nl := strPtr(name)
-	var cerr C.lol_html_str_t
-	rc := C.golol_element_has_attribute(p, np, nl, &cerr)
+	cerr := e.c.nt.cerr
+	rc := C.golol_element_has_attribute(p, np, nl, cerr)
 	runtime.KeepAlive(name)
 	if rc < 0 {
-		return false, nativeErr("element_has_attribute", cerr)
+		return false, nativeErrFor("element_has_attribute", *cerr, name)
 	}
 	return rc == 1, nil
 }
@@ -583,15 +592,15 @@ func (e *Element) SetAttribute(name, value string) error {
 	}
 	np, nl := strPtr(name)
 	vp, vl := strPtr(value)
-	var cerr C.lol_html_str_t
-	rc := C.golol_element_set_attribute(p, np, nl, vp, vl, &cerr)
+	cerr := e.c.nt.cerr
+	rc := C.golol_element_set_attribute(p, np, nl, vp, vl, cerr)
 	runtime.KeepAlive(name)
 	runtime.KeepAlive(value)
 	if rc != 0 {
 		// The name and the value are both content this call was given, so either
 		// could be the invalid one; the classification says only that one of them
 		// is. See ErrInvalidUTF8.
-		return nativeErrFor("element_set_attribute", cerr, name+value)
+		return nativeErrFor("element_set_attribute", *cerr, name, value)
 	}
 	return nil
 }
@@ -609,11 +618,11 @@ func (e *Element) RemoveAttribute(name string) error {
 		return err
 	}
 	np, nl := strPtr(name)
-	var cerr C.lol_html_str_t
-	rc := C.golol_element_remove_attribute(p, np, nl, &cerr)
+	cerr := e.c.nt.cerr
+	rc := C.golol_element_remove_attribute(p, np, nl, cerr)
 	runtime.KeepAlive(name)
 	if rc != 0 {
-		return nativeErrFor("element_remove_attribute", cerr, name)
+		return nativeErrFor("element_remove_attribute", *cerr, name)
 	}
 	return nil
 }
@@ -661,7 +670,7 @@ type Attribute struct {
 // detached it yields nothing.
 func (e *Element) Attributes() iter.Seq2[string, string] {
 	return func(yield func(string, string) bool) {
-		for _, a := range e.AttributeList() {
+		for _, a := range e.attributeList(false) {
 			if !yield(a.Name, a.Value) {
 				return
 			}
@@ -681,6 +690,13 @@ func (e *Element) Attributes() iter.Seq2[string, string] {
 // lol-html iterator invalidates each attribute when the next is fetched, and
 // hands out pointers valid only while the element is.
 func (e *Element) AttributeList() []Attribute {
+	return e.attributeList(true)
+}
+
+// attributeList collects the attributes eagerly. preserve says whether to fetch
+// the source spelling of each name too; Attributes does not yield it, and
+// fetching it there was one C call and one copy per attribute for nothing.
+func (e *Element) attributeList(preserve bool) []Attribute {
 	p, err := e.live()
 	if err != nil {
 		return nil
@@ -698,11 +714,14 @@ func (e *Element) AttributeList() []Attribute {
 		if a == nil {
 			return out
 		}
-		out = append(out, Attribute{
-			Name:             takeStr(C.lol_html_attribute_name_get(a)),
-			NamePreserveCase: takeStr(C.lol_html_attribute_name_get_preserve_case(a)),
-			Value:            takeStr(C.lol_html_attribute_value_get(a)),
-		})
+		attr := Attribute{
+			Name:  takeStr(C.lol_html_attribute_name_get(a)),
+			Value: takeStr(C.lol_html_attribute_value_get(a)),
+		}
+		if preserve {
+			attr.NamePreserveCase = takeStr(C.lol_html_attribute_name_get_preserve_case(a))
+		}
+		out = append(out, attr)
 	}
 }
 
@@ -801,12 +820,23 @@ func (e *Element) content(content string, ct ContentType, op string, fn contentO
 		// Replace go through the same helper but write outside it.
 		switch op {
 		case "element_prepend", "element_append", "element_set_inner_content":
-			if err := checkRawText(e.TagName(), content); err != nil {
+			// The name is borrowed from lol-html for the check rather than
+			// copied out: TagName would cost an allocation per insertion, for a
+			// string the check only reads. The error path copies the name into
+			// the message before the buffer is freed.
+			s := C.lol_html_element_tag_name_get(p)
+			name := ""
+			if s.data != nil {
+				name = unsafe.String((*byte)(unsafe.Pointer(s.data)), int(s.len))
+			}
+			err := checkRawText(name, content)
+			C.lol_html_str_free(s)
+			if err != nil {
 				return err
 			}
 		}
 	}
-	return withContent(p, content, ct.isHTML(), op, fn)
+	return withContent(p, e.c.nt.cerr, content, ct.isHTML(), op, fn)
 }
 
 // Remove removes the element and everything inside it.
@@ -1023,9 +1053,15 @@ func (e *Element) OnEndTag(fn func(*EndTag) error) error {
 	// lives on the rewriter and is released with it.
 	h := e.c.nt.newHandle(&endTagCB{c: e.c, selector: e.selector, fn: fn})
 
-	var cerr C.lol_html_str_t
-	if C.golol_element_add_end_tag_handler(p, C.uintptr_t(h), &cerr) != 0 {
-		return nativeErr("element_add_end_tag_handler", cerr)
+	cerr := e.c.nt.cerr
+	if C.golol_element_add_end_tag_handler(p, C.uintptr_t(h), cerr) != 0 {
+		// Refused - a void element has no end tag - so lol-html holds no
+		// reference to the handle and nothing can ever fire it. Take it back
+		// now rather than carrying it to Close: a broad selector over a page of
+		// images paid one handle per refusal for the rest of the rewrite.
+		e.c.nt.handles = e.c.nt.handles[:len(e.c.nt.handles)-1]
+		deleteHandle(h)
+		return nativeErr("element_add_end_tag_handler", *cerr)
 	}
 	return nil
 }

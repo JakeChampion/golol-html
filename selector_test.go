@@ -577,3 +577,49 @@ func TestTheSelectorErrorSuggestsEscapingAColon(t *testing.T) {
 		t.Errorf("an unrelated failure got the escaping hint: %v", err)
 	}
 }
+
+// TestADeeplyNestedSelectorIsRefusedRatherThanCrashing pins the two depth limits
+// in options.go. lol-html's selector parser and matcher builder recurse on the
+// nesting of :not() and on the number of combinators, and the vendored archives
+// abort rather than unwind: measured, about 3,100 nested ":not(" or 14,000 " > "
+// combinators overflow an 8 MB native stack and kill the process with a SIGSEGV
+// that no recover sees, and a musl thread stack is sixty times smaller. The
+// binding refuses long before that with the same SelectorError shape every other
+// unusable selector gets, so a selector built from configuration fails at
+// NewWriter like a malformed one does. The thresholds sit far outside anything a
+// real selector does: a hundred combinators and thirty nested clauses still pass.
+func TestADeeplyNestedSelectorIsRefusedRatherThanCrashing(t *testing.T) {
+	noop := func(*lolhtml.Element) error { return nil }
+
+	accepted := []string{
+		strings.Repeat(":not(", 32) + "div" + strings.Repeat(")", 32),
+		strings.Repeat("div > ", 128) + "p",
+		strings.Repeat("div ", 128) + "p",
+		// Structure inside brackets and quotes is a value, not depth.
+		`a[href*="x > y > z ( ( ("]`,
+		"div  >  p , a   b",
+	}
+	for _, sel := range accepted {
+		if _, err := lolhtml.RewriteString("<div><p>x</p></div>", lolhtml.OnElement(sel, noop)); err != nil {
+			t.Errorf("%.40q refused: %v", sel, err)
+		}
+	}
+
+	refused := []struct{ sel, want string }{
+		{strings.Repeat(":not(", 33) + "div" + strings.Repeat(")", 33), "nests 33 levels deep"},
+		{strings.Repeat("div > ", 129) + "p", "129 combinators"},
+		{strings.Repeat("div ", 129) + "p", "129 combinators"},
+		{strings.Repeat("div ~ ", 129) + "p", "129 combinators"},
+	}
+	for _, tt := range refused {
+		_, err := lolhtml.RewriteString("<div><p>x</p></div>", lolhtml.OnElement(tt.sel, noop))
+		var se *lolhtml.SelectorError
+		if !errors.As(err, &se) {
+			t.Errorf("%.40q: got %v, want a SelectorError", tt.sel, err)
+			continue
+		}
+		if !strings.Contains(se.Message, tt.want) {
+			t.Errorf("%.40q: message %q does not say %q", tt.sel, se.Message, tt.want)
+		}
+	}
+}

@@ -8,8 +8,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -40,8 +42,26 @@ func run(rawURL string) error {
 	}
 	defer resp.Body.Close()
 
-	var rewritten, titles int
+	rewritten, titles, err := rewrite(os.Stdout, base, resp.Header.Get("Content-Type"), resp.Body)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "\nrewrote %d urls, saw %d title%s\n",
+		rewritten, titles, map[bool]string{true: "", false: "s"}[titles == 1])
+	return nil
+}
 
+// rewrite streams body into dst. contentType is the response's Content-Type,
+// whose charset is the encoding the bytes are in - and that matters here because
+// a text handler is registered: the rewriter decodes and re-encodes text in the
+// declared encoding, so a windows-1252 title fed to a UTF-8 rewriter comes back
+// with U+FFFD where every non-ASCII byte was. With only element handlers nothing
+// decodes and the mistake is invisible, which is how it goes unnoticed until a
+// text handler is added. A charset the rewriter cannot work in (UTF-16, an
+// unknown label) is an EncodingError from NewWriter, and the page is copied
+// through untouched rather than guessed at. examples/gip/proxy has the full
+// treatment, Content-Encoding and Content-Length included.
+func rewrite(dst io.Writer, base *url.URL, contentType string, body io.Reader) (rewritten, titles int, err error) {
 	// Counters live in this closure rather than on the units: a handler's
 	// argument is detached as soon as it returns.
 	absolutise := func(attr string) func(*lolhtml.Element) error {
@@ -61,7 +81,7 @@ func run(rawURL string) error {
 		}
 	}
 
-	w, err := lolhtml.NewWriter(os.Stdout,
+	opts := []lolhtml.Option{
 		lolhtml.OnElement("a[href]", absolutise("href")),
 		lolhtml.OnElement("img[src], script[src]", absolutise("src")),
 		lolhtml.OnElement("link[href]", absolutise("href")),
@@ -84,20 +104,23 @@ func run(rawURL string) error {
 		lolhtml.OnDocumentEnd(func(d *lolhtml.DocumentEnd) error {
 			return d.Append(fmt.Sprintf("\n<!-- rewrote %d urls -->\n", rewritten), lolhtml.HTML)
 		}),
-	)
+	}
+	if _, params, err := mime.ParseMediaType(contentType); err == nil && params["charset"] != "" {
+		opts = append(opts, lolhtml.WithEncoding(params["charset"]))
+	}
+
+	w, err := lolhtml.NewWriter(dst, opts...)
 	if err != nil {
-		return err
+		var ee *lolhtml.EncodingError
+		if errors.As(err, &ee) {
+			fmt.Fprintln(os.Stderr, "not rewriting:", err)
+			_, err = io.Copy(dst, body)
+		}
+		return 0, 0, err
 	}
-
-	if _, err := io.Copy(w, resp.Body); err != nil {
+	if _, err := io.Copy(w, body); err != nil {
 		w.Close()
-		return err
+		return rewritten, titles, err
 	}
-	if err := w.Close(); err != nil {
-		return err
-	}
-
-	fmt.Fprintf(os.Stderr, "\nrewrote %d urls, saw %d title%s\n",
-		rewritten, titles, map[bool]string{true: "", false: "s"}[titles == 1])
-	return nil
+	return rewritten, titles, w.Close()
 }

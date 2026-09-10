@@ -40,20 +40,13 @@ func TestEveryNameTheREADMEClaimsExists(t *testing.T) {
 	text := readme(t)
 	exported := map[string]bool{}
 	for _, name := range exportedNames(t) {
-		// Methods are listed as Type.Method; the README writes them bare.
+		// Methods and fields are listed as Type.Member; the README writes them
+		// bare.
 		if i := strings.IndexByte(name, '.'); i >= 0 {
 			exported[name[i+1:]] = true
 			continue
 		}
 		exported[name] = true
-	}
-	// Struct fields are exported names too, and the README names some.
-	for _, field := range []string{
-		"MaxMemory", "PreallocatedParsingBuffer", "GracefulBailOut",
-		"Start", "End", "Name", "NamePreserveCase", "Value", "Kind", "Selector", "Err",
-		"Op", "Message", "Label",
-	} {
-		exported[field] = true
 	}
 
 	// A qualified reference is unambiguous, so those are checked strictly.

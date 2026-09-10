@@ -383,3 +383,99 @@ func TestOnlyTextLosesTheBytes(t *testing.T) {
 		t.Errorf("an element handler changed the text: %q", out)
 	}
 }
+
+// TestEachArgumentIsClassifiedOnItsOwn. SetAttribute takes a name and a value,
+// and lol-html checks each of them; the classification used to check their
+// concatenation, so a name ending in a lead byte and a value starting with its
+// continuation were two invalid strings that read as one valid one, and the
+// refusal did not match ErrInvalidUTF8.
+func TestEachArgumentIsClassifiedOnItsOwn(t *testing.T) {
+	const name, value = "a\xc3", "\xa9"
+	if !utf8.ValidString(name+value) || utf8.ValidString(name) || utf8.ValidString(value) {
+		t.Fatal("the two halves no longer join into a valid string; this test measures nothing")
+	}
+	_, err := lolhtml.RewriteString("<p></p>", lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+		return e.SetAttribute(name, value)
+	}))
+	if err == nil {
+		t.Fatal("SetAttribute with half a character in each argument was accepted")
+	}
+	if !errors.Is(err, lolhtml.ErrInvalidUTF8) {
+		t.Errorf("%v does not match ErrInvalidUTF8", err)
+	}
+}
+
+// TestTheAttributeGettersRefuseInvalidUTF8 covers the two read paths. Reading
+// is not writing, but the name still crosses to lol-html, and lol-html answers
+// a name it cannot decode with NULL - the same answer as "absent" - while
+// leaving the reason in a thread-local slot that the next call to report an
+// error would have handed back as its own. HasAttribute can report it and
+// does; Attribute has no error to return, so it refuses the name on this side
+// and the slot stays clean for whatever is asked next.
+func TestTheAttributeGettersRefuseInvalidUTF8(t *testing.T) {
+	var hasErr, afterErr error
+	var value string
+	var present, hasID bool
+	_, err := lolhtml.RewriteString(`<p id="x"></p>`, lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+		_, hasErr = e.HasAttribute("\xff")
+		value, present = e.Attribute("\xff")
+		hasID, afterErr = e.HasAttribute("id")
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(hasErr, lolhtml.ErrInvalidUTF8) {
+		t.Errorf("HasAttribute(%q) = %v, want ErrInvalidUTF8", "\xff", hasErr)
+	}
+	if value != "" || present {
+		t.Errorf("Attribute(%q) = (%q, %v), want (\"\", false)", "\xff", value, present)
+	}
+	// The call after the refused read is unaffected: it answers its own
+	// question, with no error left over from the one before.
+	if afterErr != nil {
+		t.Errorf("HasAttribute(\"id\") after a refused read: %v", afterErr)
+	}
+	if !hasID {
+		t.Error("HasAttribute(\"id\") = false after a refused read, and the attribute is there")
+	}
+}
+
+// TestAByteNoSequenceStartsWithIsNotAPartial. WriteChunk may end mid-sequence,
+// so a trailing lead byte is set aside as "not arrived yet" rather than
+// counted against the chunk. That allowance is only for a prefix some later
+// bytes could complete. 0xC0 is lead-shaped and starts nothing - no valid
+// sequence begins with it - and 0xED 0xA0 is the prefix of a surrogate, which
+// no continuation makes valid. lol-html refuses both outright, and the refusal
+// used to read as a partial: ErrIncompleteRune, for bytes that could never be
+// completed. A real partial is kept as the control.
+func TestAByteNoSequenceStartsWithIsNotAPartial(t *testing.T) {
+	for _, bad := range []string{"ab\xc0", "ab\xed\xa0"} {
+		_, err := lolhtml.RewriteString("<p></p>", lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+			return e.StreamSetInnerContent(func(s *lolhtml.Sink) error {
+				return s.WriteChunk([]byte(bad), lolhtml.Text)
+			})
+		}))
+		if err == nil {
+			t.Errorf("WriteChunk(%q) was accepted", bad)
+			continue
+		}
+		if !errors.Is(err, lolhtml.ErrInvalidUTF8) {
+			t.Errorf("WriteChunk(%q) = %v, want ErrInvalidUTF8", bad, err)
+		}
+		if errors.Is(err, lolhtml.ErrIncompleteRune) {
+			t.Errorf("WriteChunk(%q) reported ErrIncompleteRune; nothing could complete those bytes: %v", bad, err)
+		}
+	}
+
+	// The control: a lead byte that a later chunk could finish is a partial,
+	// and becomes ErrIncompleteRune only when the StreamFunc returns without it.
+	_, err := lolhtml.RewriteString("<p></p>", lolhtml.OnElement("p", func(e *lolhtml.Element) error {
+		return e.StreamSetInnerContent(func(s *lolhtml.Sink) error {
+			return s.WriteChunk([]byte("ab\xc3"), lolhtml.Text)
+		})
+	}))
+	if !errors.Is(err, lolhtml.ErrIncompleteRune) {
+		t.Errorf("WriteChunk(%q) then returning = %v, want ErrIncompleteRune", "ab\xc3", err)
+	}
+}

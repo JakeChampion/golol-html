@@ -52,6 +52,14 @@ func TestHandlerErrorPropagates(t *testing.T) {
 	if he.Kind != "element" || he.Selector != "p" {
 		t.Errorf("HandlerError{Kind: %q, Selector: %q}, want {element, p}", he.Kind, he.Selector)
 	}
+	// The field is the handler's own error, unwrapped, and the message names
+	// the kind so a log line without errors.As still says which handler.
+	if he.Err != sentinel {
+		t.Errorf("HandlerError.Err = %v, want the sentinel itself", he.Err)
+	}
+	if msg := he.Error(); !strings.Contains(msg, "element") || !strings.Contains(msg, sentinel.Error()) {
+		t.Errorf("HandlerError.Error() = %q: does not name the kind and the cause", msg)
+	}
 }
 
 func TestHandlerPanicIsRepanickedOnCaller(t *testing.T) {
@@ -124,11 +132,24 @@ func TestWriterPoisonedAfterHandlerError(t *testing.T) {
 		t.Fatalf("NewWriter: %v", err)
 	}
 
-	if _, err := w.Write([]byte(`<p>x</p>`)); !errors.Is(err, sentinel) {
+	// A failed Write reports n = 0, whatever lol-html consumed before the
+	// handler stopped it. The bytes were handed over, but the document they
+	// belong to has been abandoned, so "accepted" would be the wrong word: a
+	// caller keeping a running total, or a retry loop that resumes at n, must
+	// not be told that the document is seven bytes further along. The
+	// stopwhen example reports the same count; this pins it where go test in
+	// the root will see it.
+	n, err := w.Write([]byte(`<p>x</p>`))
+	if !errors.Is(err, sentinel) {
 		t.Fatalf("first Write error = %v, want the handler error", err)
 	}
-	if _, err := w.Write([]byte(`<p>y</p>`)); !errors.Is(err, lolhtml.ErrPoisoned) {
+	if n != 0 {
+		t.Errorf("the failing Write reported n = %d, want 0", n)
+	}
+	if n, err := w.Write([]byte(`<p>y</p>`)); !errors.Is(err, lolhtml.ErrPoisoned) {
 		t.Errorf("second Write error = %v, want ErrPoisoned", err)
+	} else if n != 0 {
+		t.Errorf("the poisoned Write reported n = %d, want 0", n)
 	}
 	if err := w.Close(); !errors.Is(err, lolhtml.ErrPoisoned) {
 		t.Errorf("Close error = %v, want ErrPoisoned", err)
@@ -177,10 +198,16 @@ func TestDestinationErrorSurfaces(t *testing.T) {
 
 	// The failure may be reported by either call, depending on when lol-html
 	// flushes, so accept it from Write or Close but require it to appear.
-	_, writeErr := w.Write([]byte(`<p>hello</p>`))
+	n, writeErr := w.Write([]byte(`<p>hello</p>`))
 	closeErr := w.Close()
 	if !errors.Is(writeErr, sentinel) && !errors.Is(closeErr, sentinel) {
 		t.Fatalf("destination error never surfaced: write = %v, close = %v", writeErr, closeErr)
+	}
+	// And when it is the Write that fails, the count is 0 for the same reason
+	// as a handler failure: nothing of what was handed over is going to reach
+	// the destination, so none of it counts as written.
+	if writeErr != nil && n != 0 {
+		t.Errorf("the failing Write reported n = %d, want 0", n)
 	}
 }
 
@@ -395,6 +422,9 @@ func TestEncoding(t *testing.T) {
 			}
 			if ee.Message == "" {
 				t.Error("Message is empty, so the reason is lost")
+			}
+			if !strings.Contains(ee.Error(), tt.label) {
+				t.Errorf("EncodingError.Error() = %q does not name the label", ee.Error())
 			}
 			if !strings.Contains(err.Error(), tt.label) {
 				t.Errorf("error text does not name the label: %v", err)

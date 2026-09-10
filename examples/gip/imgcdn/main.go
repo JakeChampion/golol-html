@@ -13,11 +13,12 @@
 // An attribute value is reported as the document spelled it, references and all, so
 // "?a=1&amp;b=2" and "?a=1&b=2" are the same URL written two ways. This program has
 // to know which characters the URL really contains before it can percent-encode it
-// into a query parameter, so it decodes the ampersand references it knows - &amp;
-// &amp &#38; &#x26; - and refuses any other reference rather than encoding it
-// literally, which would turn "&nbsp;" into six characters of URL. Writing the new
-// value back, the separators go in as "&amp;", which is the spelling the library
-// leaves alone: SetAttribute escapes the double quote and nothing else.
+// into a query parameter, so it decodes every reference first, the way a browser
+// does before it fetches: "&nbsp;" is the one character U+00A0 and goes into the
+// query as "%C2%A0", not as six characters of URL, and "&#47;&#47;host/x" is the
+// protocol-relative URL it is to a browser rather than a path to proxy. Writing
+// the new value back, the separators go in as "&amp;", which is the spelling the
+// library leaves alone: SetAttribute escapes the double quote and nothing else.
 //
 // # srcset is a list with commas inside its members
 //
@@ -26,8 +27,8 @@
 // not "split on comma": take characters up to whitespace, and a trailing comma on
 // that run is the separator. So "/a.jpg,/b.jpg" is one candidate whose URL has a
 // comma in it, and "/a.jpg, /b.jpg" is two. This program follows that, and a member
-// it cannot read leaves the whole attribute alone - half a rewritten list is a list
-// of images that do not match each other.
+// it will not rewrite - one already off-site - leaves the whole attribute alone:
+// half a rewritten list is a list of images that do not match each other.
 //
 // # What it costs to match the biggest tag on the page
 //
@@ -44,6 +45,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"net/url"
 	"os"
@@ -52,10 +54,6 @@ import (
 
 	lolhtml "github.com/JakeChampion/golol-html"
 )
-
-// Ampersands are the references that spell "&", which is the one character a URL in
-// an attribute value is likely to have written as a reference.
-var Ampersands = []string{"&amp;", "&amp", "&#38;", "&#x26;", "&#X26;", "&#038;"}
 
 // Options are the decisions a caller gets to make.
 type Options struct {
@@ -242,50 +240,15 @@ func parseSrcset(s string) ([]member, bool) {
 	}
 }
 
-// decodeAmpersands turns the references that spell "&" into the character, and
-// reports false if any other reference is in the value: this program cannot encode
-// what it cannot read.
+// decodeAmpersands turns the attribute's source text into the URL a browser
+// would fetch: every character reference decoded, not only the ones that spell
+// "&". It used to read those alone and refuse any other reference as one it
+// could not encode - but "&nbsp;" is one character, U+00A0, and QueryEscape
+// encodes it as a browser would, "%C2%A0"; refusing it left the image off the
+// CDN and the run reported as not OK for a URL that was perfectly readable.
+// The bool is kept for the caller's shape; nothing is refused here now.
 func decodeAmpersands(s string) (string, bool) {
-	var b strings.Builder
-	for i := 0; i < len(s); {
-		if s[i] != '&' {
-			b.WriteByte(s[i])
-			i++
-			continue
-		}
-		matched := false
-		for _, ref := range Ampersands {
-			if !strings.HasPrefix(s[i:], ref) {
-				continue
-			}
-			// A named reference without its semicolon is not a reference at all
-			// when the character after it is "=" or ASCII alphanumeric: in an
-			// attribute value "?volts=1&ampere=5" has a parameter called ampere,
-			// not an ampersand followed by "ere". Taking it as one turns a
-			// perfectly ordinary URL into one the page never named, and the CDN
-			// fetches that. The rule is the one the library sets out under
-			// [lolhtml.Element.Attribute] and examples/gip/references implements.
-			if !strings.HasSuffix(ref, ";") && continuesName(s[i+len(ref):]) {
-				continue
-			}
-			b.WriteByte('&')
-			i += len(ref)
-			matched = true
-			break
-		}
-		if matched {
-			continue
-		}
-		// A bare "&" not starting a reference is a "&". Anything that looks like
-		// another reference is refused.
-		rest := s[i+1:]
-		if k := strings.IndexAny(rest, ";"); k > 0 && k < 12 && isName(rest[:k]) {
-			return "", false
-		}
-		b.WriteByte('&')
-		i++
-	}
-	return b.String(), true
+	return html.UnescapeString(s), true
 }
 
 // continuesName reports whether s starts with a character that stops a

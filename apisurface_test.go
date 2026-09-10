@@ -3,8 +3,8 @@ package lolhtml_test
 // Every exported name has to be mentioned by some test.
 //
 // This is a coverage check of the crudest possible kind - a name appearing in a
-// test file, not a claim that anything about it is asserted - and it earns its
-// place because it found two real gaps that nothing else would have.
+// test, not a claim that anything about it is asserted - and it earns its place
+// because it found two real gaps that nothing else would have.
 //
 // WithGracefulBailOut was never used in a test. Only the MemorySettings field it
 // sets was, so the option itself was free to be wrong, and it was: given after a
@@ -15,139 +15,191 @@ package lolhtml_test
 // recover the error their own handler returned, which is how they tell their
 // failure from the library's.
 //
-// Both halves of the check are parsed rather than matched as text, and both were
-// text once.
+// Both halves of the check are typed rather than matched, and each was
+// something weaker once.
 //
-// The surface came from top-level declarations only, so a method promoted from an
-// unexported embedded type was not in it at all. Detached is declared once, on
+// The surface came from top-level declarations, so a method promoted from an
+// unexported embedded type was not in it at all - Detached is declared once, on
 // the generic unit every rewritable unit embeds, and the seven exported methods
-// promotion makes of it - Element.Detached and its six siblings - were invisible
-// to the guard whose whole job is to notice a name nothing exercises.
+// promotion makes of it were invisible to the guard whose whole job is to notice
+// a name nothing exercises. A syntactic walk that followed embedding fixed those
+// seven and still could not see a method reached through a type alias, through
+// an exported function returning an unexported type, or through an embedded
+// type from another package, and it did not count an exported struct field as a
+// promise at all. The surface is now what go/types says it is: the method set of
+// every exported type, its exported fields, and the same for any unexported type
+// an exported function or method hands out.
 //
 // The mention check was strings.Contains over the test sources, comments
-// included. For needles like Is, Text, Len, Name, Write and Close that is
-// satisfied by prose, so the names most in need of the reminder were the ones the
-// check could not fail on. A mention is now an identifier in code: lolhtml.Name
-// for a package-level name, .Name for a method, which is how a method appears at
-// a call site - e.SetAttribute names Element.SetAttribute without naming the
-// type, so the type cannot be part of what is looked for.
+// included, then an identifier in code matched by bare name. Both were satisfied
+// by the wrong thing for exactly the names most in need of a reminder: Close,
+// Write, Len, String, Name and Text are methods on half the standard library,
+// so bytes.Buffer.Len in a test counted as a mention of a Writer.Len that
+// nothing called. A mention is now a selector or identifier that the type
+// checker resolves to the object in question, on a receiver of the type in
+// question.
 //
 // It stays a reminder to write the test, not a substitute for having written it.
 
 import (
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
-// importPath is how the tests and the sibling modules import this package. A
-// package-level name counts as mentioned when it is qualified with it.
+// importPath is how the tests and the sibling modules import this package.
 const importPath = "github.com/JakeChampion/golol-html"
 
-// parseSources parses every file matching the patterns, and no build constraint
-// excludes anything: a file that only builds on one platform still declares
-// names there, and the surface is meant to be the same everywhere.
-func parseSources(t *testing.T, patterns ...string) []*ast.File {
-	t.Helper()
+// loadedSurface is what the type checker found: the surface, and the names
+// some test resolves to. Computed once, because both tests want both halves
+// and the source import is the expensive part - and only these two results
+// are kept. The type checker's own world (the package, every test and
+// example type-checked against it, the importers' caches) is tens of
+// megabytes, and keeping it live for the rest of the run once failed
+// TestAPipelineDoesNotHoldTheDocument, back when it measured a high-water
+// mark of allocation: with more live heap the collector let more garbage
+// pile up before it ran, and the mark rose with the input. That test reads
+// live heap now, but tens of megabytes kept for nothing is still a cost every
+// later test pays in collector work.
+var loadedSurface struct {
+	once      sync.Once
+	err       error
+	names     []string        // the surface, sorted
+	mentioned map[string]bool // surface names some test resolves to
+}
 
-	fset := token.NewFileSet()
-	var files []*ast.File
-	for _, pattern := range patterns {
-		paths, err := filepath.Glob(pattern)
+// surfaceIndex is what the enumeration learns about the objects behind the
+// names, for the mention scan to credit a use against them: the surface names
+// each named type is known by (a hidden type returned by an exported function
+// is known by its own name; an alias adds another), and the surface name of
+// each exported field, which a composite literal names without a selector.
+type surfaceIndex struct {
+	prefixes map[*types.TypeName][]string
+	fields   map[*types.Var]string
+}
+
+func load(t *testing.T) {
+	t.Helper()
+	loadedSurface.once.Do(func() {
+		fset := token.NewFileSet()
+		// The source importer rather than a type-check of the parsed files with
+		// FakeImportC: this is a cgo package, and with the C types faked the
+		// generic unit[*C.lol_html_element_t] every rewritable unit embeds does
+		// not instantiate, which loses exactly the promoted methods the guard
+		// exists to see. The source importer runs cgo and types everything.
+		src := importer.ForCompiler(fset, "source", nil)
+		pkg, err := src.Import(importPath)
 		if err != nil {
-			t.Fatal(err)
+			loadedSurface.err = err
+			return
 		}
-		for _, path := range paths {
-			file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-			if err != nil {
-				t.Fatalf("%s: %v", path, err)
-			}
-			files = append(files, file)
+		index := surfaceIndex{
+			prefixes: map[*types.TypeName][]string{},
+			fields:   map[*types.Var]string{},
 		}
+		loadedSurface.names = exportedSurface(pkg, index)
+		loadedSurface.mentioned = resolveMentions(fset, pkg, index)
+	})
+	if loadedSurface.err != nil {
+		t.Fatalf("type-checking %s from source: %v", importPath, loadedSurface.err)
 	}
-	return files
 }
 
-// packageSources is the package's own files, which is what it promises. Test
-// files are not part of that even when they are in the package: export_test.go
-// declares LiveHandles for the tests to use and no caller can reach it.
-func packageSources(t *testing.T) []*ast.File {
-	t.Helper()
-
-	paths, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var patterns []string
-	for _, path := range paths {
-		if !strings.HasSuffix(path, "_test.go") {
-			patterns = append(patterns, path)
-		}
-	}
-	return parseSources(t, patterns...)
-}
-
-// exportedNames returns every exported name the package promises, with methods
-// reported as Type.Method.
+// exportedSurface returns every exported name the package promises: package-level
+// names, Type.Method for every exported method in an exported type's method set
+// (which is how promotion, aliases and embedded interfaces are resolved, by the
+// type checker rather than by hand), Type.Field for every exported field of an
+// exported struct, and the same two for an unexported type that an exported
+// function or method returns, since a caller can hold one and call it.
 //
-// Promotion is resolved rather than skipped. A method reached through an
-// embedded field is callable on the outer type whether or not the type it was
-// declared on is exported, and unit[P].Detached is exactly that: one declaration,
-// seven names a caller can write.
-func exportedNames(t *testing.T) []string {
-	t.Helper()
-
+// index is filled in as it goes; see surfaceIndex.
+func exportedSurface(pkg *types.Package, index surfaceIndex) []string {
+	seen := map[string]bool{}
 	var names []string
-	var declared []string             // every type declared here, exported or not
-	methods := map[string][]string{}  // type -> exported methods declared on it
-	embedded := map[string][]string{} // type -> the types it embeds
+	add := func(name string) {
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
 
-	for _, file := range packageSources(t) {
-		for _, decl := range file.Decls {
-			switch d := decl.(type) {
-			case *ast.FuncDecl:
-				if !d.Name.IsExported() {
-					continue
-				}
-				if d.Recv == nil {
-					names = append(names, d.Name.Name)
-					continue
-				}
-				if recv := receiverName(d.Recv); recv != "" {
-					methods[recv] = append(methods[recv], d.Name.Name)
-				}
-			case *ast.GenDecl:
-				for _, spec := range d.Specs {
-					switch s := spec.(type) {
-					case *ast.TypeSpec:
-						declared = append(declared, s.Name.Name)
-						if s.Name.IsExported() {
-							names = append(names, s.Name.Name)
-						}
-						embedded[s.Name.Name] = embeddedTypes(s.Type)
-					case *ast.ValueSpec:
-						for _, n := range s.Names {
-							if n.IsExported() {
-								names = append(names, n.Name)
-							}
-						}
-					}
-				}
+	// Types whose members still have to be listed, under the name they are
+	// reachable by. Exported types first; unexported ones join as the results
+	// of exported functions and methods are seen.
+	type pending struct {
+		typ    types.Type
+		prefix string
+	}
+	var queue []pending
+	queued := map[string]bool{}
+	enqueue := func(typ types.Type, prefix string) {
+		if named, ok := deref(typ).(*types.Named); ok {
+			index.prefixes[named.Obj()] = append(index.prefixes[named.Obj()], prefix)
+		}
+		if !queued[prefix] {
+			queued[prefix] = true
+			queue = append(queue, pending{typ, prefix})
+		}
+	}
+	// hiddenResults enqueues every unexported named type of this package that
+	// a signature returns, by its own name.
+	hiddenResults := func(sig *types.Signature) {
+		for i := 0; i < sig.Results().Len(); i++ {
+			named, ok := deref(sig.Results().At(i).Type()).(*types.Named)
+			if ok && named.Obj().Pkg() == pkg && !named.Obj().Exported() {
+				enqueue(named, named.Obj().Name())
 			}
 		}
 	}
 
-	for _, typ := range declared {
-		if !ast.IsExported(typ) {
+	scope := pkg.Scope()
+	for _, name := range scope.Names() {
+		obj := scope.Lookup(name)
+		if !obj.Exported() {
 			continue
 		}
-		for _, m := range methodSet(typ, methods, embedded) {
-			names = append(names, typ+"."+m)
+		add(name)
+		switch o := obj.(type) {
+		case *types.TypeName:
+			enqueue(o.Type(), name)
+		case *types.Func:
+			hiddenResults(o.Type().(*types.Signature))
+		}
+	}
+
+	for len(queue) > 0 {
+		p := queue[0]
+		queue = queue[1:]
+
+		// Both method sets: a value's and a pointer's, since a caller can hold
+		// either and the pointer set is the larger.
+		for _, set := range []*types.MethodSet{
+			types.NewMethodSet(p.typ),
+			types.NewMethodSet(types.NewPointer(p.typ)),
+		} {
+			for i := 0; i < set.Len(); i++ {
+				m := set.At(i).Obj().(*types.Func)
+				if !m.Exported() {
+					continue
+				}
+				add(p.prefix + "." + m.Name())
+				hiddenResults(m.Type().(*types.Signature))
+			}
+		}
+		if st, ok := p.typ.Underlying().(*types.Struct); ok {
+			for i := 0; i < st.NumFields(); i++ {
+				if f := st.Field(i); f.Exported() {
+					add(p.prefix + "." + f.Name())
+					index.fields[f] = p.prefix + "." + f.Name()
+				}
+			}
 		}
 	}
 
@@ -155,136 +207,131 @@ func exportedNames(t *testing.T) []string {
 	return names
 }
 
-// methodSet is the exported methods callable on typ: its own, then those reached
-// through embedding, breadth first because that is Go's rule - a method declared
-// on the type shadows one promoted from a field, and two promoted from different
-// fields at the same depth are ambiguous and belong to neither.
-func methodSet(typ string, methods, embedded map[string][]string) []string {
-	found := map[string]bool{}
-	seen := map[string]bool{typ: true}
-	level := []string{typ}
+// deref strips one pointer.
+func deref(typ types.Type) types.Type {
+	if p, ok := typ.(*types.Pointer); ok {
+		return p.Elem()
+	}
+	return typ
+}
 
-	for len(level) > 0 {
-		depth := map[string]int{}
-		for _, t := range level {
-			for _, m := range methods[t] {
-				depth[m]++
-			}
-		}
-		for m, n := range depth {
-			if !found[m] && n == 1 {
-				found[m] = true
-			}
-		}
+// resolveMentions type-checks every test and example source and records which
+// surface names they resolve to. The other modules exercise the surface too,
+// and a name only used from there is still covered.
+//
+// Their imports are resolved through the compiler's export data where they
+// resolve at all; the sibling modules' own dependencies do not from here, and
+// that is fine, because a name from this package is credited when an
+// expression's type flows from this package, which the checker still works
+// out with the rest of the file in error. Errors are therefore ignored.
+func resolveMentions(fset *token.FileSet, pkg *types.Package, index surfaceIndex) map[string]bool {
+	mentioned := map[string]bool{}
 
-		var next []string
-		for _, t := range level {
-			for _, e := range embedded[t] {
-				if !seen[e] {
-					seen[e] = true
-					next = append(next, e)
+	// Files grouped into the packages they declare, one type-check each.
+	units := map[string][]*ast.File{}
+	addFiles := func(unit string, pattern string) {
+		paths, err := filepath.Glob(pattern)
+		if err != nil {
+			panic(err)
+		}
+		for _, path := range paths {
+			file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+			if err != nil {
+				panic(err)
+			}
+			if file.Name.Name == pkg.Name() && strings.HasSuffix(path, "_test.go") && unit == "." {
+				// export_test.go is inside the package: it declares the test
+				// hook and mentions nothing a caller can reach.
+				continue
+			}
+			units[unit+"/"+file.Name.Name] = append(units[unit+"/"+file.Name.Name], file)
+		}
+	}
+	addFiles(".", "*_test.go")
+	for _, dir := range []string{"differential", "properties"} {
+		addFiles(dir, filepath.Join(dir, "*.go"))
+	}
+	for _, dir := range []string{"examples/gip", "examples"} {
+		dirs, _ := filepath.Glob(filepath.Join(dir, "*"))
+		for _, d := range dirs {
+			addFiles(d, filepath.Join(d, "*.go"))
+		}
+	}
+
+	std := importer.Default().(types.ImporterFrom)
+	conf := types.Config{
+		Importer: chainImporter{pkg: pkg, next: std},
+		Error:    func(error) {},
+	}
+	for _, files := range units {
+		info := &types.Info{
+			Uses:       map[*ast.Ident]types.Object{},
+			Selections: map[*ast.SelectorExpr]*types.Selection{},
+		}
+		conf.Check(files[0].Name.Name, fset, files, info)
+
+		for _, obj := range info.Uses {
+			if obj.Pkg() == pkg && obj.Parent() == pkg.Scope() && obj.Exported() {
+				mentioned[obj.Name()] = true
+			}
+			// A field named as a composite literal's key is a use of the
+			// field with no selector to resolve.
+			if v, ok := obj.(*types.Var); ok && v.IsField() {
+				if name, ok := index.fields[v]; ok {
+					mentioned[name] = true
 				}
 			}
 		}
-		level = next
-	}
-
-	var out []string
-	for m := range found {
-		out = append(out, m)
-	}
-	return out
-}
-
-// embeddedTypes returns the types a struct embeds, by name. The generic units
-// are embedded as unit[*C.lol_html_element_t] and friends, so the index has to
-// come off before the name is there.
-func embeddedTypes(spec ast.Expr) []string {
-	st, ok := spec.(*ast.StructType)
-	if !ok || st.Fields == nil {
-		return nil
-	}
-	var out []string
-	for _, f := range st.Fields.List {
-		if len(f.Names) > 0 {
-			continue // named, so nothing is promoted
-		}
-		if name := typeName(f.Type); name != "" {
-			out = append(out, name)
+		for _, sel := range info.Selections {
+			if sel.Obj().Pkg() != pkg || !sel.Obj().Exported() {
+				continue
+			}
+			named, ok := deref(sel.Recv()).(*types.Named)
+			if !ok {
+				continue
+			}
+			for _, prefix := range index.prefixes[named.Obj()] {
+				mentioned[prefix+"."+sel.Obj().Name()] = true
+			}
 		}
 	}
-	return out
+	return mentioned
 }
 
-func receiverName(recv *ast.FieldList) string {
-	if recv == nil || len(recv.List) == 0 {
-		return ""
-	}
-	return typeName(recv.List[0].Type)
+// chainImporter hands out the source-typed package for this module's import
+// path, so that every unit resolves to the same objects, and the compiler's
+// export data for everything else.
+type chainImporter struct {
+	pkg  *types.Package
+	next types.ImporterFrom
 }
 
-// typeName reduces a type expression to the name it is rooted at, dropping
-// pointers and type arguments. A qualified name from another package has no name
-// here and returns "".
-func typeName(e ast.Expr) string {
-	switch t := e.(type) {
-	case *ast.Ident:
-		return t.Name
-	case *ast.StarExpr:
-		return typeName(t.X)
-	case *ast.IndexExpr:
-		return typeName(t.X)
-	case *ast.IndexListExpr:
-		return typeName(t.X)
+func (c chainImporter) Import(path string) (*types.Package, error) {
+	return c.ImportFrom(path, "", 0)
+}
+
+func (c chainImporter) ImportFrom(path, dir string, mode types.ImportMode) (*types.Package, error) {
+	if path == importPath {
+		return c.pkg, nil
 	}
-	return ""
+	return c.next.ImportFrom(path, dir, mode)
+}
+
+// exportedNames is the surface for the README guard, which checks the names
+// the README claims against it.
+func exportedNames(t *testing.T) []string {
+	t.Helper()
+	load(t)
+	return loadedSurface.names
 }
 
 // TestEveryExportedNameIsMentionedByATest.
 func TestEveryExportedNameIsMentionedByATest(t *testing.T) {
-	patterns := []string{"*_test.go"}
-	// The other modules exercise the surface too, and a name only used from
-	// there is still covered.
-	for _, dir := range []string{"differential", "properties", "examples/gip"} {
-		patterns = append(patterns,
-			filepath.Join(dir, "*.go"),
-			filepath.Join(dir, "*", "*.go"))
-	}
-
-	// qualified is what the tests name through the package - lolhtml.Element -
-	// and selected is every selector they use at all, which is the only form a
-	// method call takes.
-	qualified := map[string]bool{}
-	selected := map[string]bool{}
-
-	for _, file := range parseSources(t, patterns...) {
-		// export_test.go is inside the package, so its names need no qualifier.
-		internal := file.Name.Name == "lolhtml"
-		local := importName(file)
-
-		ast.Inspect(file, func(n ast.Node) bool {
-			switch e := n.(type) {
-			case *ast.SelectorExpr:
-				selected[e.Sel.Name] = true
-				if id, ok := e.X.(*ast.Ident); ok && local != "" && id.Name == local {
-					qualified[e.Sel.Name] = true
-				}
-			case *ast.Ident:
-				if internal {
-					qualified[e.Name] = true
-				}
-			}
-			return true
-		})
-	}
+	load(t)
 
 	var missing []string
-	for _, name := range exportedNames(t) {
-		mentioned := qualified[name]
-		if i := strings.IndexByte(name, '.'); i >= 0 {
-			mentioned = selected[name[i+1:]]
-		}
-		if !mentioned {
+	for _, name := range loadedSurface.names {
+		if !loadedSurface.mentioned[name] {
 			missing = append(missing, name)
 		}
 	}
@@ -292,22 +339,6 @@ func TestEveryExportedNameIsMentionedByATest(t *testing.T) {
 		t.Errorf("no test mentions these exported names, so nothing exercises them:\n  %s",
 			strings.Join(missing, "\n  "))
 	}
-}
-
-// importName is what this file calls the package under test, or "" if it does
-// not import it.
-func importName(file *ast.File) string {
-	for _, imp := range file.Imports {
-		path, err := strconv.Unquote(imp.Path.Value)
-		if err != nil || path != importPath {
-			continue
-		}
-		if imp.Name != nil {
-			return imp.Name.Name
-		}
-		return "lolhtml"
-	}
-	return ""
 }
 
 // TestTheSurfaceIsNotAccidentallyGrowing counts the exported names, so adding one
@@ -359,9 +390,16 @@ func TestTheSurfaceIsNotAccidentallyGrowing(t *testing.T) {
 	// one declaration on the unexported generic unit[P] that every rewritable
 	// unit embeds, and seven names a caller can write. They were part of the
 	// promise all along; only the guard was counting wrong.
-	const want = 153
+	// 154: Writer.PanicStack, the stack a handler panic was caught with, which
+	// the re-raised panic no longer has. See panic_test.go.
+	// 171: nothing was exported. The guard now counts an exported struct field
+	// as the promise it is, and there were seventeen: Attribute's three,
+	// MemorySettings' three, HandlerError's three, NativeError's two,
+	// SelectorError's two, EncodingError's two and SourceLocation's two.
+	const want = 171
 
-	names := exportedNames(t)
+	load(t)
+	names := loadedSurface.names
 	if len(names) != want {
 		t.Errorf("the package exports %d names, the last count was %d.\n"+
 			"If that was deliberate, update the constant. The current set is:\n  %s",

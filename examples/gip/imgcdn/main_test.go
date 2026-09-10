@@ -94,16 +94,30 @@ func TestAnAmpersandInTheOriginalIsDecodedBeforeItIsEncoded(t *testing.T) {
 			t.Errorf("%q: %v", spelling, res)
 		}
 	}
-	// A reference this program cannot read is refused rather than encoded
-	// literally: "&nbsp;" is one character, not six.
-	for _, spelling := range []string{`/n.jpg?x=&nbsp;`, `/n.jpg?x=&#8212;`, `/n.jpg?x=&lt;`} {
-		doc := `<img src="` + spelling + `">`
+	// Every other reference is one character too, and is encoded as the
+	// character a browser would fetch: "&nbsp;" is U+00A0, not six bytes. These
+	// used to be refused as unreadable, and reported as such.
+	for _, tt := range []struct{ spelling, encoded string }{
+		{`/n.jpg?x=&nbsp;`, "%2Fn.jpg%3Fx%3D%C2%A0"},
+		{`/n.jpg?x=&#8212;`, "%2Fn.jpg%3Fx%3D%E2%80%94"},
+		{`/n.jpg?x=&lt;`, "%2Fn.jpg%3Fx%3D%3C"},
+		// And a slash spelled as a reference is a slash: protocol-relative,
+		// so somebody else's bandwidth rather than a path to proxy.
+		{`&#47;&#47;other.example/o.jpg`, ""},
+	} {
+		doc := `<img src="` + tt.spelling + `">`
 		got, res := rewrite(t, doc, std())
-		if got != doc {
-			t.Errorf("%q was rewritten to %q", doc, got)
+		if tt.encoded == "" {
+			if got != doc || res.Absolute != 1 {
+				t.Errorf("%q: rewritten to %q, %v; want left alone as absolute", tt.spelling, got, res)
+			}
+			continue
 		}
-		if res.Refused != 1 || res.OK() {
-			t.Errorf("%q: %v", spelling, res)
+		if want := `<img src="` + cdn(tt.encoded) + `">`; got != want {
+			t.Errorf("%q\n got %q\nwant %q", tt.spelling, got, want)
+		}
+		if res.Refused != 0 || !res.OK() {
+			t.Errorf("%q: %v", tt.spelling, res)
 		}
 	}
 }
@@ -167,16 +181,20 @@ func TestASrcsetIsRewrittenWholeOrNotAtAll(t *testing.T) {
 	if res.Srcset != 1 {
 		t.Errorf("%v", res)
 	}
-	// One member this program will not read leaves the whole attribute alone.
+	// A member with a reference in it is read as the browser reads it, so
+	// the list is rewritten whole. It used to be refused whole, on the ground
+	// that "&nbsp;" could not be encoded; it is one character, and it can.
 	const mixed = `<img srcset="/a.jpg 1x, /n.jpg?x=&nbsp; 2x">`
 	got, res = rewrite(t, mixed, std())
-	if got != mixed {
-		t.Errorf("\n got %q\nwant it untouched", got)
+	want = `<img srcset="` + cdn("%2Fa.jpg") + ` 1x, ` + cdn("%2Fn.jpg%3Fx%3D%C2%A0") + ` 2x">`
+	if got != want {
+		t.Errorf("\n got %q\nwant %q", got, want)
 	}
-	if res.Srcset != 0 || res.Refused != 1 {
+	if res.Srcset != 1 || res.Refused != 0 {
 		t.Errorf("%v", res)
 	}
-	// So does an off-site member: the two would come from different places.
+	// An off-site member leaves the whole attribute alone: the two would
+	// come from different places.
 	const offsite = `<img srcset="/a.jpg 1x, https://other/b.jpg 2x">`
 	got, res = rewrite(t, offsite, std())
 	if got != offsite {

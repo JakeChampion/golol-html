@@ -75,9 +75,11 @@ Pinned to **lol-html v3.0.1** (C API crate 1.4.0).
 ### Streaming
 
 [`NewWriter`](https://pkg.go.dev/github.com/JakeChampion/golol-html#NewWriter)
-returns an `io.WriteCloser`. Chunk boundaries never change what handlers see, so
-input can arrive however the network delivers it. `Close` finishes the document
-and flushes the tail: skip it and the output is truncated.
+returns an `io.WriteCloser`. Chunk boundaries never change the output or which
+element, comment and doctype handlers run, so input can arrive however the
+network delivers it; text arrives in chunks that follow the writes, see below.
+`Close` finishes the document and flushes the tail: skip it and the output is
+truncated.
 
 ### In memory
 
@@ -124,14 +126,19 @@ e.Before("<b>x</b>", lolhtml.Text)  // &lt;b&gt;x&lt;/b&gt;
 e.Before("<b>x</b>", lolhtml.HTML)  // <b>x</b>
 ```
 
-`Text` escapes exactly `<`, `>` and `&`. That is right for element content, for
-a `textarea` or `title`, and inside a comment - but **not inside a `<script>` or
-a `<style>`**. Those are raw text: a parser does not decode references in them,
-so `Text` gives you `if (a &lt; b)` in the script source, which is valid HTML
-that throws in the browser.
+`Text` escapes exactly `<`, `>` and `&`. That is right for element content and
+for a `textarea` or `title` - but **not inside a `<script>` or a `<style>`**,
+and not inside a comment either. Script and style are raw text: a parser does
+not decode references in them, so `Text` gives you `if (a &lt; b)` in the script
+source, which is valid HTML that throws in the browser. A comment is safe but
+wrong for the same reason - references are not decoded there, so the escaping
+prevents a break-out and changes what the comment says; see `Comment.SetText`,
+which refuses text that would end the comment instead.
 
 `HTML` is verbatim, and there it is refused rather than trusted: inserting into
-the content of a `script`, `style`, `textarea` or `title` returns
+the content of any of the nine closable raw-text elements - `script`, `style`,
+`textarea`, `title`, `iframe`, `noembed`, `noframes`, `noscript` and `xmp`;
+`IsRawText` minus `plaintext`, which cannot be closed - returns
 `ErrRawTextBreakout` when the content would close that element, so a `</script>`
 in a string literal is an error rather than a script injection. The refusal
 cannot cover everything - inserting a *whole* `<script>` element as markup is
@@ -192,13 +199,15 @@ e.StreamAppend(func(s *lolhtml.Sink) error {
 ## Two things to know
 
 **Units do not outlive their handler.** lol-html only guarantees an `*Element`,
-`*Comment`, `*TextChunk`, `*Doctype`, `*EndTag` or `*DocumentEnd` for the
-duration of the call. The wrapper is detached on return, so a retained value can
-no longer reach the freed memory - but what it answers instead is not one rule.
-A mutator returns `ErrDetached`; a getter has nowhere to put an error, so it
-reports a zero value and says nothing, and `Attribute` answering `("", false)`
-is indistinguishable from the attribute being absent. `Detached()` answers the
-question directly. Copy out what you need:
+`*Comment`, `*TextChunk`, `*Doctype`, `*EndTag`, `*DocumentEnd` or - the seventh,
+inside a `StreamFunc` - a `*Sink` for the duration of the call. The wrapper is
+detached on return, so a retained value can no longer reach the freed memory -
+but what it answers instead is not one rule. A mutator returns `ErrDetached`; a
+getter has nowhere to put an error, so it reports a zero value and says nothing,
+and `Attribute` answering `("", false)` is indistinguishable from the attribute
+being absent (`HasAttribute`, which has room for an error, is the one getter
+that reports it). `Detached()` answers the question directly. Copy out what you
+need:
 
 ```go
 lolhtml.OnElement("img", func(e *lolhtml.Element) error {
@@ -222,7 +231,11 @@ does not unwind through Rust: it is caught at the boundary and re-raised on the
 goroutine that called `Write` or `Close`.
 
 A `Writer` is not safe for concurrent use, but independent `Writer`s on separate
-goroutines are fine - as long as their handlers are independent too. An `Option`
+goroutines are fine - as long as their handlers are independent too. Nor is it
+reentrant: a handler, or the destination writer, that calls `Write` or `Close`
+on the `Writer` running it gets `ErrReentrant` rather than a second entry into
+lol-html, so stop a rewrite by returning an error, not by closing from inside.
+An `Option`
 holds no state and can be reused, and the function inside it is shared with every
 `Writer` it is given to, so anything it closes over is shared. Building the option
 set once at startup and reusing it per request is the natural thing to do and is
@@ -375,11 +388,15 @@ The rest is dominated by crossing into Go once per match, so throughput tracks
 how many handler invocations a document produces, not its size.
 
 Allocations follow a simple rule, and `alloc_test.go` gates it: a unit wrapper
-costs one allocation, every string read or written costs one more, a
-`SourceLocation` costs nothing, and `AttributeList` or `Attributes` costs four
-per attribute. Nothing is cached, so reading the same attribute twice costs
-twice. A handler that lists every attribute to find one is the usual accidental
-cost.
+costs one allocation, every string read costs one more, and a write costs none -
+the strings are lent to lol-html for the call, and a failure is reported through
+the `Writer`'s own error slot - so setting an attribute is one allocation per
+match and reading one is two. `Append` and its siblings with `HTML` content are
+one too: the raw-text check borrows the tag name rather than reading it. A
+`SourceLocation` costs nothing. `AttributeList` costs four per attribute and
+`Attributes` three, because only the list fetches each name's source spelling.
+Nothing is cached, so reading the same attribute twice costs twice. A handler
+that lists every attribute to find one is the usual accidental cost.
 
 `Write` itself costs none, whatever its size, so the count above is the count a
 caller streaming from a socket sees too: `BenchmarkChunkedWrite` and
@@ -466,8 +483,13 @@ make verify        # host platform: rebuild, diff against what is committed
 make native-all    # every supported platform (needs the cross toolchains)
 ```
 
-Rust builds are not bit-identical across toolchain patch versions, so a mismatch
-is worth investigating with the same `RUST_TOOLCHAIN` before assuming the worst.
+The archives reproduce bit-for-bit from the pin, and `make verify` asserts it:
+a `DIFFERS` is a failure, not a diff to read. On a laptop it will fail for a
+reason that is not tampering - rustc records the absolute build path in the
+archive, so the same source and the same compiler in a different directory hash
+differently - and `verify-native.yml` passes because a runner's workspace is
+the path the archives were built at. `docs/provenance.md` has the measurement
+and the path to rebuild in.
 
 ### Provenance
 

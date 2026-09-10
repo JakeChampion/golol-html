@@ -24,10 +24,39 @@
 # grep, sort, comm. The darwin and windows archives are Mach-O and COFF, which
 # GNU nm on a Linux host cannot read, so llvm-nm is preferred where present and
 # any archive no available tool can read is skipped with a notice rather than
-# failing the run.
+# failing the run - on a laptop. With --require-all a skip is a failure: CI
+# installs llvm so that every archive is readable, and a SKIP there meant the
+# install had quietly stopped working while the job stayed green. It did: the
+# darwin archives were skipped on every run for as long as the platforms job
+# relied on the runner image, which puts clang on PATH and not llvm-nm.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+require_all=0
+case ${1:-} in
+    --require-all) require_all=1; shift ;;
+    "") ;;
+    *) echo "usage: $0 [--require-all]" >&2; exit 2 ;;
+esac
+if [[ $# -gt 0 ]]; then
+    echo "usage: $0 [--require-all]" >&2
+    exit 2
+fi
+
+# skip prints a SKIP line, or under --require-all a FAIL line, and reports
+# which. The message is the same either way: what changes is whether not being
+# able to look counts as having looked.
+skipped=0
+skip() {
+    if [[ ${require_all} -eq 1 ]]; then
+        echo "FAIL $1"
+        echo "     (--require-all: a check that could not run counts as failed)"
+        skipped=1
+    else
+        echo "SKIP $1"
+    fi
+}
 
 # Symbols the archives export that the vendored header does not declare. Benign:
 # cgo can only call what the header declares, so these are unreachable from the
@@ -59,8 +88,8 @@ for candidate in llvm-nm nm; do
 done
 
 if [[ ${#readers[@]} -eq 0 ]]; then
-    echo "SKIP no nm or llvm-nm on this host; cannot read the vendored archives"
-    exit 0
+    skip "no nm or llvm-nm on this host; cannot read the vendored archives"
+    exit "${skipped}"
 fi
 
 # symbols <archive> -> defined external lol_html_* names, one per line, sorted.
@@ -119,14 +148,15 @@ for archive in "${archives[@]}"; do
         read_platforms+=("${platform}")
         echo "ok   ${platform}: ${count} exported lol_html_* symbols"
     else
-        echo "SKIP ${platform}: no available nm could read $(basename "${archive}") on this host"
+        skip "${platform}: no available nm could read $(basename "${archive}") on this host"
     fi
 done
 
 if [[ ${#read_platforms[@]} -eq 0 ]]; then
-    echo "SKIP no archive on this host could be read; nothing checked"
-    exit 0
+    skip "no archive on this host could be read; nothing checked"
+    exit "${skipped}"
 fi
+fail=${skipped}
 
 # --- the archives must agree with each other ---------------------------------
 
@@ -290,10 +320,14 @@ done
 
 host=$(probe_platform || true)
 
+# The probe's own skips are also failures under --require-all: CI has a C
+# compiler and an archive for its host, so a skip there is a broken step.
 if [[ -z "${compiler}" ]]; then
-    echo "SKIP no C compiler; struct and callback layout not checked against any archive"
+    skip "no C compiler; struct and callback layout not checked against any archive"
+    fail=$((fail | skipped))
 elif [[ -z "${host}" || ! -f "internal/lib/${host}/liblolhtml.a" ]]; then
-    echo "SKIP no vendored archive for this host; struct and callback layout not checked"
+    skip "no vendored archive for this host; struct and callback layout not checked"
+    fail=$((fail | skipped))
 else
     case "${host}" in
         *_musl) link_flags=(-lc) ;;
@@ -481,8 +515,9 @@ PROBE
             fail=1
         fi
     else
-        echo "SKIP ${host}: probe did not build or link; struct layout not checked"
+        skip "${host}: probe did not build or link; struct layout not checked"
         sed 's/^/     /' "${work}/cc.log" | head -5
+        fail=$((fail | skipped))
     fi
 fi
 

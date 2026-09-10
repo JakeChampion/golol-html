@@ -15,6 +15,7 @@ var corpus = []string{
 	`<iframe src="https://v.example/e" sandbox="ALLOW-SCRIPTS ALLOW-SAME-ORIGIN"></iframe>`,
 	`<iframe src="https://v.example/e" referrerpolicy="origin"></iframe>`,
 	`<iframe src="/local"></iframe>`,
+	`<iframe src="\\v.example/e"></iframe>`,
 	`<iframe srcdoc="<p>x</p>"></iframe>`,
 	`<iframe srcdoc="<p>x</p>" src="https://v.example/y"></iframe>`,
 	`<iframe></iframe>`,
@@ -203,6 +204,55 @@ func TestSameOriginIsLeftAlone(t *testing.T) {
 	}
 }
 
+// TestABackslashAuthorityIsNotSameOrigin. url.Parse reads "\\evil.example/x" as a
+// path with no host; a browser's URL parser reads a backslash as a slash in an
+// http(s) URL, so it is the network-path reference "//evil.example/x" and the
+// frame loads from evil.example. The first version of sameOrigin trusted Go's
+// reading and left every spelling but the last one alone.
+func TestABackslashAuthorityIsNotSameOrigin(t *testing.T) {
+	for _, in := range []string{
+		`<iframe src="/\evil.example/x"></iframe>`,
+		`<iframe src="\\evil.example/y"></iframe>`,
+		`<iframe src="\/evil.example/z"></iframe>`,
+		`<iframe src="//evil.example/w"></iframe>`,
+		`<iframe src="&#92;&#92;evil.example/enc"></iframe>`,
+	} {
+		got, h, err := hardenString(in)
+		if err != nil {
+			t.Fatalf("%s: %v", in, err)
+		}
+		if !strings.Contains(got, `sandbox="allow-scripts allow-popups allow-forms"`) {
+			t.Errorf("%s was left alone:\n got: %s", in, got)
+		}
+		if h.sandboxed != 1 {
+			t.Errorf("%s: sandboxed=%d, want 1", in, h.sandboxed)
+		}
+		if host := hostOf(strings.TrimPrefix(strings.TrimSuffix(in, `"></iframe>`), `<iframe src="`)); host != "evil.example" {
+			t.Errorf("%s: hostOf = %q, want evil.example (so -same-origin can name it)", in, host)
+		}
+	}
+
+	// The same spelling with an author's defeated sandbox is reported, which the
+	// same-origin short cut used to skip too.
+	_, h, err := hardenString(`<iframe src="\\evil.example/y" sandbox="allow-scripts allow-same-origin"></iframe>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.defeated) != 1 {
+		t.Errorf("defeated=%v, want one entry", h.defeated)
+	}
+
+	// A host named as ours is still ours however it is spelled.
+	got, h, err := hardenString(`<iframe src="\\keep.example/x"></iframe>`,
+		func(h *hardener) { h.keep["keep.example"] = true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.sandboxed != 0 || strings.Contains(got, "sandbox=") {
+		t.Errorf("a kept host spelled with backslashes was hardened: %s", got)
+	}
+}
+
 func TestReferrerPolicy(t *testing.T) {
 	got, h, err := hardenString(`<iframe src="https://v.example/e"></iframe>`)
 	if err != nil {
@@ -257,6 +307,8 @@ func TestHostOf(t *testing.T) {
 		{"/local", ""},
 		{"", ""},
 		{"https://v.example/e?a=1&amp;b=2", "v.example"},
+		{`\\v.example/e`, "v.example"},
+		{`/\v.example/e`, "v.example"},
 	} {
 		if got := hostOf(tt.src); got != tt.want {
 			t.Errorf("hostOf(%q) = %q, want %q", tt.src, got, tt.want)

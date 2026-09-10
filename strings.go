@@ -96,13 +96,20 @@ type contentOp[P comparable] func(P, *C.char, C.size_t, C.bool, *C.lol_html_str_
 
 // withContent runs one content mutation, translating a shim failure into a
 // *NativeError carrying lol-html's own message.
-func withContent[P comparable](unit P, content string, isHTML bool, op string, fn contentOp[P]) error {
+//
+// cerr is the Writer's error slot (native.cerr), not a local: the address of a
+// local escapes to the heap, and that was one allocation per mutation, for
+// every mutation - half the cost of setting an attribute. The slot is safe to
+// share with Write, which holds the same pointer while a handler runs, because
+// the shim writes it only after the failing call returns, each reader takes
+// its message out in the same instant, and nothing else can be running on the
+// Writer (it is not concurrent, and not reentrant).
+func withContent[P comparable](unit P, cerr *C.lol_html_str_t, content string, isHTML bool, op string, fn contentOp[P]) error {
 	p, n := strPtr(content)
-	var cerr C.lol_html_str_t
-	rc := fn(unit, p, n, C.bool(isHTML), &cerr)
+	rc := fn(unit, p, n, C.bool(isHTML), cerr)
 	runtime.KeepAlive(content)
 	if rc != 0 {
-		return nativeErrFor(op, cerr, content)
+		return nativeErrFor(op, *cerr, content)
 	}
 	return nil
 }
@@ -110,14 +117,14 @@ func withContent[P comparable](unit P, content string, isHTML bool, op string, f
 // nameOp is the shape shared by the shims that set a single name or text value.
 type nameOp[P comparable] func(P, *C.char, C.size_t, *C.lol_html_str_t) C.int
 
-// withName runs one name/text mutation.
-func withName[P comparable](unit P, value string, op string, fn nameOp[P]) error {
+// withName runs one name/text mutation. cerr is the Writer's error slot, as
+// for withContent.
+func withName[P comparable](unit P, cerr *C.lol_html_str_t, value string, op string, fn nameOp[P]) error {
 	p, n := strPtr(value)
-	var cerr C.lol_html_str_t
-	rc := fn(unit, p, n, &cerr)
+	rc := fn(unit, p, n, cerr)
 	runtime.KeepAlive(value)
 	if rc != 0 {
-		return nativeErrFor(op, cerr, value)
+		return nativeErrFor(op, *cerr, value)
 	}
 	return nil
 }

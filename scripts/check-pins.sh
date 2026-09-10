@@ -9,7 +9,10 @@
 #
 # What is left to check is the prose. SPEC.md states the pin for a reader, which
 # is worth keeping and cannot be generated, so it is checked instead - and no
-# workflow may quietly grow a hard-coded copy again.
+# workflow may quietly grow a hard-coded copy again. docs/gip/wontfix.md (W7)
+# states the pin as a ruling and docs/provenance.md as the revision its whole
+# argument is about, so a bump that left either behind would have the settled
+# record and the provenance story both quoting a revision nothing ships.
 #
 # Deliberately dependency-free, like check-platforms.sh, check-workflows.sh and
 # check-modules.sh: it greps, it does not parse YAML.
@@ -29,9 +32,19 @@ if [[ -z "${ref}" || -z "${toolchain}" ]]; then
     exit 1
 fi
 
-if ! grep -qF "${ref}" SPEC.md; then
-    echo "FAIL SPEC.md does not name the pinned lol-html revision ${ref}"
-    echo "     scripts/build-native.sh is the source of truth; update SPEC.md to match"
+for doc in SPEC.md docs/gip/wontfix.md docs/provenance.md; do
+    if ! grep -qF "${ref}" "${doc}"; then
+        echo "FAIL ${doc} does not name the pinned lol-html revision ${ref}"
+        echo "     scripts/build-native.sh is the source of truth; update ${doc} to match"
+        fail=1
+    fi
+done
+
+# provenance.md also quotes --print-pins' toolchain line, and its rustc
+# fingerprints are only evidence for the toolchain that is actually pinned.
+if ! grep -qF "rust_toolchain=${toolchain}" docs/provenance.md; then
+    echo "FAIL docs/provenance.md does not name the pinned Rust toolchain ${toolchain}"
+    echo "     scripts/build-native.sh is the source of truth; update docs/provenance.md to match"
     fail=1
 fi
 
