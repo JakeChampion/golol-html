@@ -7,6 +7,221 @@
      scripts/changelog.sh. Editing this section directly conflicts with
      every other open branch; changelog.d/README.md says why. -->
 
+## v0.2.2
+
+- Streaming content through `Sink.AsWriter` or `Sink.WriteChunk` no longer
+  allocates the size of the stream: `WriteChunk` converted every chunk to a
+  string to look at its last four bytes, so an `io.Copy` of a 12.6 MB report
+  through the API whose purpose is to avoid assembling content in memory
+  allocated 12.6 MB per rewrite, in pieces. It looks at the four bytes.
+  Pinned in alloc_test.go: 64 KB and 1 MB through `AsWriter` cost the same.
+
+- Every mutation, insertion, end-tag registration and sink write reports
+  failure through the Writer's own error slot rather than through a local
+  whose address escaped to the heap - the allocation v0.2.0 removed from
+  `Write`, still paid once per call everywhere else. Setting an attribute is
+  one allocation per match rather than two, and so is every other write; a
+  read is still two, one of them the string. `README.md`'s Cost section and
+  `alloc_test.go` now say and pin that: one per wrapper, one per string read,
+  none per write.
+
+- `Element.Attributes` no longer fetches the source spelling of each name it
+  does not yield: three lol-html calls per attribute rather than four.
+  `AttributeList`, which does yield it, is unchanged.
+
+- `RewriteString` writes into a `strings.Builder` rather than converting
+  `Rewrite`'s bytes, which copied the whole output a second time: half the
+  bytes per rewrite on a 220 KB document.
+
+- `internal/lib/SHA256SUMS` carries the vendored header, and
+  `build-native.sh --verify` compares the header and licence it syncs from
+  the pin against the committed copies instead of silently restoring them.
+  The header joined the manifest's writer in v0.2.0, "at the next rebuild";
+  a text file's sum needs no rebuild, and the tagged release still shipped a
+  seven-line manifest the ci checksum step could not see the header through.
+
+- The `platforms` job installs `llvm-18` so `check-abi.sh` reads the two
+  darwin archives it was silently skipping - the ubuntu runner has no
+  `llvm-nm` on its PATH and GNU nm cannot read Mach-O, so the job was green
+  having checked five of the seven archives it said it checked. In CI the
+  script runs with `--require-all`, which makes a skip a failure.
+
+- The two `golang:1.25-alpine` images are pinned by digest, the one build
+  input that still floated after every action was pinned by SHA; `apt`
+  installs `llvm-18` rather than whatever `llvm` points at, since
+  `llvm-strip` decides the bytes of every archive; `cargo rustc` runs
+  `--locked`; a Dependabot config moves the action pins. `check-pins.sh`
+  also checks the copies of the pin in `docs/gip/wontfix.md` and
+  `docs/provenance.md`, and the two scripts that grepped for a tab with
+  `grep -P` - which BSD grep does not have, so `make lint` on a Mac never
+  failed a tab - grep for a literal one.
+
+- `EndTag.SetName` refuses the names `Element.SetTagName` refuses - empty, not
+  starting with an ASCII letter, or containing whitespace, "/" or ">" - with
+  lol-html's own messages. lol-html validates a start tag's new name and not an
+  end tag's, so a name of `a>b` produced `</a>b>`, which a parser reads as an
+  end tag followed by text, the empty name produced `</>`, which it drops, and
+  a name carrying `<img src=x onerror=…>` produced a live element. No error in
+  any case. A rename computed from the document inherited an injection its
+  sibling was protected against. Invalid UTF-8 is still lol-html's to report,
+  so it still matches `ErrInvalidUTF8`. Measured in endtagname_test.go against
+  what `SetTagName` says for the same names.
+
+  `EndTag.Before`'s raw-text check keys on the name the tag was parsed with,
+  not on what it has been renamed to: the content in front of the tag was
+  tokenised as raw text under the original name and stays raw text whatever
+  the tag is called now, so `SetName("div")` no longer switches the check off.
+
+- Five small corrections to which error a failure reports, each measured:
+
+  `Writer.Write` on a Writer that failed and was then closed reports
+  `ErrPoisoned` wrapping the cause, as its documentation promised "however
+  late it is asked for", rather than bare `ErrClosed`. A panic inside `Close`
+  still leaves the Writer closed rather than poisoned, as `Close` documents.
+
+  `SetAttribute` classifies invalid UTF-8 per argument, so a name ending in a
+  lead byte and a value starting with its continuation - two invalid strings
+  that concatenate into one valid one - now match `ErrInvalidUTF8`.
+  `HasAttribute` classifies too, as `RemoveAttribute` already did, and
+  `Attribute` answers a name that is not valid UTF-8 with absent without
+  calling lol-html, which used to leave the reason in lol-html's thread-local
+  error slot for the next failure to misattribute.
+
+  `Sink.WriteChunk` ending in a byte no UTF-8 sequence starts with (0xC0, 0xF5
+  and up) or in a surrogate prefix (0xED 0xA0) matches `ErrInvalidUTF8`; those
+  were counted as a trailing partial that a later chunk might complete, which
+  nothing can, so lol-html's refusal matched neither sentinel.
+
+  `WithEncoding("")` fails from `NewWriter` with an `EncodingError`, like every
+  other unusable label, so a caller that branches on it to fall back to a raw
+  copy handles the empty charset too.
+
+  `Element.OnEndTag` on an element that has no end tag no longer keeps the
+  refused registration's handle until `Close`.
+
+- `examples/gip/csrf` judged a form's `action` on the raw attribute source, so
+  an entity-encoded or backslash-spelled cross-origin URL -
+  `action="&#104;ttps://evil.example/…"`, `action="\\evil.example/…"` - was
+  taken for a same-origin relative one and given the token, the one thing the
+  program exists to refuse. It now decodes, normalises backslashes to slashes
+  as a browser does, and fails closed; each spelling is a test row. The same
+  backslash gap in `examples/gip/sandbox` left an iframe a browser loads
+  cross-origin without a sandbox; fixed the same way.
+
+- `examples/gip/sri` matched `rel` by exact value, so `rel="stylesheet
+  preload"` got no integrity and was not reported as uncovered. It now uses
+  `~=` with the case-insensitive flag, which lol-html supports, and its scan
+  of commented-out markup is case-insensitive. `examples/rewrite-url` honours
+  the response charset before registering a text handler, which otherwise
+  turns every non-UTF-8 title into U+FFFD. `examples/gip/consentgate`'s usage
+  names the flag the program defines.
+
+- Five more examples decided what a URL was from the attribute's raw source,
+  before decoding it as a browser does. `upgrade` left `http&#58;//` as mixed
+  content; `origins` credited `&#104;ttps://evil.example` and `\\evil.example`
+  to the page's own origin; `absolutise` and `email` resolved `&#47;&#47;host/x`
+  as a path under the base; `imgcdn` refused any reference it had not been
+  taught rather than reading it. Each decodes first now and writes the result
+  back as source, ampersands as references again, so `?a=1&amp;b=2` comes out
+  as it went in.
+
+- `runtime.Goexit` from a handler, a `StreamFunc` or the destination writer -
+  which is what `t.Fatal`, `t.FailNow` and `t.Skip` do - now poisons the
+  Writer and releases its native resources, the way a panic already did.
+
+  A Goexit is not a panic, so the recover that parks a panic at the cgo
+  boundary saw nothing, and the goroutine left through lol-html's frames with
+  the Writer looking healthy: not poisoned, not closed. The caller's deferred
+  `Close` - `Rewrite`'s own included - then ran lol-html's end on a rewriter
+  abandoned in the middle of a write and reported nil for a document truncated
+  at the point of exit, and every streaming insertion pending in the abandoned
+  frame leaked its handle for the life of the process. `Close` now reports
+  `ErrPoisoned`, and the handles are reclaimed when the Writer is released,
+  which the cleanup does even for a Writer nobody closes. The Rust frames that
+  were skipped are still skipped - nothing can run a destructor the unwinder
+  did not, and LeakSanitizer puts what they owned at about 240 bytes an exit -
+  so the rule stands: leave a handler by returning an error. Measured in
+  panic_test.go, on every callback that runs user code, in every build but
+  -asan, where the frames the exit skips leave the sanitizer's own stack
+  poison behind and every later report is suspect.
+
+- `Writer.PanicStack` returns the stack the goroutine had when a panic from a
+  handler, a `StreamFunc` or the destination writer was caught at the cgo
+  boundary. A panic cannot unwind through lol-html's frames, so it is caught
+  there and raised again from the `Write` or `Close` that was running - with
+  the same value, but with a trace that begins at that `Write` or `Close`,
+  because the frames that panicked were gone by then. With several handlers
+  registered nothing in it said which one failed. The stack is taken inside
+  the recover, where those frames still are, and it survives the re-raise and
+  the caller's deferred `Close`. `Rewrite` and `RewriteString` own their
+  Writer, so a panic through them keeps only the value.
+
+  The panic is also raised exactly once now. It used to be recovered a second
+  time on the way out of `Write`, to release the native resources before it
+  continued, and re-raised, which printed the trace twice, "[recovered]" and
+  all; the cleanup now keys on the same "call never returned" flag that
+  catches a `runtime.Goexit`, and recovers nothing.
+
+- The raw-text breakout guard folds case the way the tokenizer does - ASCII
+  only - and never slices the caller's string with an offset taken from a
+  copy. `CheckRawText`, and `Element.Append`, `Prepend`, `SetInnerContent` and
+  `EndTag.Before` with `HTML`, panicked on content holding a letter whose
+  lower-case form is a different number of bytes (U+023A "Ⱥ" grows from two to
+  three), because the search ran over a `strings.ToLower` copy and the error
+  message then indexed the original with the copy's offset. The same fold
+  mapped U+0130 "İ" to "i", so `</scrİpt>` was refused although lol-html does
+  not end a script there, and `IsRawText("scrİpt")` was true for an element
+  that holds markup. The documented rule was already "the tokenizer's"; the
+  code now is. Measured in rawtext_test.go, including the offset the error
+  reports for content that is not ASCII.
+
+  The check inside `Element.Append` and its siblings borrows the tag name from
+  lol-html rather than copying it out, so an `HTML` insertion into an element's
+  content costs one allocation rather than three.
+
+- `release.yml` keeps one release pull request, `release/next`, whatever the
+  version turns out to be, tags an untagged version heading before it
+  proposes the next one, and reproduces the `linux_amd64` archive at the fold
+  commit before it pushes the tag - in the same run, with no token to
+  configure.
+
+  The branch used to carry the version in its name, so a `minor` fragment
+  landing while a `patch` release PR was open forked a second PR and left the
+  first mergeable; merging the first put a version heading on `main` that the
+  plan step, checking "fragments pending" before "heading untagged", never
+  tagged. A folded-but-untagged heading with any fragment pending made every
+  later run fail on "already has a section", because the next version was
+  derived from tags alone; it is now the higher of the newest tag and the
+  newest heading. And the gate had not gated: v0.2.1 was tagged with the
+  default token, so neither ci nor verify-native ran on the tag, and the
+  release PR - which touches only the changelog - could not match
+  verify-native's paths filter either. The tag now needs the reproduce job,
+  lands on the fold commit rather than on whatever `main` had moved to (a
+  queued run for the fold commit is no longer cancelled by a newer push:
+  `queue: max`), refuses a heading whose commit deleted no fragments, and
+  keeps every `#`-prefixed line of the notes (`--cleanup=verbatim`).
+  `scripts/check-changelog.sh` refuses a version heading added by hand, and
+  `scripts/changelog.sh` refuses a `major` bump past v1 unless the module
+  path carries the matching `/vN`, which is the only way Go can resolve it.
+
+- A selector nested more than 32 levels of parentheses deep, or carrying more
+  than 128 combinators, is refused from `NewWriter` with a `SelectorError`
+  naming the limit. lol-html's selector parser and matcher builder recurse on
+  both, and the vendored archives abort rather than unwind, so a selector deep
+  enough - measured, about 3,100 nested `:not(` or 14,000 ` > ` on an 8 MB
+  stack, sixty times fewer on a musl thread stack - overflowed the native
+  stack and killed the process with a SIGSEGV no recover could see. The limits
+  sit a hundredfold below that and far above any selector anyone writes;
+  brackets and quoted strings are not counted. Measured in selector_test.go.
+
+- `Sink.WriteString` and `Sink.WriteChunk` refuse with `ErrReentrant` when
+  called from inside the destination writer that a sink write is running. The
+  destination runs synchronously inside a sink write - not, as two sentences
+  in the streaming documentation said, after it - so a destination that could
+  reach the live `Sink` wrote into it underneath the write already using it,
+  and the inner bytes landed first with no error. The guard is the one
+  `Writer.Write` and `Close` already have. Measured in reentrancy_test.go.
+
 ## v0.2.1
 
 - Versioning and releasing now work the way `changesets` does, without the npm
