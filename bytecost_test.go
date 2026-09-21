@@ -125,6 +125,15 @@ func TestTheWriteSizeDoesNotChangeTheAllocationCount(t *testing.T) {
 // is set where nothing but a change of complexity class can reach it. Fastest
 // of several runs, so that a busy host makes the ratio noisier rather than
 // larger, and a documented-slow build (the race detector) moves both sides.
+//
+// Fastest-of-five was not on its own enough on a shared runner. A hosted
+// macos-14 measured 9.7 for "an unclosed tag with many attributes", a shape that
+// measures 3.9 to 4.1 on an idle machine, because the two sides of the ratio
+// were timed one after the other and only the second of the two windows was
+// stolen. So the sides are interleaved - the same stall lands on both - and the
+// whole measurement is repeated if it exceeds the bound, since a cost that has
+// changed complexity class exceeds it every time and a descheduled runner does
+// not.
 func TestWritingAByteAtATimeCostsLinearly(t *testing.T) {
 	requireRealAllocationCounts(t)
 
@@ -152,37 +161,67 @@ func TestWritingAByteAtATimeCostsLinearly(t *testing.T) {
 			// time for 1x: linear is about 4, quadratic about 16, and 8 is the
 			// line between them with the noise of a fastest-of-five on either
 			// side of it.
+			const bound = 8
 			small := []byte(shape.gen(4 << 10))
 			large := []byte(shape.gen(16 << 10))
-			ratio := float64(fastestByteAtATime(t, large)) / float64(fastestByteAtATime(t, small))
-			if ratio > 8 {
+			var ratio float64
+			var tSmall, tLarge time.Duration
+			for range ratioAttempts {
+				ratio, tSmall, tLarge = byteAtATimeRatio(t, small, large)
+				if ratio <= bound {
+					break
+				}
+			}
+			if ratio > bound {
 				t.Errorf("four times the bytes took %.1f times as long, written a byte "+
-					"at a time: something rescans what is pending", ratio)
+					"at a time, in each of %d measurements (%v against %v): something "+
+					"rescans what is pending", ratio, ratioAttempts, tLarge, tSmall)
 			}
 		})
 	}
 }
 
-// fastestByteAtATime is the shortest of five byte-at-a-time rewrites of in.
-func fastestByteAtATime(t *testing.T, in []byte) time.Duration {
+// ratioRounds and ratioAttempts: five timings of each side within a
+// measurement, and up to three measurements before the bound is believed.
+const (
+	ratioRounds   = 5
+	ratioAttempts = 3
+)
+
+// byteAtATimeRatio times a byte-at-a-time rewrite of large against one of small
+// and returns the ratio with the two timings behind it.
+//
+// The two sides are interleaved rather than measured one after the other, and
+// each is the fastest of ratioRounds. Both of those are about the same thing:
+// the ratio is meant to report the shape of the cost curve and not the state of
+// the machine, so a host that stalls has to stall the numerator and the
+// denominator alike.
+func byteAtATimeRatio(t *testing.T, small, large []byte) (ratio float64, bestSmall, bestLarge time.Duration) {
 	t.Helper()
-	best := time.Duration(1<<63 - 1)
-	for range 5 {
-		w, err := lolhtml.NewWriter(io.Discard,
-			lolhtml.OnElement("p", func(*lolhtml.Element) error { return nil }))
-		if err != nil {
+	bestSmall, bestLarge = time.Duration(1<<63-1), time.Duration(1<<63-1)
+	for range ratioRounds {
+		bestSmall = min(bestSmall, byteAtATime(t, small))
+		bestLarge = min(bestLarge, byteAtATime(t, large))
+	}
+	return float64(bestLarge) / float64(bestSmall), bestSmall, bestLarge
+}
+
+// byteAtATime is how long one byte-at-a-time rewrite of in takes.
+func byteAtATime(t *testing.T, in []byte) time.Duration {
+	t.Helper()
+	w, err := lolhtml.NewWriter(io.Discard,
+		lolhtml.OnElement("p", func(*lolhtml.Element) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	for i := range in {
+		if _, err := w.Write(in[i : i+1]); err != nil {
 			t.Fatal(err)
 		}
-		start := time.Now()
-		for i := range in {
-			if _, err := w.Write(in[i : i+1]); err != nil {
-				t.Fatal(err)
-			}
-		}
-		_ = w.Close()
-		best = min(best, time.Since(start))
 	}
-	return best
+	_ = w.Close()
+	return time.Since(start)
 }
 
 // TestAPendingTagIsNotTheExpensiveCase - the document that was supposed to be
